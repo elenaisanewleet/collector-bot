@@ -32,7 +32,7 @@ from app.domain.models import BankruptcyRecord, ProviderResult
 from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import as_text
-from app.providers.newdb import NewDBMethodProvider, person_params_for
+from app.providers.newdb import NewDBMethodProvider, inn_params
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
 from app.utils.dates import parse_date, utcnow
 
@@ -155,6 +155,12 @@ class NewDBBankruptcyProvider(NewDBMethodProvider):
     Same source, same domain record, different carrier: the key is the one
     already paying for ФССП, so connecting bankruptcy costs a field-map entry
     rather than a second vendor contract.
+
+    Unlike ФССП, this method is addressed by ИНН and not by name: the live
+    endpoint rejects the person block with ``Отсутствует обязательный параметр:
+    innfiz``. A debtor without ИНН therefore cannot be checked here at all, and
+    saying so is the only honest answer — a rejected request reported as a clean
+    register is exactly the failure this project exists to avoid.
     """
 
     name = ProviderName.FEDRESURS
@@ -162,16 +168,12 @@ class NewDBBankruptcyProvider(NewDBMethodProvider):
     methods = (NEWDB_METHOD,)
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
-        if subject.name is None:
-            return self.insufficient_query("Для проверки банкротства нужно ФИО")
-        if subject.birth_date is None:
-            # Same rule as ФССП: the person methods take a date of birth, and a
-            # rejected request must not be reported as a clean register.
+        if not subject.inn:
             return self.insufficient_query(
-                "Для проверки банкротства нужна дата рождения — источник требует её обязательно"
+                "Для проверки банкротства нужен ИНН — источник ищет только по нему"
             )
 
-        records, raw = await self.rows_for(NEWDB_METHOD, person_params_for(subject))
+        records, raw = await self.rows_for(NEWDB_METHOD, inn_params(subject.inn))
         parsed = [_to_bankruptcy(record) for record in records[:MAX_RECORDS]]
         return ProviderResult(
             provider=self.name,

@@ -250,7 +250,7 @@ async def test_pledge_provider_needs_at_least_one_mapped_method(
 
 @respx.mock
 async def test_bankruptcy_maps_rows_through_the_field_map(
-    newdb_settings: Settings, maps: NewDBFieldMaps, person_subject: SearchSubject
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
 ) -> None:
     row = {
         "Debtor": "Тестов Андрей Сергеевич",
@@ -264,7 +264,7 @@ async def test_bankruptcy_maps_rows_through_the_field_map(
         return_value=httpx.Response(200, json=envelope("bankrot_person", data=[row]))
     )
 
-    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(person_subject)
+    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(inn_subject)
 
     assert result.status is ProviderStatus.SUCCESS
     record = result.records[0]
@@ -275,19 +275,21 @@ async def test_bankruptcy_maps_rows_through_the_field_map(
 
     body = json.loads(route.calls[0].request.content)
     assert body["params"]["method"] == "bankrot_person"
-    assert body["params"]["lastname"] == "Тестов"
-    assert body["params"]["dob"] == "1985-03-12"
+    # ``innfiz``, not ``inn``: the latter is the ten-digit legal-entity field.
+    assert body["params"]["innfiz"] == "770912345601"
+    assert "inn" not in body["params"]
+    assert "lastname" not in body["params"]
 
 
 @respx.mock
 async def test_bankruptcy_reports_an_empty_register_as_no_results(
-    newdb_settings: Settings, maps: NewDBFieldMaps, person_subject: SearchSubject
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
 ) -> None:
     respx.post(NEWDB_URL).mock(
         return_value=httpx.Response(200, json=envelope("bankrot_person", data=[]))
     )
 
-    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(person_subject)
+    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(inn_subject)
 
     # The source did answer, so this one genuinely means "checked, nothing there".
     assert result.status is ProviderStatus.NO_RESULTS
@@ -296,7 +298,7 @@ async def test_bankruptcy_reports_an_empty_register_as_no_results(
 
 @respx.mock
 async def test_bankruptcy_failed_state_is_never_an_empty_register(
-    newdb_settings: Settings, maps: NewDBFieldMaps, person_subject: SearchSubject
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
 ) -> None:
     """A rejected key arrives as HTTP 200 + state=failed on every method."""
     respx.post(NEWDB_URL).mock(
@@ -310,7 +312,7 @@ async def test_bankruptcy_failed_state_is_never_an_empty_register(
         )
     )
 
-    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(person_subject)
+    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(inn_subject)
 
     assert result.status is ProviderStatus.ERROR
     assert result.error_code == "unauthorized"
@@ -319,30 +321,37 @@ async def test_bankruptcy_failed_state_is_never_an_empty_register(
 
 @respx.mock
 async def test_bankruptcy_missing_result_section_is_a_schema_error(
-    newdb_settings: Settings, maps: NewDBFieldMaps, person_subject: SearchSubject
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
 ) -> None:
     respx.post(NEWDB_URL).mock(
         return_value=httpx.Response(200, json=envelope("bankrot_person", include_results=False))
     )
 
-    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(person_subject)
+    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(inn_subject)
 
     assert result.status is ProviderStatus.UNAVAILABLE
     assert result.error_code == "unexpected_schema"
 
 
-async def test_bankruptcy_without_birth_date_is_not_queried(
-    newdb_settings: Settings, maps: NewDBFieldMaps
+@respx.mock
+async def test_bankruptcy_without_inn_is_not_queried(
+    newdb_settings: Settings, maps: NewDBFieldMaps, person_subject: SearchSubject
 ) -> None:
-    subject = SearchSubject(
-        search_type="person",
-        name=PersonName(last_name="Тестов", first_name="Андрей"),
+    """ФИО с датой рождения метод не принимает — спрашивать нечем.
+
+    Живой эндпоинт отвечает на person-блок ``Отсутствует обязательный параметр:
+    innfiz``. Отправить запрос всё равно значило бы получить отказ и показать
+    его как чистый реестр — ровно та подмена, против которой написан проект.
+    """
+    route = respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("bankrot_person", data=[]))
     )
 
-    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(subject)
+    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(person_subject)
 
     assert result.error_code == "insufficient_query"
     assert not result.status.is_answered
+    assert not route.calls  # платный вызов не потрачен на заведомый отказ
 
 
 # ---------------------------------------------------------------- ИП
@@ -359,7 +368,7 @@ async def test_sole_proprietor_status_is_mapped(
         "Role": "Индивидуальный предприниматель",
         "Status": "Действует",
     }
-    respx.post(NEWDB_URL).mock(
+    route = respx.post(NEWDB_URL).mock(
         return_value=httpx.Response(200, json=envelope("egrul_ip", data=[row]))
     )
 
@@ -370,6 +379,7 @@ async def test_sole_proprietor_status_is_mapped(
     assert isinstance(record, BusinessRelation)
     assert record.role is BusinessRole.SOLE_PROPRIETOR
     assert record.is_active_sole_proprietor
+    assert json.loads(route.calls[0].request.content)["params"]["innfiz"] == "770912345601"
 
 
 async def test_sole_proprietor_needs_an_identifier(
@@ -380,6 +390,22 @@ async def test_sole_proprietor_needs_an_identifier(
     result = await NewDBBusinessProvider(newdb_settings, maps).fetch(subject)
 
     assert result.error_code == "insufficient_query"
+
+
+@respx.mock
+async def test_sole_proprietor_is_not_searched_by_name(
+    newdb_settings: Settings, maps: NewDBFieldMaps, person_subject: SearchSubject
+) -> None:
+    """ФИО с датой рождения здесь было запасным путём — метод его не принимает."""
+    route = respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("egrul_ip", data=[]))
+    )
+
+    result = await NewDBBusinessProvider(newdb_settings, maps).fetch(person_subject)
+
+    assert result.error_code == "insufficient_query"
+    assert not result.status.is_answered
+    assert not route.calls
 
 
 # ---------------------------------------------------------------- арбитраж

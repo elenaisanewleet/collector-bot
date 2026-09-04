@@ -347,19 +347,27 @@ def person_params(
     """The person block NewDB's ``*_person`` methods take.
 
     Named after ``fssp_person``, whose parameters were read from the published
-    contract. The sibling person methods are documented as taking the same
-    block; a deployment whose contract differs adds or overrides keys through
-    ``extra_params`` in the field map rather than through a code change.
+    contract. The sibling person methods take the same block; a deployment whose
+    contract differs adds or overrides keys through ``extra_params`` in the field
+    map rather than through a code change.
+
+    The shape below was checked against the live endpoint: an unauthenticated
+    ``POST /v2`` validates its parameters before it looks at the key, so the
+    contract can be read off the rejections without spending a call.
     """
-    return {
+    params: dict[str, Any] = {
         "country": country,
         "lastname": last_name,
         "firstname": first_name,
-        # The field is mandatory; an empty value states "no patronymic" rather
-        # than omitting the key and being rejected outright.
-        "secondname": middle_name or "",
         "dob": birth_date,
     }
+    # A missing patronymic omits the key. Sending it empty is what the service
+    # actually rejects — ``secondname must be non-empty`` — so the earlier
+    # reading, that the key must always be present, had it backwards and would
+    # have failed every request for a debtor without one.
+    if middle_name:
+        params["secondname"] = middle_name
+    return params
 
 
 def person_params_for(subject: SearchSubject) -> dict[str, Any]:
@@ -380,7 +388,14 @@ def person_params_for(subject: SearchSubject) -> dict[str, Any]:
 
 
 def inn_params(inn: str) -> dict[str, Any]:
-    return {"country": COUNTRY_RU, "inn": inn}
+    """The single-parameter block for a natural person addressed by ИНН.
+
+    ``innfiz``, not ``inn``: the latter is the legal-entity field and is
+    validated as ten digits, so a person's twelve-digit ИНН sent under it is
+    rejected outright (``innyur / inn is not valid``). Checked against the live
+    endpoint, which validates the parameter before the key.
+    """
+    return {"country": COUNTRY_RU, "innfiz": inn}
 
 
 class NewDBMethodProvider(BaseProvider):

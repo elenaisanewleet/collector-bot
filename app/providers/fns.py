@@ -32,7 +32,7 @@ from app.domain.models import BusinessRelation, ProviderResult
 from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import as_text
-from app.providers.newdb import NewDBMethodProvider, inn_params, person_params_for
+from app.providers.newdb import NewDBMethodProvider, inn_params
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
 from app.utils.dates import parse_date, utcnow
 
@@ -158,12 +158,15 @@ class NewDBBusinessProvider(NewDBMethodProvider):
     methods = (NEWDB_METHOD,)
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
-        if not subject.inn and (subject.name is None or subject.birth_date is None):
-            return self.insufficient_query("Для проверки ИП нужен ИНН либо ФИО с датой рождения")
+        if not subject.inn:
+            # Раньше здесь был откат на ФИО с датой рождения. Живой сервис его
+            # не принимает — ``Отсутствует обязательный параметр: innfiz``, —
+            # так что откат давал бы не запасной путь, а отклонённый запрос.
+            return self.insufficient_query(
+                "Для проверки ИП нужен ИНН — источник ищет только по нему"
+            )
 
-        # ИНН адресует ЕГРИП точно; ФИО с датой рождения — запасной путь.
-        params = inn_params(subject.inn) if subject.inn else person_params_for(subject)
-        records, raw = await self.rows_for(NEWDB_METHOD, params)
+        records, raw = await self.rows_for(NEWDB_METHOD, inn_params(subject.inn))
         parsed = [_to_relation(record) for record in records[:MAX_RECORDS]]
         return ProviderResult(
             provider=self.name,

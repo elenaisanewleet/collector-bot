@@ -321,10 +321,16 @@ async def test_fssp_falls_back_to_all_regions(
 
 
 @respx.mock
-async def test_fssp_sends_an_empty_patronymic_when_absent(
+async def test_fssp_omits_the_patronymic_key_when_absent(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    """``secondname`` is mandatory upstream, so the key is always present."""
+    """Upstream rejects ``secondname`` sent empty — the key has to be left out.
+
+    Checked against the live endpoint, which validates parameters before the
+    key: an empty value answers ``secondname must be non-empty``, an absent one
+    passes. Sending the empty string would have failed ФССП — the decisive
+    source — for every debtor without a patronymic.
+    """
     route = respx.post(NEWDB_URL).mock(
         return_value=httpx.Response(200, json=newdb_envelope(data=[]))
     )
@@ -332,7 +338,7 @@ async def test_fssp_sends_an_empty_patronymic_when_absent(
     name = PersonName(last_name="Тестов", first_name="Андрей")
     await FSSPProvider(fssp_settings).fetch(person_subject.model_copy(update={"name": name}))
 
-    assert json.loads(route.calls[0].request.content)["params"]["secondname"] == ""
+    assert "secondname" not in json.loads(route.calls[0].request.content)["params"]
 
 
 # ---------------------------------------------------------------- ФССП polling
