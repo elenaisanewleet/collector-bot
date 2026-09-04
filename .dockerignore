@@ -1,0 +1,15 @@
+.venv/
+.git/
+.github/
+.env
+*.db
+*.sqlite*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/
+htmlcov/
+.coverage
+*.egg-info/

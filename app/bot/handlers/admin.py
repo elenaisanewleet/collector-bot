@@ -1,0 +1,84 @@
+"""Operational commands for the allowlisted operators.
+
+Every user of this bot is already trusted — the allowlist is the security
+boundary — so these are diagnostics rather than a privilege tier.
+"""
+
+from __future__ import annotations
+
+from aiogram import Router
+from aiogram.filters import Command
+from aiogram.types import Message
+
+from app.container import Container
+from app.db.repository import AuditRepository, DebtorRepository
+from app.domain.enums import PROVIDER_TITLES
+from app.utils.dates import format_datetime
+from app.utils.masking import mask_secret
+
+
+def _flag(value: bool) -> str:
+    return "включено" if value else "выключено"
+
+
+def build_router() -> Router:
+    """Build this module's router.
+
+    A factory rather than a module-level singleton: a Router can only be
+    attached to one parent, so a shared instance would make a second
+    Dispatcher — in tests, or in any future multi-bot setup — impossible.
+    """
+    router = Router(name="admin")
+
+    @router.message(Command("status"))
+    async def handle_status(message: Message, container: Container) -> None:
+        settings = container.settings
+        async with container.database.session() as session:
+            debtors = await DebtorRepository(session).count()
+            audit_events = await AuditRepository(session).count()
+        lines = [
+            f"{settings.app_name} — состояние",
+            "",
+            f"Режим: {settings.app_mode.value}",
+            f"Окружение: {settings.app_env}",
+            f"Должников в базе: {debtors}",
+            f"Событий аудита: {audit_events}",
+            f"Кэш: {settings.cache_ttl_hours} ч" if settings.cache_enabled else "Кэш: выключен",
+            f"Параллельность запросов: {settings.provider_concurrency}",
+            f"Таймаут запроса: {settings.request_timeout_seconds:.0f} с",
+            "",
+            "Приватность:",
+            f"• хранение сырых ответов: {_flag(settings.store_raw_responses)}",
+            f"• хранение полных идентификаторов: {_flag(settings.store_sensitive_identifiers)}",
+            "",
+            "Источники:",
+        ]
+        lines.extend(
+            f"{'✓' if provider.is_configured else '○'} "
+            f"{PROVIDER_TITLES.get(provider.name, provider.name.value)}"
+            for provider in container.registry.external
+        )
+        lines.append("")
+        # Token presence is confirmed without ever printing the value.
+        lines.append(f"Токен бота: {mask_secret(settings.telegram_bot_token)}")
+        lines.append(f"Допущенных пользователей: {len(settings.allowed_user_ids)}")
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("audit"))
+    async def handle_audit(message: Message, container: Container) -> None:
+        async with container.database.session() as session:
+            events = await AuditRepository(session).recent(limit=15)
+
+        if not events:
+            await message.answer("Журнал аудита пуст.")
+            return
+
+        lines = ["Последние события аудита:", ""]
+        lines.extend(
+            f"{format_datetime(event.created_at)} · {event.action}\n"
+            f"   user={event.telegram_user_id} {event.detail or ''}".rstrip()
+            for event in events
+        )
+        await message.answer("\n".join(lines))
+
+    return router

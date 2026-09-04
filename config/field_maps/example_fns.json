@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Example field map for a ЕГРЮЛ/ЕГРИП API vendor.",
+    "Replace every path with your vendor's real ones. This is not a description",
+    "of any real API."
+  ],
+  "records_path": "items",
+  "fields": {
+    "inn": "inn",
+    "ogrn": "ogrn",
+    "name": "name",
+    "role": "role",
+    "status": "state.status",
+    "registration_date": "state.registration_date",
+    "termination_date": "state.termination_date",
+    "source_url": "url"
+  },
+  "value_maps": {
+    "role": {
+      "ip": "ip",
+      "head": "director",
+      "founder": "founder"
+    }
+  }
+}

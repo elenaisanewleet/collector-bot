@@ -1,0 +1,314 @@
+"""Normalized facts and the aggregated report.
+
+Every fact carries where it came from, when it was fetched and how confident we
+are that it belongs to the subject. A fact without provenance is not a fact we
+are willing to show an operator.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.domain.enums import (
+    BankruptcyStatus,
+    BusinessRole,
+    BusinessStatus,
+    EntityType,
+    MatchLevel,
+    ProceedingStatus,
+    ProviderName,
+    ProviderStatus,
+)
+from app.domain.identity import PersonName, SearchSubject
+from app.utils.dates import utcnow
+
+CONFIRMED_MATCH_THRESHOLD = 0.85
+PROBABLE_MATCH_THRESHOLD = 0.55
+
+
+def match_level_for(confidence: float) -> MatchLevel:
+    if confidence >= CONFIRMED_MATCH_THRESHOLD:
+        return MatchLevel.CONFIRMED
+    if confidence >= PROBABLE_MATCH_THRESHOLD:
+        return MatchLevel.PROBABLE
+    return MatchLevel.WEAK
+
+
+class SourcedFact(BaseModel):
+    """Base for anything a provider returns."""
+
+    model_config = ConfigDict(frozen=False)
+
+    provider: ProviderName
+    fetched_at: datetime = Field(default_factory=utcnow)
+    source_url: str | None = None
+    # Filled in by the IdentityMatcher, not by the provider: a provider cannot
+    # know how well its record matches the operator's subject.
+    match_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    match_reasons: tuple[str, ...] = Field(default_factory=tuple)
+
+    @property
+    def match_level(self) -> MatchLevel:
+        return match_level_for(self.match_confidence)
+
+    @property
+    def is_confirmed(self) -> bool:
+        return self.match_level is MatchLevel.CONFIRMED
+
+    @property
+    def is_usable(self) -> bool:
+        """Weak matches are displayed but never drive the score."""
+        return self.match_level in {MatchLevel.CONFIRMED, MatchLevel.PROBABLE}
+
+
+class InternalDebtorRecord(SourcedFact):
+    """A debtor as our own systems know them."""
+
+    kind: Literal["internal"] = "internal"
+    provider: ProviderName = ProviderName.INTERNAL
+
+    debtor_id: str | None = None
+    full_name: str | None = None
+    birth_date: date | None = None
+    # Raw phone only when STORE_SENSITIVE_IDENTIFIERS is enabled; the masked
+    # form is always available and is what the report displays.
+    phone: str | None = None
+    phone_masked: str | None = None
+    contract_number: str | None = None
+    claim_number: str | None = None
+    debt_amount: Decimal | None = None
+    address: str | None = None
+    vehicle_plate: str | None = None
+    vin: str | None = None
+    created_at: datetime | None = None
+
+    @property
+    def name(self) -> PersonName | None:
+        from app.domain.identity import NameParseError, parse_fio
+
+        if not self.full_name:
+            return None
+        try:
+            return parse_fio(self.full_name)
+        except NameParseError:
+            return None
+
+
+class EnforcementProceeding(SourcedFact):
+    """Исполнительное производство (ФССП)."""
+
+    kind: Literal["enforcement"] = "enforcement"
+    provider: ProviderName = ProviderName.FSSP
+
+    proceeding_number: str
+    debtor_name: str | None = None
+    debtor_birth_date: date | None = None
+    amount: Decimal | None = None
+    currency: str = "RUB"
+    status: ProceedingStatus = ProceedingStatus.UNKNOWN
+    status_text: str | None = None
+    subject: str | None = None
+    department: str | None = None
+
+    @property
+    def is_active(self) -> bool:
+        return self.status is ProceedingStatus.ACTIVE
+
+
+class BankruptcyRecord(SourcedFact):
+    """Сведения о банкротстве (ЕФРСБ)."""
+
+    kind: Literal["bankruptcy"] = "bankruptcy"
+    provider: ProviderName = ProviderName.FEDRESURS
+
+    debtor_name: str | None = None
+    debtor_type: EntityType = EntityType.INDIVIDUAL
+    inn: str | None = None
+    case_number: str | None = None
+    procedure: str | None = None
+    status: BankruptcyStatus = BankruptcyStatus.UNKNOWN
+    started_at: date | None = None
+    completed_at: date | None = None
+    message_date: date | None = None
+
+    @property
+    def is_active(self) -> bool:
+        return self.status is BankruptcyStatus.ACTIVE
+
+
+class BusinessRelation(SourcedFact):
+    """Связь с ИП или юрлицом (ЕГРЮЛ / ЕГРИП)."""
+
+    kind: Literal["business"] = "business"
+    provider: ProviderName = ProviderName.FNS
+
+    inn: str | None = None
+    ogrn: str | None = None
+    name: str | None = None
+    entity_type: EntityType = EntityType.LEGAL_ENTITY
+    status: BusinessStatus = BusinessStatus.UNKNOWN
+    role: BusinessRole = BusinessRole.OTHER
+    registration_date: date | None = None
+    termination_date: date | None = None
+
+    @property
+    def is_active(self) -> bool:
+        return self.status is BusinessStatus.ACTIVE
+
+    @property
+    def is_active_sole_proprietor(self) -> bool:
+        return self.is_active and self.role is BusinessRole.SOLE_PROPRIETOR
+
+
+class CourtCase(SourcedFact):
+    """Судебное дело. No provider is wired yet — the shape is fixed in advance
+    so adding one does not ripple through the report and the score."""
+
+    kind: Literal["court"] = "court"
+    provider: ProviderName = ProviderName.COURT
+
+    case_number: str
+    court_name: str | None = None
+    case_type: str | None = None
+    status: str | None = None
+    amount: Decimal | None = None
+    filed_at: date | None = None
+
+
+class VehicleRecord(SourcedFact):
+    kind: Literal["vehicle"] = "vehicle"
+    provider: ProviderName = ProviderName.VEHICLE
+
+    plate: str | None = None
+    vin: str | None = None
+    make: str | None = None
+    model: str | None = None
+    year: int | None = None
+    owner_name: str | None = None
+    restrictions: tuple[str, ...] = Field(default_factory=tuple)
+
+
+class PropertyRecord(SourcedFact):
+    kind: Literal["property"] = "property"
+    provider: ProviderName = ProviderName.PROPERTY
+
+    property_type: str | None = None
+    cadastral_number: str | None = None
+    address: str | None = None
+    share: str | None = None
+    encumbrances: tuple[str, ...] = Field(default_factory=tuple)
+
+
+FactRecord = Annotated[
+    InternalDebtorRecord
+    | EnforcementProceeding
+    | BankruptcyRecord
+    | BusinessRelation
+    | CourtCase
+    | VehicleRecord
+    | PropertyRecord,
+    Field(discriminator="kind"),
+]
+
+
+class ProviderResult(BaseModel):
+    """The outcome of one provider call — never an exception.
+
+    A provider that fails still produces one of these, so the report can say
+    exactly which sources answered and which did not.
+    """
+
+    model_config = ConfigDict(frozen=False)
+
+    provider: ProviderName
+    status: ProviderStatus
+    fetched_at: datetime = Field(default_factory=utcnow)
+    records: list[FactRecord] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+    duration_ms: int = 0
+    cache_hit: bool = False
+    # Only populated when STORE_RAW_RESPONSES is enabled; otherwise dropped as
+    # soon as parsing is done.
+    raw_response: str | None = None
+
+    @property
+    def is_answered(self) -> bool:
+        return self.status.is_answered
+
+    @property
+    def is_failure(self) -> bool:
+        return self.status in {ProviderStatus.UNAVAILABLE, ProviderStatus.ERROR}
+
+
+class ScoreFactor(BaseModel):
+    """One explainable contribution to the recovery score."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    delta: int
+    reason: str
+    source: ProviderName
+
+
+class RecoveryScore(BaseModel):
+    """Score, category, confidence and the full derivation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    score: int = Field(ge=0, le=100)
+    base_score: int
+    category: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    factors: tuple[ScoreFactor, ...] = Field(default_factory=tuple)
+    confidence_notes: tuple[str, ...] = Field(default_factory=tuple)
+
+
+class DebtorReport(BaseModel):
+    """Everything the operator sees, assembled from all sources."""
+
+    model_config = ConfigDict(frozen=False)
+
+    subject: SearchSubject
+    generated_at: datetime = Field(default_factory=utcnow)
+    internal_records: list[InternalDebtorRecord] = Field(default_factory=list)
+    enforcement_proceedings: list[EnforcementProceeding] = Field(default_factory=list)
+    bankruptcies: list[BankruptcyRecord] = Field(default_factory=list)
+    business_relations: list[BusinessRelation] = Field(default_factory=list)
+    court_cases: list[CourtCase] = Field(default_factory=list)
+    vehicles: list[VehicleRecord] = Field(default_factory=list)
+    properties: list[PropertyRecord] = Field(default_factory=list)
+    provider_results: list[ProviderResult] = Field(default_factory=list)
+    recovery_score: RecoveryScore | None = None
+    from_cache: bool = False
+    cached_at: datetime | None = None
+
+    @property
+    def internal_record(self) -> InternalDebtorRecord | None:
+        """The best internal match, when there is one."""
+        if not self.internal_records:
+            return None
+        return max(self.internal_records, key=lambda record: record.match_confidence)
+
+    @property
+    def active_proceedings(self) -> list[EnforcementProceeding]:
+        return [item for item in self.enforcement_proceedings if item.is_active and item.is_usable]
+
+    @property
+    def active_bankruptcies(self) -> list[BankruptcyRecord]:
+        return [item for item in self.bankruptcies if item.is_active and item.is_usable]
+
+    @property
+    def total_enforcement_amount(self) -> Decimal:
+        return sum(
+            (item.amount for item in self.active_proceedings if item.amount is not None),
+            Decimal("0"),
+        )
+
+    def result_for(self, provider: ProviderName) -> ProviderResult | None:
+        return next((item for item in self.provider_results if item.provider is provider), None)

@@ -1,0 +1,329 @@
+"""Deterministic demo providers.
+
+``APP_MODE=demo`` wires these in place of the HTTP adapters so the entire
+pipeline — search, matching, aggregation, scoring, reporting — can be exercised
+and tested without a single credential.
+
+They are deterministic by construction: the same subject always yields the same
+records, derived from a hash of the normalized name. Three fictional debtors have
+hand-written fixtures covering a high, a medium and a low recovery outcome; any
+other name gets a stable synthetic profile so the demo stays explorable.
+
+Every report generated in demo mode is labelled as such. These providers are
+never selected when ``APP_MODE=live``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass, field
+from datetime import date
+from decimal import Decimal
+
+from app.domain.enums import (
+    BankruptcyStatus,
+    BusinessRole,
+    BusinessStatus,
+    EntityType,
+    ProceedingStatus,
+    ProviderName,
+    ProviderStatus,
+)
+from app.domain.identity import SearchSubject
+from app.domain.models import (
+    BankruptcyRecord,
+    BusinessRelation,
+    EnforcementProceeding,
+    ProviderResult,
+)
+from app.providers.base import BaseProvider
+from app.utils.hashing import normalize_token
+
+DEMO_SOURCE_NOTE = "demo"
+
+
+@dataclass(frozen=True, slots=True)
+class DemoProfile:
+    """A fictional debtor's external footprint."""
+
+    full_name: str
+    birth_date: date
+    proceedings: tuple[tuple[str, str, Decimal, ProceedingStatus], ...] = ()
+    bankruptcy: tuple[str, str, BankruptcyStatus, date | None] | None = None
+    businesses: tuple[tuple[str, str, BusinessRole, BusinessStatus], ...] = ()
+    inn: str | None = None
+    notes: tuple[str, ...] = field(default_factory=tuple)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures. All persons are invented; any resemblance to real records is
+# unintended.
+# ---------------------------------------------------------------------------
+
+DEMO_PROFILES: dict[str, DemoProfile] = {
+    # High prospect: no enforcement, no bankruptcy, an active sole proprietorship.
+    "тестов андрей сергеевич": DemoProfile(
+        full_name="Тестов Андрей Сергеевич",
+        birth_date=date(1985, 3, 12),
+        inn="770912345601",
+        businesses=(
+            (
+                "770912345601",
+                "ИП Тестов Андрей Сергеевич",
+                BusinessRole.SOLE_PROPRIETOR,
+                BusinessStatus.ACTIVE,
+            ),
+        ),
+    ),
+    # Medium prospect: a couple of live proceedings against an active director role.
+    "примеров алексей олегович": DemoProfile(
+        full_name="Примеров Алексей Олегович",
+        birth_date=date(1979, 7, 24),
+        inn="503812345602",
+        proceedings=(
+            (
+                "18453/26/50012-ИП",
+                "Взыскание задолженности по кредитным платежам",
+                Decimal("94300"),
+                ProceedingStatus.ACTIVE,
+            ),
+            (
+                "18454/26/50012-ИП",
+                "Взыскание исполнительского сбора",
+                Decimal("6601"),
+                ProceedingStatus.ACTIVE,
+            ),
+        ),
+        businesses=(
+            (
+                "5038123456",
+                'ООО "Демонстрационные решения"',
+                BusinessRole.DIRECTOR,
+                BusinessStatus.ACTIVE,
+            ),
+        ),
+    ),
+    # Low prospect: active bankruptcy plus a heavy enforcement load.
+    "демов максим игоревич": DemoProfile(
+        full_name="Демов Максим Игоревич",
+        birth_date=date(1990, 11, 3),
+        inn="771812345603",
+        proceedings=(
+            (
+                "77012/26/77018-ИП",
+                "Иные взыскания имущественного характера",
+                Decimal("412800"),
+                ProceedingStatus.ACTIVE,
+            ),
+            (
+                "77013/26/77018-ИП",
+                "Взыскание задолженности по кредитным платежам",
+                Decimal("318400"),
+                ProceedingStatus.ACTIVE,
+            ),
+            (
+                "77014/26/77018-ИП",
+                "Взыскание налогов и сборов",
+                Decimal("96150"),
+                ProceedingStatus.ACTIVE,
+            ),
+            (
+                "77015/26/77018-ИП",
+                "Взыскание исполнительского сбора",
+                Decimal("41280"),
+                ProceedingStatus.ACTIVE,
+            ),
+            (
+                "77016/26/77018-ИП",
+                "Взыскание задолженности по договору займа",
+                Decimal("205700"),
+                ProceedingStatus.ACTIVE,
+            ),
+            (
+                "77017/26/77018-ИП",
+                "Взыскание судебных расходов",
+                Decimal("18900"),
+                ProceedingStatus.ACTIVE,
+            ),
+        ),
+        bankruptcy=(
+            "А40-118472/2026",
+            "Реализация имущества гражданина",
+            BankruptcyStatus.ACTIVE,
+            None,
+        ),
+        businesses=(
+            (
+                "771812345603",
+                "ИП Демов Максим Игоревич",
+                BusinessRole.SOLE_PROPRIETOR,
+                BusinessStatus.TERMINATED,
+            ),
+        ),
+    ),
+}
+
+
+def _seed(subject: SearchSubject) -> int:
+    """Stable integer seed derived from the subject's name."""
+    key = normalize_token(subject.display_name)
+    return int(hashlib.sha256(key.encode("utf-8")).hexdigest()[:8], 16)
+
+
+def _profile_for(subject: SearchSubject) -> DemoProfile | None:
+    if subject.name is None:
+        return None
+    return DEMO_PROFILES.get(subject.name.normalized)
+
+
+class DemoFSSPProvider(BaseProvider):
+    """Enforcement proceedings, demo edition."""
+
+    name = ProviderName.FSSP
+    title = "ФССП (демо)"
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        if subject.name is None:
+            return self.insufficient_query("Нужно ФИО")
+
+        profile = _profile_for(subject)
+        if profile is not None:
+            records = [
+                _proceeding(number, purpose, amount, status, profile)
+                for number, purpose, amount, status in profile.proceedings
+            ]
+        else:
+            records = _synthetic_proceedings(subject)
+
+        return ProviderResult(
+            provider=self.name,
+            status=ProviderStatus.SUCCESS if records else ProviderStatus.NO_RESULTS,
+            records=list(records),
+        )
+
+
+def _proceeding(
+    number: str,
+    purpose: str,
+    amount: Decimal,
+    status: ProceedingStatus,
+    profile: DemoProfile,
+) -> EnforcementProceeding:
+    return EnforcementProceeding(
+        proceeding_number=number,
+        debtor_name=profile.full_name,
+        debtor_birth_date=profile.birth_date,
+        amount=amount,
+        status=status,
+        subject=purpose,
+        department="Демо-отдел судебных приставов",
+        source_url=None,
+    )
+
+
+def _synthetic_proceedings(subject: SearchSubject) -> list[EnforcementProceeding]:
+    """Stable pseudo-profile for names outside the fixture set."""
+    seed = _seed(subject)
+    count = seed % 4  # 0..3 proceedings
+    assert subject.name is not None
+    return [
+        EnforcementProceeding(
+            proceeding_number=f"{10000 + seed % 80000 + index}/26/77001-ИП",
+            debtor_name=subject.name.full,
+            debtor_birth_date=subject.birth_date,
+            amount=Decimal(str(15000 + (seed % 97) * 1000 + index * 3700)),
+            status=ProceedingStatus.ACTIVE,
+            subject="Взыскание задолженности (демо-данные)",
+            department="Демо-отдел судебных приставов",
+        )
+        for index in range(count)
+    ]
+
+
+class DemoFedresursProvider(BaseProvider):
+    """Bankruptcy register, demo edition.
+
+    Note the difference from the unconfigured live provider: this one genuinely
+    "answers", so ``NO_RESULTS`` here does mean "checked, nothing found".
+    """
+
+    name = ProviderName.FEDRESURS
+    title = "ЕФРСБ (демо)"
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        if subject.name is None:
+            return self.insufficient_query("Нужно ФИО")
+
+        profile = _profile_for(subject)
+        if profile is None or profile.bankruptcy is None:
+            return ProviderResult(provider=self.name, status=ProviderStatus.NO_RESULTS)
+
+        case_number, procedure, status, completed_at = profile.bankruptcy
+        record = BankruptcyRecord(
+            debtor_name=profile.full_name,
+            debtor_type=EntityType.INDIVIDUAL,
+            inn=profile.inn,
+            case_number=case_number,
+            procedure=procedure,
+            status=status,
+            started_at=date(2026, 2, 17),
+            completed_at=completed_at,
+            message_date=date(2026, 2, 25),
+        )
+        return ProviderResult(provider=self.name, status=ProviderStatus.SUCCESS, records=[record])
+
+
+class DemoFNSProvider(BaseProvider):
+    """ЕГРЮЛ / ЕГРИП relations, demo edition."""
+
+    name = ProviderName.FNS
+    title = "ФНС (демо)"
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        if subject.name is None:
+            return self.insufficient_query("Нужно ФИО")
+
+        profile = _profile_for(subject)
+        if profile is None:
+            return ProviderResult(provider=self.name, status=ProviderStatus.NO_RESULTS)
+
+        records = [
+            BusinessRelation(
+                inn=inn,
+                ogrn=f"3{inn}0000"[:15],
+                name=name,
+                entity_type=(
+                    EntityType.SOLE_PROPRIETOR
+                    if role is BusinessRole.SOLE_PROPRIETOR
+                    else EntityType.LEGAL_ENTITY
+                ),
+                status=status,
+                role=role,
+                registration_date=date(2018, 5, 14),
+                termination_date=(
+                    date(2024, 9, 30) if status is BusinessStatus.TERMINATED else None
+                ),
+            )
+            for inn, name, role, status in profile.businesses
+        ]
+        return ProviderResult(
+            provider=self.name,
+            status=ProviderStatus.SUCCESS if records else ProviderStatus.NO_RESULTS,
+            records=list(records),
+        )
+
+
+def build_demo_providers() -> list[BaseProvider]:
+    return [DemoFSSPProvider(), DemoFedresursProvider(), DemoFNSProvider()]

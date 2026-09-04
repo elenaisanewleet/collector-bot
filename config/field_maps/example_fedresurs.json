@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "Example field map for a licensed ЕФРСБ API vendor.",
+    "records_path locates the array of records inside the response envelope.",
+    "Each entry in `fields` maps a domain field to a dotted path inside one record.",
+    "This file is an EXAMPLE: replace every path with your vendor's real ones,",
+    "taken from their documentation. It is not a description of any real API."
+  ],
+  "records_path": "data.items",
+  "fields": {
+    "debtor_name": "debtor.name",
+    "debtor_type": "debtor.type",
+    "inn": "debtor.inn",
+    "case_number": "case.number",
+    "procedure": "procedure.name",
+    "status": "procedure.status",
+    "started_at": "procedure.started",
+    "completed_at": "procedure.finished",
+    "message_date": "published_at",
+    "source_url": "url"
+  },
+  "value_maps": {
+    "debtor_type": {
+      "person": "individual",
+      "фл": "individual",
+      "ип": "ip",
+      "organization": "legal_entity"
+    }
+  }
+}

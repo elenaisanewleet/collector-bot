@@ -1,0 +1,173 @@
+"""Domain vocabulary.
+
+These names are part of the contract between providers, services and storage;
+they are persisted, so their string values must stay stable.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class ProviderStatus(StrEnum):
+    """Outcome of one provider call.
+
+    The distinction between :attr:`NO_RESULTS` and everything else is the single
+    most important invariant in this codebase: only ``NO_RESULTS`` means the
+    source was actually consulted and had nothing. A missing key is not an
+    absence of records.
+    """
+
+    SUCCESS = "success"
+    NO_RESULTS = "no_results"
+    NOT_CONFIGURED = "not_configured"
+    UNAVAILABLE = "unavailable"
+    ERROR = "error"
+
+    @property
+    def is_answered(self) -> bool:
+        """True when the source genuinely responded (with or without records)."""
+        return self in {ProviderStatus.SUCCESS, ProviderStatus.NO_RESULTS}
+
+
+class ProviderName(StrEnum):
+    INTERNAL = "internal"
+    FSSP = "fssp"
+    FEDRESURS = "fedresurs"
+    FNS = "fns"
+    COURT = "court"
+    VEHICLE = "vehicle"
+    PROPERTY = "property"
+    PLEDGE = "pledge"
+    INHERITANCE = "inheritance"
+
+
+PROVIDER_TITLES: dict[ProviderName, str] = {
+    ProviderName.INTERNAL: "Наши данные",
+    ProviderName.FSSP: "ФССП",
+    ProviderName.FEDRESURS: "ЕФРСБ",
+    ProviderName.FNS: "ФНС",
+    ProviderName.COURT: "Суды",
+    ProviderName.VEHICLE: "Авто",
+    ProviderName.PROPERTY: "Недвижимость",
+    ProviderName.PLEDGE: "Залоги",
+    ProviderName.INHERITANCE: "Наследственные дела",
+}
+
+
+class SearchType(StrEnum):
+    PERSON = "person"
+    VEHICLE_PLATE = "vehicle_plate"
+    VIN = "vin"
+    VEHICLE = "vehicle"
+    ADDRESS = "address"
+    PASSPORT = "passport"
+    CONTRACT = "contract"
+
+
+SEARCH_TYPE_TITLES: dict[SearchType, str] = {
+    SearchType.PERSON: "Физлицо",
+    SearchType.VEHICLE_PLATE: "Госномер",
+    SearchType.VIN: "VIN",
+    SearchType.VEHICLE: "Автомобиль",
+    SearchType.ADDRESS: "Адрес",
+    SearchType.PASSPORT: "Паспорт",
+    SearchType.CONTRACT: "Договор / заявка",
+}
+
+
+class Region(StrEnum):
+    """Regions the business actually works in, plus an explicit escape hatch."""
+
+    MOSCOW = "moscow"
+    MOSCOW_OBLAST = "moscow_oblast"
+    OTHER = "other"
+
+
+REGION_TITLES: dict[Region, str] = {
+    Region.MOSCOW: "Москва",
+    Region.MOSCOW_OBLAST: "Московская область",
+    Region.OTHER: "Другой регион",
+}
+
+# Codes used by the ФССП public API region dictionary. They are supplied to the
+# adapter as data rather than hard-coded into request building, so a deployment
+# can correct them without a code change.
+REGION_FSSP_CODES: dict[Region, int] = {
+    Region.MOSCOW: 77,
+    Region.MOSCOW_OBLAST: 50,
+}
+
+
+class MatchLevel(StrEnum):
+    """How confident we are that an external record is *this* person."""
+
+    CONFIRMED = "confirmed"
+    PROBABLE = "probable"
+    WEAK = "weak"
+
+
+MATCH_LEVEL_TITLES: dict[MatchLevel, str] = {
+    MatchLevel.CONFIRMED: "Подтверждённое совпадение",
+    MatchLevel.PROBABLE: "Возможное совпадение",
+    MatchLevel.WEAK: "Слабое совпадение",
+}
+
+
+class ScoreCategory(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+SCORE_CATEGORY_TITLES: dict[ScoreCategory, str] = {
+    ScoreCategory.LOW: "НИЗКАЯ",
+    ScoreCategory.MEDIUM: "СРЕДНЯЯ",
+    ScoreCategory.HIGH: "ВЫСОКАЯ",
+}
+
+
+class EntityType(StrEnum):
+    INDIVIDUAL = "individual"
+    SOLE_PROPRIETOR = "sole_proprietor"
+    LEGAL_ENTITY = "legal_entity"
+
+
+class BusinessRole(StrEnum):
+    SOLE_PROPRIETOR = "sole_proprietor"
+    DIRECTOR = "director"
+    FOUNDER = "founder"
+    OTHER = "other"
+
+
+BUSINESS_ROLE_TITLES: dict[BusinessRole, str] = {
+    BusinessRole.SOLE_PROPRIETOR: "ИП",
+    BusinessRole.DIRECTOR: "руководитель ЮЛ",
+    BusinessRole.FOUNDER: "учредитель ЮЛ",
+    BusinessRole.OTHER: "иная роль",
+}
+
+
+class BusinessStatus(StrEnum):
+    ACTIVE = "active"
+    TERMINATED = "terminated"
+    UNKNOWN = "unknown"
+
+
+class BankruptcyStatus(StrEnum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    UNKNOWN = "unknown"
+
+
+class ProceedingStatus(StrEnum):
+    ACTIVE = "active"
+    CLOSED = "closed"
+    UNKNOWN = "unknown"
+
+
+class ImportRowOutcome(StrEnum):
+    CREATED = "created"
+    UPDATED = "updated"
+    SKIPPED = "skipped"
+    FAILED = "failed"

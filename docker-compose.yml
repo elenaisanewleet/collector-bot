@@ -1,0 +1,42 @@
+# Local and small-deployment setup.
+#
+#   docker compose up -d                  bot on SQLite
+#   docker compose --profile postgres up  bot on PostgreSQL
+#
+# Secrets come from .env, which is never baked into the image.
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Keep the database on the mounted volume rather than in the container.
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/var/collector_bot.db}
+      INTERNAL_CSV_PATH: ${INTERNAL_CSV_PATH:-/app/data/demo_debtors.csv}
+    volumes:
+      - bot-data:/app/var
+      # Drop customer exports here to import them without rebuilding.
+      - ./data:/app/data:ro
+    command: >
+      sh -c "alembic upgrade head && python -m app.main"
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-collector}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-collector}
+      POSTGRES_DB: ${POSTGRES_DB:-collector_bot}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-collector}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  bot-data:
+  pg-data:

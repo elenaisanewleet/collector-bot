@@ -1,0 +1,99 @@
+[project]
+name = "collector-bot"
+version = "0.1.0"
+description = "Internal Telegram service for debtor verification and recovery prospect scoring"
+requires-python = ">=3.12"
+readme = "README.md"
+
+dependencies = [
+    "aiogram>=3.13,<4",
+    "httpx>=0.27,<1",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+    "SQLAlchemy[asyncio]>=2.0.30,<3",
+    "aiosqlite>=0.20",
+    "alembic>=1.13,<2",
+    "structlog>=24.1",
+    "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.29"]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-python-dateutil>=2.9",
+]
+
+[project.scripts]
+collector-bot = "app.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ---------------------------------------------------------------- ruff
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["app", "tests", "scripts"]
+exclude = [".venv", "migrations/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "ASYNC",# async gotchas
+    "RUF",
+]
+ignore = [
+    "RUF001",  # ambiguous unicode chars: Cyrillic text is intentional
+    "RUF002",
+    "RUF003",
+    "B008",    # aiogram/DI style default-arg calls
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+# ---------------------------------------------------------------- mypy
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app", "tests", "scripts"]
+exclude = "^(migrations/versions/|\\.venv/)"
+strict = true
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+disallow_any_generics = true
+warn_return_any = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["alembic.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------- pytest
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+filterwarnings = ["error::DeprecationWarning:app.*"]

@@ -1,0 +1,6 @@
+Alembic migrations for collector-bot.
+
+    make migrate                 apply everything
+    alembic revision --autogenerate -m "..."   create a new revision
+
+The URL comes from DATABASE_URL via app.config, not from alembic.ini.
