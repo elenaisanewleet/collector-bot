@@ -1,0 +1,40 @@
+name: check
+
+# The invariant this project rests on — "not checked" must never read as
+# "nothing found" — is enforced by the test suite. Run it on every push and
+# pull request so a regression cannot land unnoticed.
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # PYTHON=python: the Makefile defaults to python3.12, which is not on
+      # PATH under setup-python.
+      - name: Install
+        run: make install PYTHON=python
+
+      - name: Lint, typecheck, test
+        run: make check
+
+      # Demo mode wires deterministic in-process providers — no credentials,
+      # no network. It is the only end-to-end exercise of the pipeline.
+      - name: Demo pipeline
+        run: make demo
