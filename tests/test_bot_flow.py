@@ -15,7 +15,14 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import AnswerCallbackQuery, DeleteMessage, SendMessage, TelegramMethod
+from aiogram.methods import (
+    AnswerCallbackQuery,
+    DeleteMessage,
+    EditMessageText,
+    SendDocument,
+    SendMessage,
+    TelegramMethod,
+)
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
 from app.bot.middleware import ACCESS_DENIED_MESSAGE
@@ -35,6 +42,7 @@ class SentMessages:
         self.texts: list[str] = []
         self.markups: list[Any] = []
         self.callback_answers: list[str] = []
+        self.documents: list[tuple[str, bytes]] = []
 
     @property
     def joined(self) -> str:
@@ -66,6 +74,16 @@ def bot(sent: SentMessages, monkeypatch: pytest.MonkeyPatch) -> Iterator[Bot]:
                 chat=Chat(id=CHAT_ID, type="private"),
                 text=method.text,
             ).as_(self)
+        if isinstance(method, EditMessageText):
+            # Прогресс правится на месте — для теста это такой же текст.
+            sent.texts.append(method.text or "")
+            return True
+        if isinstance(method, SendDocument):
+            document = method.document
+            sent.documents.append(
+                (getattr(document, "filename", ""), getattr(document, "data", b""))
+            )
+            return True
         if isinstance(method, AnswerCallbackQuery):
             sent.callback_answers.append(method.text or "")
             return True
@@ -364,6 +382,91 @@ async def test_repeat_of_another_operators_search_is_refused(
 
     assert sent.contains("Данные устарели")
     assert not sent.contains("RECOVERY SCORE")
+
+
+# ---------------------------------------------------------------- массовая проверка
+
+
+async def test_batch_shows_an_estimate_before_spending(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Прогон тратит платные запросы, поэтому сначала смета и подтверждение."""
+    await container.import_service.import_file(container.settings.internal_csv_path)
+
+    await feed(dispatcher, bot, message=make_message("/batch"))
+
+    assert sent.contains("Массовая проверка")
+    assert sent.contains("Обращений к источникам")
+    assert sent.contains("списываются с вашего баланса")
+    # Ничего ещё не запущено.
+    assert not sent.contains("Проверка завершена")
+
+
+async def test_batch_on_an_empty_base_asks_for_an_import(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    await feed(dispatcher, bot, message=make_message("/batch"))
+    assert sent.contains("Внутренняя база пуста")
+
+
+async def test_batch_runs_and_reports_a_queue(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    await container.import_service.import_file(container.settings.internal_csv_path)
+
+    await feed(dispatcher, bot, message=make_message("/batch"))
+    await feed(dispatcher, bot, callback_query=make_callback("batch:run"))
+
+    assert sent.contains("Проверка завершена")
+    assert sent.contains("Судебный приказ")
+    assert sent.contains("Не подавать")
+    assert sent.contains("Не будет потрачено на пошлины")
+
+
+async def test_batch_lists_one_verdict(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    await container.import_service.import_file(container.settings.internal_csv_path)
+    await feed(dispatcher, bot, message=make_message("/batch"))
+    await feed(dispatcher, bot, callback_query=make_callback("batch:run"))
+
+    sent.texts.clear()
+    await feed(dispatcher, bot, callback_query=make_callback("batch:list:drop"))
+
+    assert sent.contains("Не подавать")
+    assert sent.contains("Демов Максим Игоревич")
+
+
+async def test_batch_list_without_a_run(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    await feed(dispatcher, bot, callback_query=make_callback("batch:list:file"))
+    assert sent.contains("Прогонов ещё не было")
+
+
+async def test_batch_export_sends_a_file(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    await container.import_service.import_file(container.settings.internal_csv_path)
+    await feed(dispatcher, bot, message=make_message("/batch"))
+    await feed(dispatcher, bot, callback_query=make_callback("batch:run"))
+    await feed(dispatcher, bot, callback_query=make_callback("batch:export"))
+
+    assert sent.documents, "CSV не отправлен"
+    name, payload = sent.documents[-1]
+    assert name.endswith(".csv")
+    assert payload.startswith(b"\xef\xbb\xbf")
+    assert "Тестов Андрей Сергеевич" in payload.decode("utf-8-sig")
+
+
+async def test_outsider_cannot_start_a_batch(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    await container.import_service.import_file(container.settings.internal_csv_path)
+
+    await feed(dispatcher, bot, message=make_message("/batch", user_id=OUTSIDER_ID))
+
+    assert sent.texts == [ACCESS_DENIED_MESSAGE]
 
 
 async def test_import_requires_a_document(

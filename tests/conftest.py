@@ -23,6 +23,7 @@ from app.domain.models import (
     BusinessRelation,
     EnforcementProceeding,
     FactRecord,
+    InternalDebtorRecord,
     ProviderResult,
 )
 from app.providers.registry import (
@@ -30,6 +31,7 @@ from app.providers.registry import (
     build_external_providers,
     build_internal_provider,
 )
+from app.services.batch import BatchService
 from app.services.import_service import ImportService
 from app.services.scoring import RecoveryScoreEngine
 from app.services.search import SearchService
@@ -80,12 +82,16 @@ async def container(settings: Settings, database: Database) -> AsyncIterator[Con
         internal=build_internal_provider(settings, database),
         external=build_external_providers(settings),
     )
+    search_service = SearchService(settings=settings, database=database, registry=registry)
     instance = Container(
         settings=settings,
         database=database,
         registry=registry,
-        search_service=SearchService(settings=settings, database=database, registry=registry),
+        search_service=search_service,
         import_service=ImportService(settings, database),
+        batch_service=BatchService(
+            settings=settings, database=database, search_service=search_service
+        ),
         subject_store=SubjectStore(),
     )
     yield instance
@@ -162,6 +168,25 @@ def make_business(
         name="ИП Тестов Андрей Сергеевич",
         role=BusinessRole.SOLE_PROPRIETOR if sole_proprietor else BusinessRole.DIRECTOR,
         status=BusinessStatus.ACTIVE if active else BusinessStatus.TERMINATED,
+    )
+    record.match_confidence = confidence
+    return record
+
+
+def make_internal(
+    *,
+    debt: str | None = "38400",
+    full_name: str = "Тестов Андрей Сергеевич",
+    confidence: float = 1.0,
+) -> InternalDebtorRecord:
+    from decimal import Decimal
+
+    record = InternalDebtorRecord(
+        debtor_id="DEM-001",
+        full_name=full_name,
+        birth_date=date(1985, 3, 12),
+        contract_number="EV-20481",
+        debt_amount=Decimal(debt) if debt is not None else None,
     )
     record.match_confidence = confidence
     return record

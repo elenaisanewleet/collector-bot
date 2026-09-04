@@ -75,6 +75,7 @@ async def run_demo_flow(settings: Settings | None = None) -> int:
             print(render_report(report, demo_mode=True))
 
         await _demo_contract_lookup(container)
+        await _demo_batch(container)
         print(f"\n{SEPARATOR}\nДемо завершено.\n{SEPARATOR}\n")
     finally:
         await container.dispose()
@@ -91,6 +92,33 @@ async def _seed(import_service: ImportService, settings: Settings) -> None:
         f"Загружено из {path}: строк {report.total_rows}, "
         f"импортировано {report.imported}, ошибок {report.failed}"
     )
+
+
+async def _demo_batch(container: Container) -> None:
+    """Главный сценарий: прогон всей выгрузки и очередь по вердиктам."""
+    from app.bot.handlers.batch import render_estimate, render_summary
+    from app.db.repository import BatchRepository
+    from app.domain.verdict import VERDICT_TITLES, Verdict
+    from app.utils.money import format_amount
+
+    print(f"\n{SEPARATOR}\nМассовая проверка всей выгрузки\n{SEPARATOR}\n")
+    estimate = await container.batch_service.estimate()
+    print(render_estimate(estimate, container.settings.app_name))
+
+    summary = await container.batch_service.run(telegram_user_id=DEMO_USER_ID)
+    print(f"\n{render_summary(summary)}\n")
+
+    async with container.database.session() as session:
+        items = await BatchRepository(session).queue(summary.run_id, limit=50)
+
+    print("ОЧЕРЕДЬ ВЗЫСКАНИЯ")
+    for item in items:
+        debtor = item.debtor
+        name = (debtor.fio if debtor else None) or "—"
+        title = VERDICT_TITLES.get(Verdict(item.verdict), item.verdict)
+        fee = f", пошлина {format_amount(item.state_fee)}" if item.state_fee else ""
+        print(f"  {title:18s} {name:30s} {format_amount(item.debt_amount)}{fee}")
+        print(f"  {'':18s} {item.headline}")
 
 
 async def _demo_contract_lookup(container: Container) -> None:

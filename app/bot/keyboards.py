@@ -26,12 +26,16 @@ CANCEL_CALLBACK = "cancel"
 EXTERNAL_CHECK_PREFIX = "external"
 REFRESH_PREFIX = "refresh"
 REPEAT_PREFIX = "repeat"
+BATCH_PREFIX = "batch"
 
 REGION_COMBINED = "moscow_and_oblast"
 
 
 def main_menu() -> InlineKeyboardMarkup:
     buttons = [
+        # Массовая проверка стоит первой: это главный сценарий продукта,
+        # а поиск одного человека — частный случай.
+        [InlineKeyboardButton(text="Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start")],
         [_menu_button("👤 Физлицо", SearchType.PERSON)],
         [
             _menu_button("🚘 Госномер", SearchType.VEHICLE_PLATE),
@@ -143,6 +147,34 @@ def history_keyboard(tokens: list[tuple[int, str]]) -> InlineKeyboardMarkup:
                 )
             ]
             for index, token in tokens
+        ]
+    )
+
+
+def batch_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Прогон тратит платные запросы, поэтому запускается только по подтверждению."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Запустить проверку", callback_data=f"{BATCH_PREFIX}:run")],
+            [InlineKeyboardButton(text="Отмена", callback_data=CANCEL_CALLBACK)],
+        ]
+    )
+
+
+def batch_result_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Подавать", callback_data=f"{BATCH_PREFIX}:list:file"),
+                InlineKeyboardButton(text="Приказ", callback_data=f"{BATCH_PREFIX}:list:order"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Проверить руками", callback_data=f"{BATCH_PREFIX}:list:review"
+                ),
+                InlineKeyboardButton(text="Не подавать", callback_data=f"{BATCH_PREFIX}:list:drop"),
+            ],
+            [InlineKeyboardButton(text="Выгрузить в CSV", callback_data=f"{BATCH_PREFIX}:export")],
         ]
     )
 

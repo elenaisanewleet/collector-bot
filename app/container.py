@@ -11,11 +11,13 @@ from dataclasses import dataclass
 from app.config import Settings, get_settings
 from app.db.session import Database
 from app.providers.registry import ProviderRegistry, build_registry
+from app.services.batch import BatchService
 from app.services.identity import IdentityMatcher
 from app.services.import_service import ImportService
 from app.services.scoring import RecoveryScoreEngine
 from app.services.search import SearchService
 from app.services.subject_store import SubjectStore
+from app.services.verdict import VerdictEngine
 
 
 @dataclass(slots=True)
@@ -27,6 +29,7 @@ class Container:
     registry: ProviderRegistry
     search_service: SearchService
     import_service: ImportService
+    batch_service: BatchService
     subject_store: SubjectStore
 
     async def dispose(self) -> None:
@@ -50,5 +53,11 @@ def build_container(settings: Settings | None = None) -> Container:
         registry=registry,
         search_service=search_service,
         import_service=ImportService(resolved, database),
+        batch_service=BatchService(
+            settings=resolved,
+            database=database,
+            search_service=search_service,
+            verdict_engine=VerdictEngine(resolved),
+        ),
         subject_store=SubjectStore(),
     )

@@ -45,3 +45,7 @@ class PassportSearch(StatesGroup):
 
 class CsvImport(StatesGroup):
     waiting_document = State()
+
+
+class BatchCheck(StatesGroup):
+    waiting_confirm = State()

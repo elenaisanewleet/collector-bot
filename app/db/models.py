@@ -133,6 +133,63 @@ class DebtorReportRow(Base):
     __table_args__ = (UniqueConstraint("search_request_id", name="uq_report_request"),)
 
 
+class BatchRun(Base):
+    """Один прогон массовой проверки по выгрузке."""
+
+    __tablename__ = "batch_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    processed: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+
+    items: Mapped[list[BatchItem]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class BatchItem(Base):
+    """Результат по одному должнику внутри прогона.
+
+    Хранится вердикт и суммы, а не весь отчёт: очередь читается целиком и часто,
+    а полный отчёт уже лежит в search_results.
+    """
+
+    __tablename__ = "batch_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_run_id: Mapped[int] = mapped_column(
+        ForeignKey("batch_runs.id", ondelete="CASCADE"), index=True
+    )
+    debtor_id: Mapped[int] = mapped_column(ForeignKey("debtors.id", ondelete="CASCADE"))
+    search_request_id: Mapped[int | None] = mapped_column(Integer)
+    verdict: Mapped[str] = mapped_column(String(16), index=True)
+    verdict_order: Mapped[int] = mapped_column(Integer, index=True)
+    headline: Mapped[str] = mapped_column(String(512), default="")
+    reasons_json: Mapped[str] = mapped_column(Text, default="[]")
+    debt_amount: Mapped[Decimal | None] = mapped_column(Money)
+    # Money хранится текстом ради точности, а текст сортируется лексикографически
+    # («87600» > «154200»). Для порядка в очереди нужен настоящий числовой ключ.
+    debt_kopecks: Mapped[int] = mapped_column(Integer, default=0)
+    state_fee: Mapped[Decimal | None] = mapped_column(Money)
+    fee_basis: Mapped[str] = mapped_column(String(16), default="none")
+    score: Mapped[int | None] = mapped_column(Integer)
+    confidence: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+    run: Mapped[BatchRun] = relationship(back_populates="items")
+    debtor: Mapped[Debtor] = relationship(lazy="selectin")
+
+    __table_args__ = (
+        Index("ix_batch_items_run_order", "batch_run_id", "verdict_order", "debt_kopecks"),
+    )
+
+
 class AuditEvent(Base):
     """Append-only trail of who did what.
 

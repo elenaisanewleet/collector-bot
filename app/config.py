@@ -132,6 +132,20 @@ class Settings(BaseSettings):
     max_import_file_bytes: Annotated[int, Field(ge=1024)] = 5 * 1024 * 1024
     max_import_rows: Annotated[int, Field(ge=1)] = 50_000
 
+    # ---------------------------------------------------------------- вердикт
+    # Требования до 500 000 ₽ рассматриваются в приказном порядке (ст. 121 ГПК РФ).
+    court_order_max_amount: Annotated[int, Field(ge=0)] = 500_000
+    # Во сколько раз долг должен превышать пошлину, чтобы процесс окупался.
+    min_debt_to_fee_ratio: Annotated[float, Field(ge=1.0, le=100.0)] = 2.0
+
+    # ---------------------------------------------------------------- массовая проверка
+    # Каждый должник — это реальные запросы к платным источникам, поэтому прогон
+    # ограничен и требует подтверждения оператора.
+    batch_max_debtors: Annotated[int, Field(ge=1, le=100_000)] = 5_000
+    batch_concurrency: Annotated[int, Field(ge=1, le=32)] = 4
+    # Как часто обновлять сообщение с прогрессом, в обработанных должниках.
+    batch_progress_every: Annotated[int, Field(ge=1, le=1_000)] = 10
+
     @field_validator("log_level")
     @classmethod
     def _upper_log_level(cls, value: str) -> str:

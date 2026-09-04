@@ -9,12 +9,21 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, Select, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AuditEvent, Debtor, DebtorReportRow, SearchRequest, SearchResult
+from app.db.models import (
+    AuditEvent,
+    BatchItem,
+    BatchRun,
+    Debtor,
+    DebtorReportRow,
+    SearchRequest,
+    SearchResult,
+)
 from app.domain.models import InternalDebtorRecord, ProviderResult, RecoveryScore
 from app.utils.dates import utcnow
 from app.utils.hashing import normalize_token, stable_hash
@@ -100,6 +109,10 @@ class DebtorRepository:
     async def find_by_vin(self, vin: str) -> list[Debtor]:
         return await self._all(select(Debtor).where(Debtor.vin == vin))
 
+    async def iter_all(self, *, limit: int, offset: int = 0) -> list[Debtor]:
+        """Страница выгрузки для массового прогона, в стабильном порядке."""
+        return await self._all(select(Debtor).order_by(Debtor.id.asc()).limit(limit).offset(offset))
+
     async def find_by_address(self, address: str) -> list[Debtor]:
         needle = f"%{address.strip().lower()}%"
         return await self._all(
@@ -125,6 +138,89 @@ class DebtorRepository:
     async def _all(self, stmt: Select[tuple[Debtor]]) -> list[Debtor]:
         result = await self._session.scalars(stmt)
         return list(result.all())
+
+
+class BatchRepository:
+    """Прогоны массовой проверки и их результаты."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create_run(self, *, telegram_user_id: int, total: int) -> BatchRun:
+        run = BatchRun(telegram_user_id=telegram_user_id, total=total, status="running")
+        self._session.add(run)
+        await self._session.flush()
+        return run
+
+    async def add_item(self, item: BatchItem) -> None:
+        self._session.add(item)
+        await self._session.flush()
+
+    async def finish_run(
+        self, run_id: int, *, processed: int, failed: int, status: str = "finished"
+    ) -> None:
+        run = await self._session.get(BatchRun, run_id)
+        if run is None:
+            return
+        run.processed = processed
+        run.failed = failed
+        run.status = status
+        run.finished_at = utcnow()
+        await self._session.flush()
+
+    async def latest_run(self, telegram_user_id: int) -> BatchRun | None:
+        stmt = (
+            select(BatchRun)
+            .where(BatchRun.telegram_user_id == telegram_user_id)
+            .order_by(BatchRun.started_at.desc(), BatchRun.id.desc())
+            .limit(1)
+        )
+        found: BatchRun | None = await self._session.scalar(stmt)
+        return found
+
+    async def queue(
+        self, run_id: int, *, verdict: str | None = None, limit: int = 50, offset: int = 0
+    ) -> list[BatchItem]:
+        """Очередь прогона: сначала то, что можно нести в суд сегодня."""
+        stmt = select(BatchItem).where(BatchItem.batch_run_id == run_id)
+        if verdict:
+            stmt = stmt.where(BatchItem.verdict == verdict)
+        stmt = (
+            stmt.order_by(
+                BatchItem.verdict_order.asc(),
+                BatchItem.debt_kopecks.desc(),
+                BatchItem.id.asc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.scalars(stmt)
+        return list(result.all())
+
+    async def verdict_counts(self, run_id: int) -> dict[str, int]:
+        stmt = (
+            select(BatchItem.verdict, func.count())
+            .where(BatchItem.batch_run_id == run_id)
+            .group_by(BatchItem.verdict)
+        )
+        rows = await self._session.execute(stmt)
+        return dict(rows.all())  # type: ignore[arg-type]
+
+    async def verdict_totals(self, run_id: int) -> dict[str, Decimal]:
+        """Сумма долга и пошлины в разрезе вердикта."""
+        stmt = select(BatchItem.verdict, BatchItem.debt_amount, BatchItem.state_fee).where(
+            BatchItem.batch_run_id == run_id
+        )
+        rows = await self._session.execute(stmt)
+        totals: dict[str, Decimal] = {}
+        for verdict, debt, fee in rows.all():
+            totals[f"{verdict}:debt"] = totals.get(f"{verdict}:debt", Decimal("0")) + (
+                debt or Decimal("0")
+            )
+            totals[f"{verdict}:fee"] = totals.get(f"{verdict}:fee", Decimal("0")) + (
+                fee or Decimal("0")
+            )
+        return totals
 
 
 class SearchRepository:

@@ -10,6 +10,7 @@ from aiogram import Dispatcher, Router
 
 from app.bot.handlers import (
     admin,
+    batch,
     history,
     import_csv,
     search_contract,
@@ -33,6 +34,7 @@ def build_router() -> Router:
     """
     root = Router(name="root")
     root.include_router(start.build_router())
+    root.include_router(batch.build_router())
     root.include_router(search_person.build_router())
     root.include_router(search_vehicle.build_router())
     root.include_router(search_contract.build_router())

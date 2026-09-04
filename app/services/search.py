@@ -77,6 +77,15 @@ class SearchService:
         self._score_engine = score_engine or RecoveryScoreEngine()
         self._semaphore = asyncio.Semaphore(settings.provider_concurrency)
 
+    @property
+    def registry(self) -> ProviderRegistry:
+        """Источники, с которыми работает сервис.
+
+        Нужен вызывающему, чтобы оценить стоимость массового прогона до его
+        запуска; менять состав через это свойство нельзя.
+        """
+        return self._registry
+
     # ------------------------------------------------------------------ api
 
     async def search(
