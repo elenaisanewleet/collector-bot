@@ -27,7 +27,7 @@ from app.domain.enums import (
     PledgeStatus,
     ProviderStatus,
 )
-from app.domain.identity import PersonName, SearchSubject, VehicleDescriptor
+from app.domain.identity import SearchSubject, VehicleDescriptor
 from app.domain.models import BankruptcyRecord, BusinessRelation, CourtCase, PledgeRecord
 from app.providers.court import NewDBArbitrationProvider
 from app.providers.fedresurs import NewDBBankruptcyProvider
