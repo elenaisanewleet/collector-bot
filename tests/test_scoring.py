@@ -21,6 +21,8 @@ from app.services.scoring import RecoveryScoreEngine
 from tests.conftest import (
     make_bankruptcy,
     make_business,
+    make_court_case,
+    make_pledge,
     make_proceeding,
     provider_result,
 )
@@ -34,6 +36,8 @@ def build_report(
     fssp: ProviderSpec | None = None,
     fedresurs: ProviderSpec | None = None,
     fns: ProviderSpec | None = None,
+    pledge: ProviderSpec | None = None,
+    court: ProviderSpec | None = None,
 ) -> DebtorReport:
     """Assemble a report directly, bypassing the providers.
 
@@ -45,6 +49,8 @@ def build_report(
         (ProviderName.FSSP, fssp, report.enforcement_proceedings),
         (ProviderName.FEDRESURS, fedresurs, report.bankruptcies),
         (ProviderName.FNS, fns, report.business_relations),
+        (ProviderName.PLEDGE, pledge, report.pledges),
+        (ProviderName.COURT, court, report.court_cases),
     ]
     for provider, spec, bucket in buckets:
         if spec is None:
@@ -251,3 +257,151 @@ def test_total_enforcement_amount_sums_only_usable_records(person_subject: Searc
         ),
     )
     assert report.total_enforcement_amount == Decimal("100")
+
+
+# ---------------------------------------------------------------- залоги
+
+
+def test_active_pledge_lowers_the_score(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Заложенная машина — не наше обеспечение, а чужое."""
+    pledged = build_report(person_subject, pledge=(ProviderStatus.SUCCESS, [make_pledge()]))
+    clear = build_report(person_subject, pledge=(ProviderStatus.NO_RESULTS, []))
+
+    assert score_engine.evaluate(pledged).score < score_engine.evaluate(clear).score
+    assert any(factor.name == "active_pledge" for factor in score_engine.evaluate(pledged).factors)
+
+
+def test_excluded_pledge_is_not_counted_against_the_debtor(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    report = build_report(
+        person_subject, pledge=(ProviderStatus.SUCCESS, [make_pledge(active=False)])
+    )
+    score = score_engine.evaluate(report)
+
+    assert not any(factor.name == "active_pledge" for factor in score.factors)
+    assert any(factor.name == "no_pledges" for factor in score.factors)
+
+
+def test_pledge_and_claim_counts_agree_in_russian(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """«1 действующих залог» в отчёте, который читает юрист, — брак."""
+    one = build_report(
+        person_subject,
+        pledge=(ProviderStatus.SUCCESS, [make_pledge()]),
+        court=(ProviderStatus.SUCCESS, [make_court_case()]),
+    )
+    reasons = {factor.name: factor.reason for factor in score_engine.evaluate(one).factors}
+
+    assert reasons["active_pledge"].startswith("1 действующий залог")
+    assert reasons["claims_against_debtor"].startswith("1 действующий арбитражный иск")
+
+    two = build_report(
+        person_subject,
+        pledge=(ProviderStatus.SUCCESS, [make_pledge(), make_pledge()]),
+        court=(
+            ProviderStatus.SUCCESS,
+            [make_court_case("А40-1/2026"), make_court_case("А40-2/2026")],
+        ),
+    )
+    reasons = {factor.name: factor.reason for factor in score_engine.evaluate(two).factors}
+
+    assert reasons["active_pledge"].startswith("2 действующих залога")
+    assert reasons["claims_against_debtor"].startswith("2 действующих арбитражных иска")
+
+
+def test_pledge_penalty_is_capped(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    from app.domain.scoring import MAX_PLEDGE_PENALTY
+
+    many = [make_pledge() for _ in range(10)]
+    report = build_report(person_subject, pledge=(ProviderStatus.SUCCESS, many))
+    factor = next(f for f in score_engine.evaluate(report).factors if f.name == "active_pledge")
+
+    assert factor.delta == MAX_PLEDGE_PENALTY
+
+
+@pytest.mark.parametrize(
+    "status", [ProviderStatus.NOT_CONFIGURED, ProviderStatus.UNAVAILABLE, ProviderStatus.ERROR]
+)
+def test_unchecked_pledges_earn_no_bonus(
+    person_subject: SearchSubject,
+    score_engine: RecoveryScoreEngine,
+    status: ProviderStatus,
+) -> None:
+    """Не проверено — не значит «не обременено»."""
+    report = build_report(person_subject, pledge=(status, []))
+    score = score_engine.evaluate(report)
+
+    assert not any(factor.name == "no_pledges" for factor in score.factors)
+
+
+# ---------------------------------------------------------------- арбитраж
+
+
+def test_live_claim_against_the_debtor_lowers_the_score(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    sued = build_report(person_subject, court=(ProviderStatus.SUCCESS, [make_court_case()]))
+    clear = build_report(person_subject, court=(ProviderStatus.NO_RESULTS, []))
+
+    assert score_engine.evaluate(sued).score < score_engine.evaluate(clear).score
+    assert any(
+        factor.name == "claims_against_debtor" for factor in score_engine.evaluate(sued).factors
+    )
+
+
+def test_a_case_the_debtor_brought_is_not_a_claim_against_them(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    report = build_report(
+        person_subject, court=(ProviderStatus.SUCCESS, [make_court_case(defendant=False)])
+    )
+    score = score_engine.evaluate(report)
+
+    assert not any(factor.name == "claims_against_debtor" for factor in score.factors)
+
+
+def test_a_decided_case_is_not_a_live_claim(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    report = build_report(
+        person_subject, court=(ProviderStatus.SUCCESS, [make_court_case(closed=True)])
+    )
+    score = score_engine.evaluate(report)
+
+    assert not any(factor.name == "claims_against_debtor" for factor in score.factors)
+
+
+@pytest.mark.parametrize(
+    "status", [ProviderStatus.NOT_CONFIGURED, ProviderStatus.UNAVAILABLE, ProviderStatus.ERROR]
+)
+def test_unchecked_courts_earn_no_bonus(
+    person_subject: SearchSubject,
+    score_engine: RecoveryScoreEngine,
+    status: ProviderStatus,
+) -> None:
+    report = build_report(person_subject, court=(status, []))
+    score = score_engine.evaluate(report)
+
+    assert not any(factor.name == "no_court_claims" for factor in score.factors)
+
+
+def test_unconnected_pledge_and_court_are_named_in_the_limitations(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Оценка без залогов и арбитража видит меньше — и говорит об этом."""
+    report = build_report(
+        person_subject,
+        fssp=(ProviderStatus.NO_RESULTS, []),
+        fedresurs=(ProviderStatus.NO_RESULTS, []),
+        fns=(ProviderStatus.NO_RESULTS, []),
+    )
+    notes = score_engine.evaluate(report).confidence_notes
+
+    assert any("Залоги" in note for note in notes)
+    assert any("Суды" in note for note in notes)

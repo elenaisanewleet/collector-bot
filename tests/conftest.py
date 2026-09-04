@@ -21,9 +21,11 @@ from app.domain.identity import PersonName, SearchSubject
 from app.domain.models import (
     BankruptcyRecord,
     BusinessRelation,
+    CourtCase,
     EnforcementProceeding,
     FactRecord,
     InternalDebtorRecord,
+    PledgeRecord,
     ProviderResult,
 )
 from app.providers.registry import (
@@ -168,6 +170,55 @@ def make_business(
         name="ИП Тестов Андрей Сергеевич",
         role=BusinessRole.SOLE_PROPRIETOR if sole_proprietor else BusinessRole.DIRECTOR,
         status=BusinessStatus.ACTIVE if active else BusinessStatus.TERMINATED,
+    )
+    record.match_confidence = confidence
+    return record
+
+
+def make_pledge(
+    *,
+    active: bool = True,
+    vin: str | None = "XTA1234567890ABCD",
+    confidence: float = 1.0,
+) -> PledgeRecord:
+    from app.domain.enums import PledgeStatus
+
+    record = PledgeRecord(
+        registration_number="2022-006-123456-789",
+        registered_at=date(2022, 4, 11),
+        terminated_at=None if active else date(2025, 6, 1),
+        pledgor_name="Тестов Андрей Сергеевич",
+        pledgor_birth_date=date(1985, 3, 12),
+        pledgee_name='АО "Демонстрационный банк"',
+        subject="Автомобиль LADA VESTA, 2021",
+        vin=vin,
+        status=PledgeStatus.ACTIVE if active else PledgeStatus.TERMINATED,
+    )
+    record.match_confidence = confidence
+    return record
+
+
+def make_court_case(
+    case_number: str = "А40-227414/2026",
+    *,
+    defendant: bool = True,
+    closed: bool = False,
+    amount: str | None = "1180400",
+    confidence: float = 1.0,
+) -> CourtCase:
+    from decimal import Decimal
+
+    from app.domain.enums import CourtCaseRole
+
+    record = CourtCase(
+        case_number=case_number,
+        court_name="Арбитражный суд города Москвы",
+        amount=Decimal(amount) if amount is not None else None,
+        filed_at=date(2026, 5, 20),
+        participant_name="Тестов Андрей Сергеевич",
+        inn="770912345601",
+        role=CourtCaseRole.DEFENDANT if defendant else CourtCaseRole.PLAINTIFF,
+        is_closed=closed,
     )
     record.match_confidence = confidence
     return record

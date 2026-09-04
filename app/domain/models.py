@@ -17,8 +17,10 @@ from app.domain.enums import (
     BankruptcyStatus,
     BusinessRole,
     BusinessStatus,
+    CourtCaseRole,
     EntityType,
     MatchLevel,
+    PledgeStatus,
     ProceedingStatus,
     ProviderName,
     ProviderStatus,
@@ -165,8 +167,12 @@ class BusinessRelation(SourcedFact):
 
 
 class CourtCase(SourcedFact):
-    """Судебное дело. No provider is wired yet — the shape is fixed in advance
-    so adding one does not ripple through the report and the score."""
+    """Судебное дело.
+
+    Served by the NewDB ``arbitr_person`` method where a deployment has mapped
+    it; otherwise the source stays unconnected and the shape sits here so that
+    connecting one is a registration rather than a redesign.
+    """
 
     kind: Literal["court"] = "court"
     provider: ProviderName = ProviderName.COURT
@@ -177,6 +183,48 @@ class CourtCase(SourcedFact):
     status: str | None = None
     amount: Decimal | None = None
     filed_at: date | None = None
+    # Who the case is about, so the record can be identity-matched rather than
+    # trusted because it came back from a search.
+    participant_name: str | None = None
+    inn: str | None = None
+    role: CourtCaseRole = CourtCaseRole.OTHER
+    is_closed: bool = False
+
+    @property
+    def is_active(self) -> bool:
+        return not self.is_closed
+
+    @property
+    def is_against_debtor(self) -> bool:
+        """A live claim by somebody else — a creditor competing with us."""
+        return self.is_active and self.role is CourtCaseRole.DEFENDANT
+
+
+class PledgeRecord(SourcedFact):
+    """Уведомление о залоге движимого имущества (реестр ФНП).
+
+    Matters for exactly one reason: a pledged thing is not free collateral. The
+    pledgeholder is satisfied ahead of us, so finding the debtor's only car in
+    the register turns an apparent asset into somebody else's security.
+    """
+
+    kind: Literal["pledge"] = "pledge"
+    provider: ProviderName = ProviderName.PLEDGE
+
+    registration_number: str | None = None
+    registered_at: date | None = None
+    terminated_at: date | None = None
+    pledgor_name: str | None = None
+    pledgor_birth_date: date | None = None
+    pledgor_inn: str | None = None
+    pledgee_name: str | None = None
+    subject: str | None = None
+    vin: str | None = None
+    status: PledgeStatus = PledgeStatus.UNKNOWN
+
+    @property
+    def is_active(self) -> bool:
+        return self.status is PledgeStatus.ACTIVE
 
 
 class VehicleRecord(SourcedFact):
@@ -209,6 +257,7 @@ FactRecord = Annotated[
     | BankruptcyRecord
     | BusinessRelation
     | CourtCase
+    | PledgeRecord
     | VehicleRecord
     | PropertyRecord,
     Field(discriminator="kind"),
@@ -281,6 +330,7 @@ class DebtorReport(BaseModel):
     bankruptcies: list[BankruptcyRecord] = Field(default_factory=list)
     business_relations: list[BusinessRelation] = Field(default_factory=list)
     court_cases: list[CourtCase] = Field(default_factory=list)
+    pledges: list[PledgeRecord] = Field(default_factory=list)
     vehicles: list[VehicleRecord] = Field(default_factory=list)
     properties: list[PropertyRecord] = Field(default_factory=list)
     provider_results: list[ProviderResult] = Field(default_factory=list)
@@ -302,6 +352,14 @@ class DebtorReport(BaseModel):
     @property
     def active_bankruptcies(self) -> list[BankruptcyRecord]:
         return [item for item in self.bankruptcies if item.is_active and item.is_usable]
+
+    @property
+    def active_pledges(self) -> list[PledgeRecord]:
+        return [item for item in self.pledges if item.is_active and item.is_usable]
+
+    @property
+    def claims_against_debtor(self) -> list[CourtCase]:
+        return [item for item in self.court_cases if item.is_against_debtor and item.is_usable]
 
     @property
     def total_enforcement_amount(self) -> Decimal:

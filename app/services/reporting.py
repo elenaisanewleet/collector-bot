@@ -14,6 +14,7 @@ from collections.abc import Iterable
 
 from app.domain.enums import (
     BUSINESS_ROLE_TITLES,
+    COURT_CASE_ROLE_TITLES,
     MATCH_LEVEL_TITLES,
     PROVIDER_TITLES,
     SCORE_CATEGORY_TITLES,
@@ -25,9 +26,11 @@ from app.domain.enums import (
 from app.domain.models import (
     BankruptcyRecord,
     BusinessRelation,
+    CourtCase,
     DebtorReport,
     EnforcementProceeding,
     InternalDebtorRecord,
+    PledgeRecord,
     ProviderResult,
     RecoveryScore,
 )
@@ -38,6 +41,8 @@ from app.utils.money import format_amount
 
 MAX_LISTED_PROCEEDINGS = 5
 MAX_LISTED_BUSINESSES = 5
+MAX_LISTED_PLEDGES = 5
+MAX_LISTED_CASES = 5
 DISCLAIMER = "Оценка является аналитической и не заменяет юридическую проверку."
 DEMO_BANNER = "⚠️ ДЕМО-РЕЖИМ: данные вымышленные, внешние источники не опрашивались."
 
@@ -57,6 +62,8 @@ def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
     blocks.append(_enforcement_block(report))
     blocks.append(_bankruptcy_block(report))
     blocks.append(_business_block(report))
+    blocks.append(_pledge_block(report))
+    blocks.append(_court_block(report))
     blocks.append(_score_block(report.recovery_score))
     blocks.append(_sources_block(report))
     blocks.append(DISCLAIMER)
@@ -225,6 +232,87 @@ def _business_line(item: BusinessRelation) -> str:
     state = "действует" if item.is_active else "прекращено"
     name = item.name or item.inn or "—"
     return f"• {role}: {name} — {state} ({_match_note(item.match_level)})"
+
+
+def _pledge_block(report: DebtorReport) -> str:
+    result = report.result_for(ProviderName.PLEDGE)
+    header = "ЗАЛОГИ"
+    unanswered = _unanswered_line(result)
+    if unanswered:
+        return f"{header}\n{unanswered}"
+
+    usable = [item for item in report.pledges if item.is_usable]
+    if not usable:
+        return f"{header}\nЗаписей в реестре залогов не найдено.\n{_checked_at(result)}"
+
+    lines = [header]
+    for item in usable[:MAX_LISTED_PLEDGES]:
+        lines.extend(_pledge_lines(item))
+    hidden = len(usable) - MAX_LISTED_PLEDGES
+    if hidden > 0:
+        lines.append(f"…и ещё {hidden}")
+    lines.append(_checked_at(result))
+    return "\n".join(lines)
+
+
+def _pledge_lines(item: PledgeRecord) -> list[str]:
+    state = "действует" if item.is_active else "исключён"
+    lines = [f"• {truncate(item.subject or 'предмет залога не указан', 90)} — {state}"]
+    if item.pledgee_name:
+        lines.append(f"  Залогодержатель: {truncate(item.pledgee_name, 90)}")
+    if item.vin:
+        lines.append(f"  VIN: {mask_vin(item.vin)}")
+    if item.registration_number:
+        lines.append(f"  Уведомление: {item.registration_number}")
+    if item.registered_at:
+        lines.append(f"  Зарегистрирован: {format_date(item.registered_at)}")
+    lines.append(f"  {_match_note(item.match_level)}")
+    return lines
+
+
+def _court_block(report: DebtorReport) -> str:
+    """Арбитраж — и только он.
+
+    Названо честно в самом тексте: суды общей юрисдикции этот источник не
+    покрывает, а «дел не найдено» без такой оговорки прочиталось бы как «на него
+    никто не подавал».
+    """
+    result = report.result_for(ProviderName.COURT)
+    header = "СУДЫ (АРБИТРАЖ)"
+    unanswered = _unanswered_line(result)
+    if unanswered:
+        return f"{header}\n{unanswered}"
+
+    usable = [item for item in report.court_cases if item.is_usable]
+    if not usable:
+        return (
+            f"{header}\nАрбитражных дел не найдено. "
+            f"Суды общей юрисдикции этот источник не покрывает.\n{_checked_at(result)}"
+        )
+
+    lines = [header]
+    for item in usable[:MAX_LISTED_CASES]:
+        lines.extend(_court_lines(item))
+    hidden = len(usable) - MAX_LISTED_CASES
+    if hidden > 0:
+        lines.append(f"…и ещё {hidden}")
+    lines.append("Суды общей юрисдикции этот источник не покрывает.")
+    lines.append(_checked_at(result))
+    return "\n".join(lines)
+
+
+def _court_lines(item: CourtCase) -> list[str]:
+    role = COURT_CASE_ROLE_TITLES.get(item.role, "участник")
+    state = "идёт" if item.is_active else "завершено"
+    lines = [f"• {item.case_number} — {role}, {state}"]
+    if item.amount is not None:
+        lines.append(f"  {format_amount(item.amount)}")
+    if item.court_name:
+        lines.append(f"  {truncate(item.court_name, 90)}")
+    if item.filed_at:
+        lines.append(f"  Подано: {format_date(item.filed_at)}")
+    lines.append(f"  {_match_note(item.match_level)}")
+    return lines
 
 
 def _score_block(score: RecoveryScore | None) -> str:

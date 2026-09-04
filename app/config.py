@@ -39,12 +39,15 @@ class FNSBackend(StrEnum):
     NONE = "none"
     DEMO = "demo"
     GENERIC_JSON = "generic_json"
+    # Served by the NewDB aggregator, whose key is already configured for ФССП.
+    NEWDB = "newdb"
 
 
 class FedresursBackend(StrEnum):
     NONE = "none"
     DEMO = "demo"
     GENERIC_JSON = "generic_json"
+    NEWDB = "newdb"
 
 
 class AuthStyle(StrEnum):
@@ -92,6 +95,11 @@ class Settings(BaseSettings):
     newdb_method_path: str = "/v2"
     newdb_poll_attempts: Annotated[int, Field(ge=1, le=60)] = 10
     newdb_poll_interval_seconds: Annotated[float, Field(ge=0.1, le=30)] = 2.0
+    # Row schemas for every NewDB method except fssp_person, keyed by method
+    # name. Only fssp_person has been read against a real response; the rest are
+    # described by the deployment, and a method absent from this file is a
+    # method that stays NOT_CONFIGURED rather than one this tool guesses at.
+    newdb_field_map: Path | None = None
 
     # ---------------------------------------------------------------- ЕФРСБ
     fedresurs_backend: FedresursBackend = FedresursBackend.NONE
@@ -187,13 +195,28 @@ class Settings(BaseSettings):
         return self.cache_ttl_hours > 0
 
     @property
+    def newdb_configured(self) -> bool:
+        """Whether the NewDB aggregator can be called at all."""
+        return bool(self.newdb_api_key and self.newdb_base_url)
+
+    @property
+    def newdb_methods_configured(self) -> bool:
+        """Whether NewDB methods beyond ``fssp_person`` can be read.
+
+        The key alone is not enough: without a row map there is nothing to parse
+        the answer with, and a source we cannot parse is a source we have not
+        checked.
+        """
+        return self.newdb_configured and self.newdb_field_map is not None
+
+    @property
     def fssp_configured(self) -> bool:
         """Whether the ФССП provider can make a real call.
 
         Named for the source, not the vendor: the domain asks about ФССП, and
         which aggregator serves it stays a configuration detail.
         """
-        return bool(self.newdb_api_key and self.newdb_base_url)
+        return self.newdb_configured
 
     @property
     def fedresurs_configured(self) -> bool:
@@ -201,6 +224,8 @@ class Settings(BaseSettings):
             return False
         if self.fedresurs_backend is FedresursBackend.DEMO:
             return True
+        if self.fedresurs_backend is FedresursBackend.NEWDB:
+            return self.newdb_methods_configured
         has_auth = bool(
             self.fedresurs_api_key or (self.fedresurs_username and self.fedresurs_password)
         )
@@ -217,6 +242,8 @@ class Settings(BaseSettings):
             return False
         if self.fns_provider is FNSBackend.DEMO:
             return True
+        if self.fns_provider is FNSBackend.NEWDB:
+            return self.newdb_methods_configured
         return bool(
             self.fns_base_url
             and self.fns_search_path

@@ -16,7 +16,14 @@ from app.domain.models import ProviderResult
 from app.services.aggregation import Aggregator
 from app.services.reporting import render_report
 from app.services.scoring import RecoveryScoreEngine
-from tests.conftest import make_bankruptcy, make_business, make_proceeding, provider_result
+from tests.conftest import (
+    make_bankruptcy,
+    make_business,
+    make_court_case,
+    make_pledge,
+    make_proceeding,
+    provider_result,
+)
 
 
 @pytest.fixture
@@ -53,12 +60,18 @@ def test_records_are_routed_to_the_right_sections(
             ProviderName.FEDRESURS, ProviderStatus.SUCCESS, [make_bankruptcy(confidence=0.0)]
         ),
         provider_result(ProviderName.FNS, ProviderStatus.SUCCESS, [make_business(confidence=0.0)]),
+        provider_result(ProviderName.PLEDGE, ProviderStatus.SUCCESS, [make_pledge(confidence=0.0)]),
+        provider_result(
+            ProviderName.COURT, ProviderStatus.SUCCESS, [make_court_case(confidence=0.0)]
+        ),
     ]
     report = aggregator.build(person_subject, results)
 
     assert len(report.enforcement_proceedings) == 1
     assert len(report.bankruptcies) == 1
     assert len(report.business_relations) == 1
+    assert len(report.pledges) == 1
+    assert len(report.court_cases) == 1
 
 
 def test_aggregator_annotates_match_confidence(
@@ -186,3 +199,45 @@ def test_long_report_splits_into_deliverable_chunks(
     chunks = split_message(text)
     assert all(len(chunk) <= TELEGRAM_MESSAGE_LIMIT for chunk in chunks)
     assert "".join(chunks).replace("\n", "") == text.replace("\n", "")
+
+
+def test_unconnected_pledges_are_not_rendered_as_unencumbered(
+    person_subject: SearchSubject,
+) -> None:
+    text = render_for(
+        person_subject,
+        [provider_result(ProviderName.PLEDGE, ProviderStatus.NOT_CONFIGURED)],
+    )
+    assert "ЗАЛОГИ" in text
+    assert "Не проверено: источник не подключён." in text
+    assert "Записей в реестре залогов не найдено" not in text
+
+
+def test_pledge_is_rendered_with_its_holder(person_subject: SearchSubject) -> None:
+    text = render_for(
+        person_subject,
+        [provider_result(ProviderName.PLEDGE, ProviderStatus.SUCCESS, [make_pledge()])],
+    )
+    assert "Автомобиль LADA VESTA, 2021" in text
+    assert "действует" in text
+    assert "Залогодержатель:" in text
+
+
+def test_court_block_says_what_it_does_not_cover(person_subject: SearchSubject) -> None:
+    """«Дел не найдено» без оговорки прочиталось бы как «в суд на него не подавали»."""
+    text = render_for(
+        person_subject,
+        [provider_result(ProviderName.COURT, ProviderStatus.NO_RESULTS)],
+    )
+    assert "Арбитражных дел не найдено." in text
+    assert "Суды общей юрисдикции этот источник не покрывает." in text
+
+
+def test_court_case_is_rendered_with_role_and_state(person_subject: SearchSubject) -> None:
+    text = render_for(
+        person_subject,
+        [provider_result(ProviderName.COURT, ProviderStatus.SUCCESS, [make_court_case()])],
+    )
+    assert "А40-227414/2026" in text
+    assert "ответчик" in text
+    assert "идёт" in text

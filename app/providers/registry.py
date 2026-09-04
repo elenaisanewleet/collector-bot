@@ -15,8 +15,9 @@ from app.db.session import Database
 from app.domain.enums import ProviderName
 from app.logging_setup import get_logger
 from app.providers.base import BaseProvider
-from app.providers.fedresurs import FedresursProvider
-from app.providers.fns import FNSProvider
+from app.providers.court import NewDBArbitrationProvider
+from app.providers.fedresurs import FedresursProvider, NewDBBankruptcyProvider
+from app.providers.fns import FNSProvider, NewDBBusinessProvider
 from app.providers.fssp import FSSPProvider
 from app.providers.future import build_future_providers
 from app.providers.internal.base import InternalDebtorProvider
@@ -24,6 +25,8 @@ from app.providers.internal.composite import CompositeInternalDebtorProvider
 from app.providers.internal.csv_provider import CSVInternalDebtorProvider
 from app.providers.internal.db_provider import DatabaseInternalDebtorProvider
 from app.providers.mock import build_demo_providers
+from app.providers.newdb import NewDBFieldMaps
+from app.providers.pledge import NewDBPledgeProvider
 from app.providers.vehicle import UnconfiguredVehicleProvider
 
 logger = get_logger(__name__)
@@ -100,28 +103,40 @@ def build_external_providers(settings: Settings) -> list[BaseProvider]:
     if settings.app_mode is AppMode.DEMO:
         providers.extend(build_demo_providers())
     else:
+        field_maps = NewDBFieldMaps.load(settings.newdb_field_map)
+        logger.info("newdb.methods_mapped", methods=sorted(field_maps.methods))
         providers.append(FSSPProvider(settings))
-        providers.append(_fedresurs_provider(settings))
-        providers.append(_fns_provider(settings))
+        providers.append(_fedresurs_provider(settings, field_maps))
+        providers.append(_fns_provider(settings, field_maps))
+        # Sources NewDB is the only carrier for. Constructed whether or not
+        # their methods are mapped: unmapped, they answer NOT_CONFIGURED, which
+        # is the same honest line the stub would print and one the operator can
+        # act on ("опишите метод в NEWDB_FIELD_MAP").
+        providers.append(NewDBPledgeProvider(settings, field_maps))
+        providers.append(NewDBArbitrationProvider(settings, field_maps))
 
     providers.append(UnconfiguredVehicleProvider())
-    providers.extend(build_future_providers())
+    providers.extend(build_future_providers(exclude={provider.name for provider in providers}))
     return providers
 
 
-def _fedresurs_provider(settings: Settings) -> BaseProvider:
+def _fedresurs_provider(settings: Settings, field_maps: NewDBFieldMaps) -> BaseProvider:
     if settings.fedresurs_backend is FedresursBackend.DEMO:
         from app.providers.mock import DemoFedresursProvider
 
         return DemoFedresursProvider()
+    if settings.fedresurs_backend is FedresursBackend.NEWDB:
+        return NewDBBankruptcyProvider(settings, field_maps)
     return FedresursProvider(settings)
 
 
-def _fns_provider(settings: Settings) -> BaseProvider:
+def _fns_provider(settings: Settings, field_maps: NewDBFieldMaps) -> BaseProvider:
     if settings.fns_provider is FNSBackend.DEMO:
         from app.providers.mock import DemoFNSProvider
 
         return DemoFNSProvider()
+    if settings.fns_provider is FNSBackend.NEWDB:
+        return NewDBBusinessProvider(settings, field_maps)
     return FNSProvider(settings)
 
 

@@ -23,6 +23,10 @@ CONFIRMED_PROPERTY_BONUS: Final = 15
 CONFIRMED_VEHICLE_BONUS: Final = 8
 NO_BANKRUPTCY_BONUS: Final = 10
 NO_ENFORCEMENT_BONUS: Final = 5
+# "Проверено, и чисто" по залогам и арбитражу стоит меньше, чем по банкротству:
+# оба источника закрывают более узкий вопрос.
+NO_PLEDGE_BONUS: Final = 3
+NO_COURT_CLAIMS_BONUS: Final = 3
 
 # Bonuses that reward "we looked and found nothing bad" are capped so a person
 # with several idle business roles cannot inflate the score indefinitely.
@@ -49,6 +53,17 @@ ENFORCEMENT_AMOUNT_PENALTIES: Final[tuple[tuple[Decimal, int], ...]] = (
 TERMINATED_BUSINESS_PENALTY: Final = -3
 MAX_TERMINATED_BUSINESS_PENALTY: Final = -9
 
+# Действующий залог: вещь есть, но залогодержатель удовлетворяется раньше нас.
+# Это не отсутствие имущества, а имущество, до которого мы не дотянемся, —
+# поэтому штраф, а не бонус.
+ACTIVE_PLEDGE_PENALTY: Final = -8
+MAX_PLEDGE_PENALTY: Final = -16
+
+# Живой иск к должнику — это кредитор, который уже впереди нас в очереди и
+# вот-вот превратит требование в исполнительное производство.
+CLAIM_AGAINST_DEBTOR_PENALTY: Final = -10
+MAX_CLAIM_PENALTY: Final = -20
+
 # ---------------------------------------------------------------- categories
 LOW_CATEGORY_MAX: Final = 34
 MEDIUM_CATEGORY_MAX: Final = 69
@@ -72,12 +87,21 @@ def clamp(score: int) -> int:
 # different question from the score itself. A perfect-looking score built on one
 # reachable source is not a trustworthy score.
 
-# Relative importance of each source when computing coverage.
+# Relative importance of each source when computing coverage. The table holds
+# exactly the sources that move the score: a source that cannot change the
+# number cannot make the number more or less trustworthy either.
+#
+# Залоги и арбитраж попали сюда вместе со своими факторами, и это сознательно
+# опускает уверенность там, где их не подключили: отчёт, посчитанный без них,
+# действительно видит меньше — и в «Ограничениях оценки» теперь прямо сказано,
+# чего именно он не видел.
 PROVIDER_CONFIDENCE_WEIGHTS: Final[dict[str, float]] = {
     "internal": 0.15,
-    "fssp": 0.35,
-    "fedresurs": 0.30,
-    "fns": 0.20,
+    "fssp": 0.30,
+    "fedresurs": 0.25,
+    "fns": 0.15,
+    "pledge": 0.10,
+    "court": 0.05,
 }
 
 # Applied when the subject was identified by name alone.

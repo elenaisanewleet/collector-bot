@@ -7,6 +7,11 @@ configuration change.
 
 A business relation is a *hint* about ability to pay, never a conclusion. An
 active sole proprietorship means the person is registered, not that they earn.
+
+``FNS_PROVIDER=newdb`` serves ЕГРИП through the NewDB ``egrul_ip`` method on the
+key already configured for ФССП. That method answers about sole proprietors
+only: a person with no ИП registered has no ЕГРЮЛ roles reported here, and the
+report must not read that as "no business ties at all".
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from app.domain.models import BusinessRelation, ProviderResult
 from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import as_text
+from app.providers.newdb import NewDBMethodProvider, inn_params, person_params_for
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
 from app.utils.dates import parse_date, utcnow
 
@@ -45,6 +51,8 @@ _ROLE_TOKENS: dict[str, BusinessRole] = {
     "учредитель": BusinessRole.FOUNDER,
 }
 MAX_RECORDS = 50
+
+NEWDB_METHOD = "egrul_ip"
 
 
 class FNSProvider(BaseProvider):
@@ -140,3 +148,26 @@ def _parse_status(record: Mapping[str, Any]) -> BusinessStatus:
     if any(marker in token for marker in _ACTIVE_TOKENS):
         return BusinessStatus.ACTIVE
     return BusinessStatus.UNKNOWN
+
+
+class NewDBBusinessProvider(NewDBMethodProvider):
+    """Статус ИП через метод NewDB ``egrul_ip``."""
+
+    name = ProviderName.FNS
+    title = "ФНС"
+    methods = (NEWDB_METHOD,)
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        if not subject.inn and (subject.name is None or subject.birth_date is None):
+            return self.insufficient_query("Для проверки ИП нужен ИНН либо ФИО с датой рождения")
+
+        # ИНН адресует ЕГРИП точно; ФИО с датой рождения — запасной путь.
+        params = inn_params(subject.inn) if subject.inn else person_params_for(subject)
+        records, raw = await self.rows_for(NEWDB_METHOD, params)
+        parsed = [_to_relation(record) for record in records[:MAX_RECORDS]]
+        return ProviderResult(
+            provider=self.name,
+            status=ProviderStatus.SUCCESS if parsed else ProviderStatus.NO_RESULTS,
+            records=list(parsed),
+            raw_response=self.raw_for(raw),
+        )

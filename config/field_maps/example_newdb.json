@@ -1,0 +1,118 @@
+{
+  "_comment": [
+    "Row maps for NewDB methods beyond fssp_person, keyed by method name.",
+    "",
+    "WHY THIS FILE EXISTS. The NewDB envelope — POST /v2, params.method,",
+    "requestId, the queued/complete/failed lifecycle — is implemented in code",
+    "because it was read from the published contract. The *rows* each method",
+    "returns were not: only fssp_person has been checked against a real",
+    "response. Inventing key names for the rest and shipping them would produce",
+    "an integration that looks connected and reports 'ничего не найдено' about",
+    "people it never actually parsed.",
+    "",
+    "So: every path below is a PLACEHOLDER. Replace it with the real one from",
+    "your NewDB contract before enabling the method. A method with no entry in",
+    "this file is not queried at all and is reported as 'не подключено'.",
+    "",
+    "`fields` maps a domain key to a dotted path inside one row of",
+    "results.<method>.result.data. `value_maps` normalizes vendor vocabulary.",
+    "`extra_params` is merged into the request and wins over what the adapter",
+    "would send — use it when your contract names a parameter differently.",
+    "",
+    "Each enabled method is a paid call per debtor. On a run of eight hundred",
+    "that is eight hundred calls per method, so enable what you will read."
+  ],
+
+  "bankrot_person": {
+    "fields": {
+      "debtor_name": "Debtor",
+      "debtor_type": "DebtorType",
+      "inn": "INN",
+      "case_number": "CaseNumber",
+      "procedure": "Procedure",
+      "status": "ProcedureStatus",
+      "started_at": "ProcedureStartDate",
+      "completed_at": "ProcedureEndDate",
+      "message_date": "MessageDate",
+      "source_url": "Url"
+    },
+    "value_maps": {
+      "debtor_type": {
+        "физическое лицо": "individual",
+        "индивидуальный предприниматель": "ип",
+        "юридическое лицо": "organization"
+      }
+    }
+  },
+
+  "egrul_ip": {
+    "fields": {
+      "inn": "INN",
+      "ogrn": "OGRNIP",
+      "name": "Name",
+      "role": "Role",
+      "status": "Status",
+      "registration_date": "RegistrationDate",
+      "termination_date": "TerminationDate",
+      "source_url": "Url"
+    },
+    "value_maps": {
+      "role": {
+        "индивидуальный предприниматель": "ип"
+      }
+    }
+  },
+
+  "arbitr_person": {
+    "fields": {
+      "case_number": "CaseNumber",
+      "court_name": "Court",
+      "case_type": "CaseType",
+      "status": "CaseStatus",
+      "amount": "ClaimAmount",
+      "filed_at": "FilingDate",
+      "closed_at": "DecisionDate",
+      "participant_name": "Participant",
+      "inn": "INN",
+      "role": "ParticipantRole",
+      "source_url": "Url"
+    },
+    "value_maps": {
+      "role": {
+        "ответчик": "ответчик",
+        "истец": "истец"
+      }
+    }
+  },
+
+  "pledge_person": {
+    "fields": {
+      "registration_number": "NotificationNumber",
+      "registered_at": "RegistrationDate",
+      "terminated_at": "ExclusionDate",
+      "pledgor_name": "Pledgor",
+      "pledgor_birth_date": "PledgorBirthDate",
+      "pledgor_inn": "PledgorINN",
+      "pledgee_name": "Pledgee",
+      "subject": "PledgeSubject",
+      "vin": "VIN",
+      "status": "NotificationStatus",
+      "source_url": "Url"
+    }
+  },
+
+  "pledge_vin": {
+    "fields": {
+      "registration_number": "NotificationNumber",
+      "registered_at": "RegistrationDate",
+      "terminated_at": "ExclusionDate",
+      "pledgor_name": "Pledgor",
+      "pledgor_birth_date": "PledgorBirthDate",
+      "pledgee_name": "Pledgee",
+      "subject": "PledgeSubject",
+      "vin": "VIN",
+      "status": "NotificationStatus",
+      "source_url": "Url"
+    }
+  }
+}

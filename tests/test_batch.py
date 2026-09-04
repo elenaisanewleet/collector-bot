@@ -31,9 +31,9 @@ async def test_estimate_counts_the_base(loaded: Container) -> None:
     assert estimate.debtors == 6
     assert estimate.to_query == 6
     assert estimate.cached == 0
-    # Демо-режим подключает ФССП, ЕФРСБ и ФНС.
-    assert estimate.providers_per_debtor == 3
-    assert estimate.requests == 18
+    # Демо-режим подключает ФССП, ЕФРСБ, ФНС, залоги и арбитраж.
+    assert estimate.providers_per_debtor == 5
+    assert estimate.requests == 30
 
 
 async def test_estimate_reuses_the_cache(loaded: Container) -> None:

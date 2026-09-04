@@ -39,6 +39,11 @@ ALREADY_RUNNING = (
     "С этим токеном уже запущен другой экземпляр бота. "
     "Остановите его или используйте отдельный токен."
 )
+BAD_NEWDB_FIELD_MAP = (
+    "NEWDB_FIELD_MAP указывает на файл, который не читается. "
+    "Пока он не исправлен, методы NewDB кроме fssp_person остались бы "
+    "неподключёнными молча — поэтому запуск остановлен."
+)
 
 
 async def start_bot(settings: Settings | None = None) -> None:
@@ -88,6 +93,25 @@ def _validate(settings: Settings) -> None:
         raise SystemExit(MISSING_TOKEN)
     if not settings.allowed_user_ids:
         raise SystemExit(EMPTY_ALLOWLIST)
+    _validate_newdb_field_map(settings)
+
+
+def _validate_newdb_field_map(settings: Settings) -> None:
+    """Read the NewDB row maps before serving anyone.
+
+    A broken map is a configuration mistake with a quiet failure mode: every
+    method it describes would report "источник не подключён" and the operator
+    would read that as the truth about the sources rather than about the file.
+    """
+    from app.providers.mapping import FieldMapError
+    from app.providers.newdb import NewDBFieldMaps
+
+    if settings.newdb_field_map is None:
+        return
+    try:
+        NewDBFieldMaps.load(settings.newdb_field_map)
+    except FieldMapError as exc:
+        raise SystemExit(f"{BAD_NEWDB_FIELD_MAP}\n{exc.message}") from exc
 
 
 async def run_demo(settings: Settings | None = None) -> int:

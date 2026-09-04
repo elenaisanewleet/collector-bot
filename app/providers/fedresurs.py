@@ -5,11 +5,14 @@ absence of a bankruptcy*. When nothing is wired up the provider answers
 ``NOT_CONFIGURED`` and the report says "не проверено", never "банкротство не
 обнаружено". Only a backend that actually answered can produce ``NO_RESULTS``.
 
-Three backends are selectable through ``FEDRESURS_BACKEND``:
+Four backends are selectable through ``FEDRESURS_BACKEND``:
 
 ``none``          the default — the source is not connected
 ``demo``          deterministic fixtures, for running without credentials
 ``generic_json``  a licensed vendor's REST API, described by a field map
+``newdb``         the NewDB ``bankrot_person`` method, on the key already
+                  configured for ФССП, with its rows described in
+                  ``NEWDB_FIELD_MAP``
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from app.domain.models import BankruptcyRecord, ProviderResult
 from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import as_text
+from app.providers.newdb import NewDBMethodProvider, person_params_for
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
 from app.utils.dates import parse_date, utcnow
 
@@ -41,6 +45,8 @@ _COMPLETED_TOKENS = frozenset(
 _INDIVIDUAL_TOKENS = frozenset({"individual", "фл", "физическое лицо", "гражданин"})
 _SOLE_PROPRIETOR_TOKENS = frozenset({"ip", "ип", "sole_proprietor"})
 MAX_RECORDS = 50
+
+NEWDB_METHOD = "bankrot_person"
 
 
 class FedresursProvider(BaseProvider):
@@ -141,3 +147,35 @@ def _parse_status(record: Mapping[str, Any]) -> BankruptcyStatus:
         # A procedure that started and has no completion date is running.
         return BankruptcyStatus.ACTIVE
     return BankruptcyStatus.UNKNOWN
+
+
+class NewDBBankruptcyProvider(NewDBMethodProvider):
+    """Банкротство через метод NewDB ``bankrot_person``.
+
+    Same source, same domain record, different carrier: the key is the one
+    already paying for ФССП, so connecting bankruptcy costs a field-map entry
+    rather than a second vendor contract.
+    """
+
+    name = ProviderName.FEDRESURS
+    title = "ЕФРСБ"
+    methods = (NEWDB_METHOD,)
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        if subject.name is None:
+            return self.insufficient_query("Для проверки банкротства нужно ФИО")
+        if subject.birth_date is None:
+            # Same rule as ФССП: the person methods take a date of birth, and a
+            # rejected request must not be reported as a clean register.
+            return self.insufficient_query(
+                "Для проверки банкротства нужна дата рождения — источник требует её обязательно"
+            )
+
+        records, raw = await self.rows_for(NEWDB_METHOD, person_params_for(subject))
+        parsed = [_to_bankruptcy(record) for record in records[:MAX_RECORDS]]
+        return ProviderResult(
+            provider=self.name,
+            status=ProviderStatus.SUCCESS if parsed else ProviderStatus.NO_RESULTS,
+            records=list(parsed),
+            raw_response=self.raw_for(raw),
+        )

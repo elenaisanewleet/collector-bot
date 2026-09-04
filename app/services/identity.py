@@ -16,8 +16,10 @@ from app.domain.identity import PersonName, SearchSubject, normalize_phone
 from app.domain.models import (
     BankruptcyRecord,
     BusinessRelation,
+    CourtCase,
     EnforcementProceeding,
     InternalDebtorRecord,
+    PledgeRecord,
     SourcedFact,
 )
 from app.utils.hashing import normalize_token
@@ -176,6 +178,10 @@ def _record_name(record: SourcedFact) -> str | None:
         return record.full_name
     if isinstance(record, (EnforcementProceeding, BankruptcyRecord)):
         return record.debtor_name
+    if isinstance(record, PledgeRecord):
+        return record.pledgor_name
+    if isinstance(record, CourtCase):
+        return record.participant_name
     if isinstance(record, BusinessRelation):
         return _strip_business_prefix(record.name)
     return None
@@ -201,12 +207,16 @@ def _record_birth_date(record: SourcedFact) -> date | None:
         return record.birth_date
     if isinstance(record, EnforcementProceeding):
         return record.debtor_birth_date
+    if isinstance(record, PledgeRecord):
+        return record.pledgor_birth_date
     return None
 
 
 def _record_inn(record: SourcedFact) -> str | None:
-    if isinstance(record, (BankruptcyRecord, BusinessRelation)):
+    if isinstance(record, (BankruptcyRecord, BusinessRelation, CourtCase)):
         return record.inn
+    if isinstance(record, PledgeRecord):
+        return record.pledgor_inn
     return None
 
 

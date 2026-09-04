@@ -166,6 +166,34 @@ class ProceedingStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
+class PledgeStatus(StrEnum):
+    """Состояние записи в реестре уведомлений о залоге движимого имущества.
+
+    ``TERMINATED`` — залогодержатель подал уведомление об исключении: вещь
+    свободна. ``ACTIVE`` — запись действует, и на эту вещь есть кредитор,
+    который стоит впереди нас.
+    """
+
+    ACTIVE = "active"
+    TERMINATED = "terminated"
+    UNKNOWN = "unknown"
+
+
+class CourtCaseRole(StrEnum):
+    """Кем должник проходит по делу."""
+
+    DEFENDANT = "defendant"
+    PLAINTIFF = "plaintiff"
+    OTHER = "other"
+
+
+COURT_CASE_ROLE_TITLES: dict[CourtCaseRole, str] = {
+    CourtCaseRole.DEFENDANT: "ответчик",
+    CourtCaseRole.PLAINTIFF: "истец",
+    CourtCaseRole.OTHER: "иная роль",
+}
+
+
 class ImportRowOutcome(StrEnum):
     CREATED = "created"
     UPDATED = "updated"

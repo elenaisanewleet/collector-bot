@@ -10,7 +10,7 @@ import pytest
 
 from app.config import Settings
 from app.container import build_container
-from app.main import EMPTY_ALLOWLIST, MISSING_TOKEN, _validate
+from app.main import BAD_NEWDB_FIELD_MAP, EMPTY_ALLOWLIST, MISSING_TOKEN, _validate
 
 
 def test_missing_token_stops_startup(settings: Settings) -> None:
@@ -28,6 +28,27 @@ def test_empty_allowlist_stops_startup(settings: Settings) -> None:
 
 def test_valid_configuration_passes(settings: Settings) -> None:
     _validate(settings)  # does not raise
+
+
+def test_broken_newdb_field_map_stops_startup(settings: Settings, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Иначе описанные им методы молча остались бы «не подключено».
+
+    Оператор прочитал бы это как правду об источниках, а не о своём файле.
+    """
+    path = tmp_path / "newdb.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc_info:
+        _validate(settings.model_copy(update={"newdb_field_map": path}))
+
+    assert BAD_NEWDB_FIELD_MAP in str(exc_info.value)
+
+
+def test_valid_newdb_field_map_passes(settings: Settings) -> None:
+    from pathlib import Path as _Path
+
+    example = _Path("config/field_maps/example_newdb.json")
+    _validate(settings.model_copy(update={"newdb_field_map": example}))
 
 
 async def test_container_wires_every_service(settings: Settings) -> None:

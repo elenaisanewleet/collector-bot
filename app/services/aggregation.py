@@ -18,6 +18,7 @@ from app.domain.models import (
     DebtorReport,
     EnforcementProceeding,
     InternalDebtorRecord,
+    PledgeRecord,
     PropertyRecord,
     ProviderResult,
     SourcedFact,
@@ -63,6 +64,8 @@ def _dispatch(report: DebtorReport, record: SourcedFact) -> None:
         report.business_relations.append(record)
     elif isinstance(record, CourtCase):
         report.court_cases.append(record)
+    elif isinstance(record, PledgeRecord):
+        report.pledges.append(record)
     elif isinstance(record, VehicleRecord):
         report.vehicles.append(record)
     elif isinstance(record, PropertyRecord):
@@ -82,4 +85,12 @@ def _sort_report(report: DebtorReport) -> None:
     )
     report.bankruptcies.sort(key=lambda item: (-item.match_confidence, not item.is_active))
     report.business_relations.sort(key=lambda item: (-item.match_confidence, not item.is_active))
+    report.pledges.sort(key=lambda item: (-item.match_confidence, not item.is_active))
+    report.court_cases.sort(
+        key=lambda item: (
+            -item.match_confidence,
+            not item.is_active,
+            -(item.amount or 0),
+        )
+    )
     report.internal_records.sort(key=lambda item: -item.match_confidence)

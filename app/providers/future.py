@@ -11,30 +11,41 @@ stable interface to it exists.
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 from app.domain.enums import ProviderName
 from app.providers.base import StubProvider
 
+_STUBS: tuple[tuple[ProviderName, str, str], ...] = (
+    (
+        ProviderName.COURT,
+        "Суды",
+        "Интеграция с судебными источниками не подключена",
+    ),
+    (
+        ProviderName.PROPERTY,
+        "Недвижимость",
+        "Проверка недвижимости требует законного доступа к ЕГРН",
+    ),
+    (
+        ProviderName.PLEDGE,
+        "Залоги",
+        "Реестр залогов движимого имущества не подключён",
+    ),
+    (
+        ProviderName.INHERITANCE,
+        "Наследственные дела",
+        "Реестр наследственных дел не подключён",
+    ),
+)
 
-def build_future_providers() -> list[StubProvider]:
-    return [
-        StubProvider(
-            ProviderName.COURT,
-            "Суды",
-            "Интеграция с судебными источниками не подключена",
-        ),
-        StubProvider(
-            ProviderName.PROPERTY,
-            "Недвижимость",
-            "Проверка недвижимости требует законного доступа к ЕГРН",
-        ),
-        StubProvider(
-            ProviderName.PLEDGE,
-            "Залоги",
-            "Реестр залогов движимого имущества не подключён",
-        ),
-        StubProvider(
-            ProviderName.INHERITANCE,
-            "Наследственные дела",
-            "Реестр наследственных дел не подключён",
-        ),
-    ]
+
+def build_future_providers(*, exclude: Collection[ProviderName] = ()) -> list[StubProvider]:
+    """Stubs for every source no real adapter was registered for.
+
+    ``exclude`` names the sources that now have one. Courts and pledges left
+    this list the moment their NewDB methods became mappable, and the stub must
+    step aside rather than shadow the real provider: a report is addressed by
+    provider name, so two entries under one name would silently drop one.
+    """
+    return [StubProvider(name, title, note) for name, title, note in _STUBS if name not in exclude]

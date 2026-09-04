@@ -69,5 +69,5 @@ def test_registry_reports_which_providers_are_live(settings: Settings) -> None:
     registry = build_registry(settings, Database("sqlite+aiosqlite:///:memory:"))
     names = {name.value for name in registry.configured_names}
 
-    # Demo mode wires the three demo sources; everything else stays unconnected.
-    assert names == {"fssp", "fedresurs", "fns"}
+    # Demo mode wires every demo source; everything else stays unconnected.
+    assert names == {"fssp", "fedresurs", "fns", "pledge", "court"}

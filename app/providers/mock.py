@@ -24,7 +24,9 @@ from app.domain.enums import (
     BankruptcyStatus,
     BusinessRole,
     BusinessStatus,
+    CourtCaseRole,
     EntityType,
+    PledgeStatus,
     ProceedingStatus,
     ProviderName,
     ProviderStatus,
@@ -33,7 +35,9 @@ from app.domain.identity import SearchSubject
 from app.domain.models import (
     BankruptcyRecord,
     BusinessRelation,
+    CourtCase,
     EnforcementProceeding,
+    PledgeRecord,
     ProviderResult,
 )
 from app.providers.base import BaseProvider
@@ -51,6 +55,10 @@ class DemoProfile:
     proceedings: tuple[tuple[str, str, Decimal, ProceedingStatus], ...] = ()
     bankruptcy: tuple[str, str, BankruptcyStatus, date | None] | None = None
     businesses: tuple[tuple[str, str, BusinessRole, BusinessStatus], ...] = ()
+    # (предмет залога, залогодержатель, VIN, состояние)
+    pledges: tuple[tuple[str, str, str | None, PledgeStatus], ...] = ()
+    # (номер дела, суд, сумма, роль должника, дело закрыто)
+    court_cases: tuple[tuple[str, str, Decimal, CourtCaseRole, bool], ...] = ()
     inn: str | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
 
@@ -100,6 +108,16 @@ DEMO_PROFILES: dict[str, DemoProfile] = {
                 'ООО "Демонстрационные решения"',
                 BusinessRole.DIRECTOR,
                 BusinessStatus.ACTIVE,
+            ),
+        ),
+        # Машина есть — но она в залоге, то есть считать её нашим обеспечением
+        # нельзя. Ради этого различия источник и подключён.
+        pledges=(
+            (
+                "Автомобиль LADA VESTA, 2021",
+                'АО "Демонстрационный банк"',
+                "XTA1234567890ABCD",
+                PledgeStatus.ACTIVE,
             ),
         ),
     ),
@@ -158,6 +176,23 @@ DEMO_PROFILES: dict[str, DemoProfile] = {
                 "ИП Демов Максим Игоревич",
                 BusinessRole.SOLE_PROPRIETOR,
                 BusinessStatus.TERMINATED,
+            ),
+        ),
+        pledges=(
+            (
+                "Автомобиль KIA RIO, 2019",
+                'ООО МКК "Демонстрационные займы"',
+                "Z94CB41AAKR123456",
+                PledgeStatus.ACTIVE,
+            ),
+        ),
+        court_cases=(
+            (
+                "А40-227414/2026",
+                "Арбитражный суд города Москвы",
+                Decimal("1180400"),
+                CourtCaseRole.DEFENDANT,
+                False,
             ),
         ),
     ),
@@ -325,5 +360,91 @@ class DemoFNSProvider(BaseProvider):
         )
 
 
+class DemoPledgeProvider(BaseProvider):
+    """Реестр залогов, демо-издание."""
+
+    name = ProviderName.PLEDGE
+    title = "Залоги (демо)"
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        if subject.name is None:
+            return self.insufficient_query("Нужно ФИО")
+
+        profile = _profile_for(subject)
+        if profile is None:
+            return ProviderResult(provider=self.name, status=ProviderStatus.NO_RESULTS)
+
+        records = [
+            PledgeRecord(
+                registration_number=f"2026-00{index}-123456-{index}",
+                registered_at=date(2022, 4, 11),
+                terminated_at=None if status is PledgeStatus.ACTIVE else date(2025, 6, 1),
+                pledgor_name=profile.full_name,
+                pledgor_birth_date=profile.birth_date,
+                pledgor_inn=profile.inn,
+                pledgee_name=pledgee,
+                subject=subject_text,
+                vin=vin,
+                status=status,
+            )
+            for index, (subject_text, pledgee, vin, status) in enumerate(profile.pledges, start=1)
+        ]
+        return ProviderResult(
+            provider=self.name,
+            status=ProviderStatus.SUCCESS if records else ProviderStatus.NO_RESULTS,
+            records=list(records),
+        )
+
+
+class DemoCourtProvider(BaseProvider):
+    """Арбитражные дела, демо-издание."""
+
+    name = ProviderName.COURT
+    title = "Суды (демо)"
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        if subject.name is None:
+            return self.insufficient_query("Нужно ФИО")
+
+        profile = _profile_for(subject)
+        if profile is None:
+            return ProviderResult(provider=self.name, status=ProviderStatus.NO_RESULTS)
+
+        records = [
+            CourtCase(
+                case_number=case_number,
+                court_name=court,
+                case_type="Взыскание задолженности",
+                status="Рассмотрение по существу" if not closed else "Дело рассмотрено",
+                amount=amount,
+                filed_at=date(2026, 5, 20),
+                participant_name=profile.full_name,
+                inn=profile.inn,
+                role=role,
+                is_closed=closed,
+            )
+            for case_number, court, amount, role, closed in profile.court_cases
+        ]
+        return ProviderResult(
+            provider=self.name,
+            status=ProviderStatus.SUCCESS if records else ProviderStatus.NO_RESULTS,
+            records=list(records),
+        )
+
+
 def build_demo_providers() -> list[BaseProvider]:
-    return [DemoFSSPProvider(), DemoFedresursProvider(), DemoFNSProvider()]
+    return [
+        DemoFSSPProvider(),
+        DemoFedresursProvider(),
+        DemoFNSProvider(),
+        DemoPledgeProvider(),
+        DemoCourtProvider(),
+    ]

@@ -31,18 +31,24 @@ from app.domain.models import (
 from app.domain.scoring import (
     ACTIVE_BANKRUPTCY_PENALTY,
     ACTIVE_LEGAL_ENTITY_ROLE_BONUS,
+    ACTIVE_PLEDGE_PENALTY,
     ACTIVE_SOLE_PROPRIETOR_BONUS,
     BASE_SCORE,
+    CLAIM_AGAINST_DEBTOR_PENALTY,
     COMPLETED_BANKRUPTCY_PENALTY,
     CONFIRMED_PROPERTY_BONUS,
     CONFIRMED_VEHICLE_BONUS,
     ENFORCEMENT_AMOUNT_PENALTIES,
     ENFORCEMENT_COUNT_PENALTIES,
     MAX_BUSINESS_BONUS,
+    MAX_CLAIM_PENALTY,
+    MAX_PLEDGE_PENALTY,
     MAX_TERMINATED_BUSINESS_PENALTY,
     MIN_CONFIDENCE,
     NO_BANKRUPTCY_BONUS,
+    NO_COURT_CLAIMS_BONUS,
     NO_ENFORCEMENT_BONUS,
+    NO_PLEDGE_BONUS,
     PROBABLE_MATCH_CONFIDENCE_FACTOR,
     PROVIDER_CONFIDENCE_WEIGHTS,
     TERMINATED_BUSINESS_PENALTY,
@@ -61,6 +67,8 @@ class RecoveryScoreEngine:
         factors.extend(_bankruptcy_factors(report))
         factors.extend(_enforcement_factors(report))
         factors.extend(_business_factors(report))
+        factors.extend(_pledge_factors(report))
+        factors.extend(_court_factors(report))
         factors.extend(_asset_factors(report))
 
         total = BASE_SCORE + sum(factor.delta for factor in factors)
@@ -240,6 +248,75 @@ def _business_reason(relation: BusinessRelation) -> str:
     return f"активная роль в ЮЛ: {label}"
 
 
+# ---------------------------------------------------------------- pledges
+
+
+def _pledge_factors(report: DebtorReport) -> list[ScoreFactor]:
+    """A pledged asset is somebody else's security, not our collateral."""
+    result = report.result_for(ProviderName.PLEDGE)
+    if result is None or not result.is_answered:
+        return []
+
+    active = report.active_pledges
+    if not active:
+        return [
+            ScoreFactor(
+                name="no_pledges",
+                delta=NO_PLEDGE_BONUS,
+                reason="действующих залогов не найдено — имущество не обременено",
+                source=ProviderName.PLEDGE,
+            )
+        ]
+
+    count = len(active)
+    delta = max(ACTIVE_PLEDGE_PENALTY * count, MAX_PLEDGE_PENALTY)
+    adjective = pluralize_ru(count, "действующий", "действующих", "действующих")
+    noun = pluralize_ru(count, "залог", "залога", "залогов")
+    return [
+        ScoreFactor(
+            name="active_pledge",
+            delta=delta,
+            reason=f"{count} {adjective} {noun}: залогодержатель удовлетворяется раньше нас",
+            source=ProviderName.PLEDGE,
+        )
+    ]
+
+
+# ---------------------------------------------------------------- courts
+
+
+def _court_factors(report: DebtorReport) -> list[ScoreFactor]:
+    """Live claims against the debtor are creditors already ahead of us."""
+    result = report.result_for(ProviderName.COURT)
+    if result is None or not result.is_answered:
+        return []
+
+    claims = report.claims_against_debtor
+    if not claims:
+        return [
+            ScoreFactor(
+                name="no_court_claims",
+                delta=NO_COURT_CLAIMS_BONUS,
+                reason="действующих арбитражных исков к должнику не найдено",
+                source=ProviderName.COURT,
+            )
+        ]
+
+    count = len(claims)
+    delta = max(CLAIM_AGAINST_DEBTOR_PENALTY * count, MAX_CLAIM_PENALTY)
+    adjective = pluralize_ru(count, "действующий", "действующих", "действующих")
+    kind = pluralize_ru(count, "арбитражный", "арбитражных", "арбитражных")
+    noun = pluralize_ru(count, "иск", "иска", "исков")
+    return [
+        ScoreFactor(
+            name="claims_against_debtor",
+            delta=delta,
+            reason=f"{count} {adjective} {kind} {noun} к должнику",
+            source=ProviderName.COURT,
+        )
+    ]
+
+
 # ---------------------------------------------------------------- assets
 
 
@@ -330,6 +407,8 @@ def _has_only_probable_matches(report: DebtorReport) -> bool:
         *report.enforcement_proceedings,
         *report.bankruptcies,
         *report.business_relations,
+        *report.pledges,
+        *report.court_cases,
     ]
     usable = [item for item in matched if getattr(item, "is_usable", False)]
     if not usable:
