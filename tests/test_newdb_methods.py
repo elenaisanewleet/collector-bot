@@ -103,6 +103,58 @@ FIELD_MAP: dict[str, Any] = {
 }
 
 
+# Пути из архивной документации, теми же именами, что в поставляемой карте.
+# Здесь они нужны ради формы ответа: у половины методов строки лежат не в
+# data[], а во вложенном массиве внутри строки data[].
+DOCUMENTED_MAP: dict[str, Any] = {
+    "bankrot_person": {
+        "records_path": "bankruptcy",
+        "fields": {
+            "case_number": "case_number",
+            "status": "status",
+            "source_url": "case_url",
+        },
+    },
+    "arbitr_person": {
+        "fields": {
+            "case_number": "case_number",
+            "status": "status",
+            "participants_defendants": "participants.defendants",
+            "participants_plaintiffs": "participants.plaintiffs",
+        }
+    },
+    "pledge_person": {
+        "records_path": "fnp",
+        "fields": {
+            "registration_number": "reference_number",
+            "registered_at": "json_extra.registrationTime",
+            "pledgor_name": "pledgor",
+            "status": "message_type",
+        },
+        "value_maps": {"status": {"возникновение залога": "действует"}},
+    },
+}
+
+
+def deployment(
+    live_settings: Settings, tmp_path: Path, field_map: Mapping[str, Any]
+) -> tuple[Settings, NewDBFieldMaps]:
+    """A deployment whose contract is described by ``field_map``."""
+    path = tmp_path / "documented.json"
+    path.write_text(json.dumps(field_map, ensure_ascii=False), encoding="utf-8")
+    settings = live_settings.model_copy(
+        update={
+            "newdb_api_key": "test-key",
+            "newdb_base_url": BASE_URL,
+            "newdb_method_path": "/v2",
+            "newdb_field_map": path,
+            "provider_max_retries": 0,
+            "provider_retry_backoff_seconds": 0.0,
+        }
+    )
+    return settings, NewDBFieldMaps.load(path)
+
+
 def envelope(
     method: str,
     *,
@@ -204,6 +256,95 @@ def test_field_map_rejects_unreadable_json(tmp_path: Path) -> None:
 
     with pytest.raises(FieldMapError):
         NewDBFieldMaps.load(path)
+
+
+# ------------------------------------------------------- вложенные строки
+
+
+@respx.mock
+async def test_records_path_unwraps_the_array_inside_a_row(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    """Строка data[] у половины методов — контейнер, а не запись.
+
+    ``bankrot_person`` отвечает одним объектом-персоной, дела которого лежат в
+    её массиве ``bankruptcy``. Без разворачивания два дела превратились бы в
+    одну запись без единого заполненного поля.
+    """
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    person = {
+        "bankruptcy": [
+            {"case_number": "А73-7992/2017", "status": "Производство по делу завершено"},
+            {"case_number": "А73-1/2019", "status": "Введена процедура"},
+        ],
+        "commmon": {"name_or_fio": "Иванов Иван Иванович", "inn": "770912345601"},
+    }
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("bankrot_person", data=[person]))
+    )
+
+    result = await NewDBBankruptcyProvider(settings, maps).fetch(inn_subject)
+
+    assert result.status is ProviderStatus.SUCCESS
+    assert [record.case_number for record in result.records] == ["А73-7992/2017", "А73-1/2019"]
+
+
+@respx.mock
+async def test_an_empty_nested_array_is_an_answer_not_a_schema_error(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    """``"bankruptcy": []`` — источник ответил: дел нет."""
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=envelope("bankrot_person", data=[{"bankruptcy": [], "commmon": {}}]),
+        )
+    )
+
+    result = await NewDBBankruptcyProvider(settings, maps).fetch(inn_subject)
+
+    assert result.status is ProviderStatus.NO_RESULTS
+    assert result.status.is_answered
+
+
+@respx.mock
+async def test_rows_the_map_cannot_read_are_never_an_empty_register(
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
+) -> None:
+    """Ответ есть, карта в нём ничего не нашла — это про карту, а не про долги.
+
+    Ровно тот случай, ради которого схемы вынесены в файл: пути в нём взяты из
+    документации, а не из живого ответа, и первый же расход контракта не должен
+    выглядеть как чистый реестр.
+    """
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            200, json=envelope("bankrot_person", data=[{"совершенно": "другое"}])
+        )
+    )
+
+    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(inn_subject)
+
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "unexpected_schema"
+    assert not result.status.is_answered
+
+
+@respx.mock
+async def test_a_row_whose_nested_array_is_missing_is_not_an_empty_register(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            200, json=envelope("bankrot_person", data=[{"cases": [{"case_number": "А73-1/2019"}]}])
+        )
+    )
+
+    result = await NewDBBankruptcyProvider(settings, maps).fetch(inn_subject)
+
+    assert result.error_code == "unexpected_schema"
 
 
 # ---------------------------------------------------------------- not configured
@@ -331,6 +472,58 @@ async def test_bankruptcy_missing_result_section_is_a_schema_error(
 
     assert result.status is ProviderStatus.UNAVAILABLE
     assert result.error_code == "unexpected_schema"
+
+
+@respx.mock
+async def test_bankruptcy_record_carries_the_inn_it_was_searched_by(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    """Строка-дело не содержит должника — иначе дело досталось бы «никому».
+
+    ФИО и ИНН лежат в соседнем блоке ответа, куда плоская карта не дотягивается.
+    Запись без единого идентификатора матчер оценил бы как слабое совпадение, и
+    настоящее банкротство исчезло бы из отчёта как чужое.
+    """
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    row = {
+        "bankruptcy": [
+            {
+                "case_number": "А73-7992/2017",
+                "status": "Производство по делу завершено",
+                "case_url": "/legalcases/7975d0c7",
+            }
+        ]
+    }
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("bankrot_person", data=[row]))
+    )
+
+    result = await NewDBBankruptcyProvider(settings, maps).fetch(inn_subject)
+
+    record = result.records[0]
+    assert isinstance(record, BankruptcyRecord)
+    assert record.inn == "770912345601"
+    # Относительный путь Федресурса — не ссылка; в отчёт он идёт с хостом.
+    assert record.source_url == "https://bankrot.fedresurs.ru/legalcases/7975d0c7"
+
+
+@respx.mock
+async def test_a_legal_entity_inn_is_never_sent_as_innfiz(
+    newdb_settings: Settings, maps: NewDBFieldMaps, person_subject: SearchSubject
+) -> None:
+    """Десятизначный ИНН — это ИНН юрлица, и ``innfiz`` его отвергает.
+
+    Отправить его значило бы купить отказ вместо честного «искать нечем».
+    """
+    route = respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("bankrot_person", data=[]))
+    )
+    subject = person_subject.model_copy(update={"inn": "7709123456"})
+
+    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(subject)
+
+    assert result.error_code == "insufficient_query"
+    assert not route.calls
 
 
 @respx.mock
@@ -465,6 +658,39 @@ async def test_arbitration_skips_a_row_without_a_case_number(
 
 
 @respx.mock
+async def test_arbitration_role_comes_from_the_participant_lists(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    """У КАД нет поля роли — есть списки истцов и ответчиков.
+
+    Роль решает, попадёт ли дело в «иски к должнику», то есть в конкурентов за
+    его имущество. Пока она не определялась, пустой список исков к должнику был
+    неотличим от «исков к нему нет» — и приносил в скоринг плюс.
+    """
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    row = {
+        "case_number": "А57-10442/2025",
+        "status": "Рассматривается в первой инстанции",
+        "participants": {
+            "plaintiffs": [{"name": "ПАО Сбербанк"}],
+            "defendants": [{"name": "Тестов Андрей Сергеевич"}],
+        },
+    }
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("arbitr_person", data=[row]))
+    )
+
+    result = await NewDBArbitrationProvider(settings, maps).fetch(inn_subject)
+
+    record = result.records[0]
+    assert isinstance(record, CourtCase)
+    assert record.role is CourtCaseRole.DEFENDANT
+    assert record.is_against_debtor
+    # Дело найдено по ИНН должника — этот ИНН и стоит на записи.
+    assert record.inn == "770912345601"
+
+
+@respx.mock
 async def test_arbitration_marks_a_decided_case_closed(
     newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
 ) -> None:
@@ -518,6 +744,44 @@ async def test_pledge_by_person_is_active_until_excluded(
 
     body = json.loads(route.calls[0].request.content)
     assert body["params"]["method"] == "pledge_person"
+
+
+@respx.mock
+async def test_pledge_by_person_sends_the_date_of_birth_this_method_documents(
+    live_settings: Settings, tmp_path: Path, person_subject: SearchSubject
+) -> None:
+    """``datebirth``, а не ``dob``: у pledge_person параметр зовётся иначе.
+
+    Заодно проверяется вся строка ФНП: уведомления лежат во вложенном ``fnp``,
+    дата регистрации приходит временем, а состояния у записи нет — есть тип
+    сообщения, который карта переводит в «действует».
+    """
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    container = {
+        "fnp": [
+            {
+                "reference_number": "2025-012-232030-634",
+                "message_type": "Возникновение залога",
+                "pledgor": "Тестов Андрей Сергеевич",
+                "json_extra": {"registrationTime": "2025-11-24T11:04:56"},
+            }
+        ],
+        "fedresurs": [],
+    }
+    route = respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("pledge_person", data=[container]))
+    )
+
+    result = await NewDBPledgeProvider(settings, maps).fetch(person_subject)
+
+    record = result.records[0]
+    assert isinstance(record, PledgeRecord)
+    assert record.status is PledgeStatus.ACTIVE
+    assert record.registered_at == date(2025, 11, 24)
+
+    params = json.loads(route.calls[0].request.content)["params"]
+    assert params["datebirth"] == "1985-03-12"
+    assert "dob" not in params
 
 
 @respx.mock
@@ -741,8 +1005,12 @@ def test_shipped_example_map_describes_every_documented_method() -> None:
 
     assert example.methods == {
         BANKRUPTCY_METHOD,
-        BUSINESS_METHOD,
         ARBITRATION_METHOD,
         PERSON_METHOD,
         VIN_METHOD,
     }
+    # egrul_ip отсутствует намеренно: единственный пример ответа в архивной
+    # документации пустой, а имена ключей строки нигде не названы. Пустая карта
+    # сделала бы источник «подключённым» и заставила его отвечать «ИП не
+    # найдено» про должника, которого никто не разбирал.
+    assert BUSINESS_METHOD not in example.methods

@@ -32,7 +32,7 @@ from app.domain.models import BankruptcyRecord, ProviderResult
 from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import as_text
-from app.providers.newdb import NewDBMethodProvider, inn_params
+from app.providers.newdb import NewDBMethodProvider, individual_inn, inn_params
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
 from app.utils.dates import parse_date, utcnow
 
@@ -46,7 +46,12 @@ _INDIVIDUAL_TOKENS = frozenset({"individual", "фл", "физическое ли
 _SOLE_PROPRIETOR_TOKENS = frozenset({"ip", "ип", "sole_proprietor"})
 MAX_RECORDS = 50
 
+# Имя метода расходится с документацией намеренно: страница снимка от 07.02.2026
+# озаглавлена ``fedresurs_bankrot`` и шлёт это имя в примере запроса, но живой
+# API его отвергает, а в примере ОТВЕТА на той же странице и params.method, и
+# секция results названы ``bankrot_person``. Прав код — чинить обратно не надо.
 NEWDB_METHOD = "bankrot_person"
+FEDRESURS_BANKRUPTCY_HOST = "https://bankrot.fedresurs.ru"
 
 
 class FedresursProvider(BaseProvider):
@@ -158,9 +163,10 @@ class NewDBBankruptcyProvider(NewDBMethodProvider):
 
     Unlike ФССП, this method is addressed by ИНН and not by name: the live
     endpoint rejects the person block with ``Отсутствует обязательный параметр:
-    innfiz``. A debtor without ИНН therefore cannot be checked here at all, and
-    saying so is the only honest answer — a rejected request reported as a clean
-    register is exactly the failure this project exists to avoid.
+    innfiz``. A debtor without ИНН — or with a ten-digit one, which is a legal
+    entity's — therefore cannot be checked here at all, and saying so is the only
+    honest answer: a rejected request reported as a clean register is exactly the
+    failure this project exists to avoid.
     """
 
     name = ProviderName.FEDRESURS
@@ -168,16 +174,49 @@ class NewDBBankruptcyProvider(NewDBMethodProvider):
     methods = (NEWDB_METHOD,)
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
-        if not subject.inn:
+        inn = individual_inn(subject)
+        if inn is None:
             return self.insufficient_query(
-                "Для проверки банкротства нужен ИНН — источник ищет только по нему"
+                "Для проверки банкротства нужен ИНН физлица (12 цифр) — "
+                "источник ищет только по нему"
             )
 
-        records, raw = await self.rows_for(NEWDB_METHOD, inn_params(subject.inn))
-        parsed = [_to_bankruptcy(record) for record in records[:MAX_RECORDS]]
+        records, raw = await self.rows_for(NEWDB_METHOD, inn_params(inn))
+        parsed = [_searched_by_inn(_to_bankruptcy(record), inn) for record in records[:MAX_RECORDS]]
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.SUCCESS if parsed else ProviderStatus.NO_RESULTS,
             records=list(parsed),
             raw_response=self.raw_for(raw),
         )
+
+
+def _searched_by_inn(record: BankruptcyRecord, inn: str) -> BankruptcyRecord:
+    """Carry the ИНН we searched by into a record that has none of its own.
+
+    The method's rows are cases, and a case carries a number and a status but
+    not the debtor: the identity sits in a sibling block of the response that a
+    flat field map cannot reach. Without this the record would arrive with no
+    identifiers at all, the matcher would rate it a weak match, and a real
+    bankruptcy found by the debtor's own ИНН would be dropped from the report as
+    somebody else's.
+
+    Claiming the ИНН is not a guess: it is the parameter the search was made
+    with, and the source answers about that person. The debtor's *name* is not
+    filled in for the same reason in reverse — nothing in the row asserts it.
+    """
+    if record.inn is None:
+        record.inn = inn
+    if record.source_url:
+        record.source_url = _absolute_url(record.source_url)
+    return record
+
+
+def _absolute_url(url: str) -> str:
+    """``/legalcases/<guid>`` -> a link that can actually be clicked.
+
+    The vendor returns Федресурс paths, not URLs. The host is inferred from the
+    path shape and is not verified; a wrong host and a bare path are equally
+    broken, and a working link is worth the inference.
+    """
+    return f"{FEDRESURS_BANKRUPTCY_HOST}{url}" if url.startswith("/") else url

@@ -48,7 +48,23 @@ def parse_date(raw: str | None) -> date | None:
         if _is_plausible(parsed):
             return parsed
         return None
-    return None
+    return _parse_iso_datetime(text)
+
+
+def _parse_iso_datetime(text: str) -> date | None:
+    """ISO 8601 with a time part: ``2015-01-29T16:40:08``.
+
+    Registries hand out timestamps where a date is meant — the ФНП pledge
+    register dates its notices only as ``json_extra.registrationTime``. Dropping
+    them left the registration date empty, and an undated notice loses its
+    status with it: "зарегистрирован, не исключён" is exactly what makes a
+    pledge count as active.
+    """
+    try:
+        parsed = datetime.fromisoformat(text).date()
+    except ValueError:
+        return None
+    return parsed if _is_plausible(parsed) else None
 
 
 def _is_plausible(value: date) -> bool:

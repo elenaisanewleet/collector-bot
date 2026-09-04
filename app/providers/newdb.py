@@ -29,9 +29,11 @@ https://newdb.net/swagger/openapi.json:
     result path is ``unexpected_schema``, never ``NO_RESULTS``.
 
 **Not verified, and therefore configuration** — the shape of the rows each
-method returns. Only ``fssp_person`` has been read against a real response; for
-the rest, inventing key names and shipping them as an integration would produce
-exactly the plausible fiction this codebase exists to avoid. So the row schema
+method returns. Only ``fssp_person`` has been read against a real response. The
+rows of the other methods are described in ``config/field_maps/example_newdb.json``
+from the vendor's own documentation, recovered from a web-archive snapshot of
+07.02.2026 (the live docs site is gone); that is a good deal better than
+invented names and still not the same thing as a response. So the row schema
 comes from a field map (``NEWDB_FIELD_MAP``), the same mechanism the ЕФРСБ and
 ФНС vendor adapters already use, and a method with no entry in that map stays
 ``NOT_CONFIGURED``.
@@ -50,7 +52,7 @@ from typing import Any
 import httpx
 
 from app.config import Settings
-from app.domain.identity import SearchSubject
+from app.domain.identity import INN_INDIVIDUAL_LENGTH, SearchSubject
 from app.logging_setup import get_logger
 from app.providers.base import BaseProvider, ProviderError, ProviderUnavailableError
 from app.providers.http import RetryPolicy, build_client, request_json
@@ -59,6 +61,9 @@ from app.providers.mapping import FieldMap, FieldMapError, RecordDict, as_text, 
 logger = get_logger(__name__)
 
 COUNTRY_RU = "ru"
+# The parameter name ФССП uses for a date of birth. ``pledge_person`` documents
+# a different one; see ``person_params``.
+DOB_KEY = "dob"
 
 STATE_COMPLETE = "complete"
 STATE_FAILED = "failed"
@@ -248,6 +253,19 @@ def _extract_rows(envelope: Any, method: str) -> list[Any]:
 
 
 @dataclass(frozen=True, slots=True)
+class MappedRows:
+    """Rows the map could read, plus a count of the ones it could not.
+
+    Keeping the two apart is the whole point: "the source answered with
+    nothing" and "the map read nothing in the answer" both come out as zero
+    records, and they mean opposite things.
+    """
+
+    records: list[RecordDict]
+    unreadable: int
+
+
+@dataclass(frozen=True, slots=True)
 class MethodMap:
     """How to read one method's rows, and what to add to its request."""
 
@@ -255,8 +273,54 @@ class MethodMap:
     field_map: FieldMap
     extra_params: Mapping[str, Any] = field(default_factory=dict)
 
-    def apply(self, rows: Iterable[Any]) -> list[RecordDict]:
-        return [self.field_map.apply(row) for row in rows if isinstance(row, Mapping)]
+    def apply(self, rows: Iterable[Any]) -> MappedRows:
+        """Map every row of ``data``, unwrapping the nested array if one is named.
+
+        Half the methods answer with a *container per subject* rather than with
+        records: ``pledge_person`` keeps the notices in ``fnp``,
+        ``bankrot_person`` the cases in ``bankruptcy``. ``records_path`` names
+        that array **inside one row of ``data``**, so a response carrying two
+        subjects loses neither — which an absolute path from ``data`` (``0.fnp``)
+        would.
+        """
+        records: list[RecordDict] = []
+        unreadable = 0
+        for row in rows:
+            if not isinstance(row, Mapping):
+                unreadable += 1
+                continue
+            nested = self.field_map.extract_records(row)
+            mapped = [
+                record for record in (self.field_map.apply(item) for item in nested) if _any(record)
+            ]
+            if mapped:
+                records.extend(mapped)
+                continue
+            if nested or self._path_missing(row):
+                # Либо строки внутри есть, но карта не нашла в них ни одного
+                # поля, либо названного картой массива в строке нет вовсе. И то
+                # и другое значит «не разобрано», а не «ничего не найдено».
+                unreadable += 1
+        return MappedRows(records=records, unreadable=unreadable)
+
+    def _path_missing(self, row: Mapping[str, Any]) -> bool:
+        """A named array that is absent, as opposed to present and empty.
+
+        ``"fnp": []`` is an answer — no notices. A row with no ``fnp`` at all is
+        a row shaped differently from what the map describes.
+        """
+        path = self.field_map.records_path
+        return bool(path) and dig(row, path) is None
+
+
+def _any(record: Mapping[str, Any]) -> bool:
+    """Did the map fill in anything at all?
+
+    An all-``None`` record is not a finding, it is a set of paths that missed.
+    Passing it on would turn a wrong map into a bankruptcy with no case number
+    and a pledge with no subject — findings about people nobody parsed.
+    """
+    return any(value is not None for value in record.values())
 
 
 class NewDBFieldMaps:
@@ -326,9 +390,11 @@ def _method_map(path: Path, method: str, entry: Any) -> MethodMap:
     return MethodMap(
         method=method,
         field_map=FieldMap(
-            # Rows are already extracted from the envelope by the client, so a
-            # map entry describes one row and nothing above it.
-            records_path="",
+            # Rows of ``data`` are already extracted from the envelope by the
+            # client, so ``records_path`` starts *inside one of them*: it names
+            # the nested array a method wraps its records in (``fnp``,
+            # ``bankruptcy``). Absent, the row itself is the record.
+            records_path=str(entry.get("records_path", "")),
             fields={str(key): str(value) for key, value in fields.items()},
             value_maps=entry.get("value_maps", {}),
         ),
@@ -342,6 +408,7 @@ def person_params(
     first_name: str,
     middle_name: str | None,
     birth_date: str,
+    birth_date_key: str = DOB_KEY,
     country: str = COUNTRY_RU,
 ) -> dict[str, Any]:
     """The person block NewDB's ``*_person`` methods take.
@@ -354,12 +421,18 @@ def person_params(
     The shape below was checked against the live endpoint: an unauthenticated
     ``POST /v2`` validates its parameters before it looks at the key, so the
     contract can be read off the rejections without spending a call.
+
+    ``birth_date_key`` exists because the two person methods disagree about it:
+    ``fssp_person`` documents ``dob``, ``pledge_person`` documents ``datebirth``
+    in all four places it mentions the parameter. Which name the live service
+    accepts for ``pledge_person`` has *not* been checked — the docs are the only
+    source left — so the difference is spelled out here rather than hidden.
     """
     params: dict[str, Any] = {
         "country": country,
         "lastname": last_name,
         "firstname": first_name,
-        "dob": birth_date,
+        birth_date_key: birth_date,
     }
     # A missing patronymic omits the key. Sending it empty is what the service
     # actually rejects — ``secondname must be non-empty`` — so the earlier
@@ -370,7 +443,7 @@ def person_params(
     return params
 
 
-def person_params_for(subject: SearchSubject) -> dict[str, Any]:
+def person_params_for(subject: SearchSubject, *, birth_date_key: str = DOB_KEY) -> dict[str, Any]:
     """The person block for a subject the caller has already checked.
 
     Each method is sent the smallest set that identifies the subject *for that
@@ -384,6 +457,7 @@ def person_params_for(subject: SearchSubject) -> dict[str, Any]:
         first_name=subject.name.first_name,
         middle_name=subject.name.middle_name,
         birth_date=subject.birth_date.strftime("%Y-%m-%d"),
+        birth_date_key=birth_date_key,
     )
 
 
@@ -396,6 +470,21 @@ def inn_params(inn: str) -> dict[str, Any]:
     endpoint, which validates the parameter before the key.
     """
     return {"country": COUNTRY_RU, "innfiz": inn}
+
+
+def individual_inn(subject: SearchSubject) -> str | None:
+    """The subject's ИНН, but only if it can be sent as ``innfiz``.
+
+    ``normalize_inn`` accepts ten digits too, because a ten-digit ИНН is a valid
+    identifier — of a legal entity. ``innfiz`` is validated as twelve, so a
+    ten-digit value would buy a rejected (and, judging by ``cost: 1`` on the
+    live endpoint, still billed) call instead of the honest answer that there is
+    nothing to search by.
+    """
+    inn = subject.inn
+    if inn and len(inn) == INN_INDIVIDUAL_LENGTH:
+        return inn
+    return None
 
 
 class NewDBMethodProvider(BaseProvider):
@@ -439,7 +528,23 @@ class NewDBMethodProvider(BaseProvider):
         mapping = self._field_maps.require(method)
         merged = [{**params, **mapping.extra_params} for params in param_sets]
         response = await self._client.call(method, *merged)
-        return mapping.apply(response.rows), response.raw
+        mapped = mapping.apply(response.rows)
+        if mapped.unreadable and not mapped.records:
+            # The source answered, and the map read nothing in the answer.
+            # Reporting that as ``NO_RESULTS`` would tell the operator the
+            # register is clean on the strength of a file of wrong paths.
+            raise ProviderUnavailableError(
+                "unexpected_schema",
+                f"Карта полей не разобрала ни одной строки ответа NewDB ({method})",
+            )
+        if mapped.unreadable:
+            logger.warning(
+                "newdb.unreadable_rows",
+                method=method,
+                unreadable=mapped.unreadable,
+                parsed=len(mapped.records),
+            )
+        return mapped.records, response.raw
 
     def raw_for(self, raw: str) -> str | None:
         return raw if self._settings.store_raw_responses else None
@@ -447,11 +552,14 @@ class NewDBMethodProvider(BaseProvider):
 
 __all__ = [
     "COUNTRY_RU",
+    "DOB_KEY",
+    "MappedRows",
     "MethodMap",
     "NewDBClient",
     "NewDBFieldMaps",
     "NewDBMethodProvider",
     "NewDBResponse",
+    "individual_inn",
     "inn_params",
     "person_params",
     "person_params_for",

@@ -18,15 +18,16 @@ attached to the wrong person is a wrong reason to drop a debtor.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.domain.enums import CourtCaseRole, ProviderName, ProviderStatus
-from app.domain.identity import SearchSubject
+from app.domain.identity import PersonName, SearchSubject
 from app.domain.models import CourtCase, ProviderResult
 from app.providers.mapping import as_text
-from app.providers.newdb import NewDBMethodProvider, inn_params
+from app.providers.newdb import NewDBMethodProvider, individual_inn, inn_params
 from app.utils.dates import parse_date, utcnow
+from app.utils.hashing import normalize_token
 from app.utils.money import parse_amount
 
 NEWDB_METHOD = "arbitr_person"
@@ -64,13 +65,19 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
     methods = (NEWDB_METHOD,)
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
-        if not subject.inn:
+        inn = individual_inn(subject)
+        if inn is None:
             return self.insufficient_query(
-                "Для проверки арбитража нужен ИНН — поиск по одному ФИО дал бы чужие дела"
+                "Для проверки арбитража нужен ИНН физлица (12 цифр) — "
+                "поиск по одному ФИО дал бы чужие дела"
             )
 
-        rows, raw = await self.rows_for(NEWDB_METHOD, inn_params(subject.inn))
-        parsed = [case for row in rows[:MAX_RECORDS] if (case := _to_case(row)) is not None]
+        rows, raw = await self.rows_for(NEWDB_METHOD, inn_params(inn))
+        parsed = [
+            case
+            for row in rows[:MAX_RECORDS]
+            if (case := _to_case(row, subject=subject, searched_inn=inn)) is not None
+        ]
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.SUCCESS if parsed else ProviderStatus.NO_RESULTS,
@@ -79,8 +86,16 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
         )
 
 
-def _to_case(record: Mapping[str, Any]) -> CourtCase | None:
-    """A row with no case number is not a case we can show or verify."""
+def _to_case(
+    record: Mapping[str, Any], *, subject: SearchSubject, searched_inn: str
+) -> CourtCase | None:
+    """A row with no case number is not a case we can show or verify.
+
+    ``searched_inn`` fills the identity the row itself does not carry: the case
+    was returned for that ИНН, so the ИНН belongs on the record. Without it every
+    case comes back with no identifiers, the matcher rates it weak, and the
+    report drops a live claim as somebody else's business.
+    """
     case_number = as_text(record.get("case_number"))
     if case_number is None:
         return None
@@ -92,12 +107,46 @@ def _to_case(record: Mapping[str, Any]) -> CourtCase | None:
         amount=parse_amount(as_text(record.get("amount"))),
         filed_at=parse_date(as_text(record.get("filed_at"))),
         participant_name=as_text(record.get("participant_name")),
-        inn=as_text(record.get("inn")),
-        role=_parse_role(record.get("role")),
+        inn=as_text(record.get("inn")) or searched_inn,
+        role=_role_of(record, subject),
         is_closed=_is_closed(record),
         source_url=as_text(record.get("source_url")),
         fetched_at=utcnow(),
     )
+
+
+def _role_of(record: Mapping[str, Any], subject: SearchSubject) -> CourtCaseRole:
+    """Роль по делу — из плоского поля, а если его нет, из списков участников.
+
+    У КАД плоского поля роли нет: истцы и ответчики приходят отдельными списками
+    (``participants.plaintiffs`` / ``participants.defendants``), и роль
+    определяется тем, в каком из них нашлось ФИО субъекта. Карта полей плоская и
+    так не умеет, поэтому сопоставление делает код, а карта лишь показывает ему
+    оба списка.
+    """
+    role = _parse_role(record.get("role"))
+    if role is not CourtCaseRole.OTHER:
+        return role
+    if subject.name is None:
+        return CourtCaseRole.OTHER
+    # Должник-банкрот стоит в обоих списках сразу — он и заявитель, и лицо, к
+    # которому предъявлены требования. Для взыскания весомее второе.
+    if _names_include(record.get("participants_defendants"), subject.name):
+        return CourtCaseRole.DEFENDANT
+    if _names_include(record.get("participants_plaintiffs"), subject.name):
+        return CourtCaseRole.PLAINTIFF
+    return CourtCaseRole.OTHER
+
+
+def _names_include(participants: Any, name: PersonName) -> bool:
+    if not isinstance(participants, Sequence) or isinstance(participants, (str, bytes)):
+        return False
+    for item in participants:
+        raw = item.get("name") if isinstance(item, Mapping) else item
+        token = normalize_token(as_text(raw) or "")
+        if token and token in {name.normalized, name.normalized_short}:
+            return True
+    return False
 
 
 def _parse_role(raw: Any) -> CourtCaseRole:

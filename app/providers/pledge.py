@@ -14,6 +14,12 @@ Two NewDB methods feed it:
 
 Both are enabled by describing their rows in ``NEWDB_FIELD_MAP``. A method with
 no entry there is not queried, and the report says the source was not checked.
+
+Both answers carry two registries side by side: ``fnp`` — the pledge register —
+and ``fedresurs`` — leasing contracts and other encumbrances. One map entry
+describes one set of rows, so the shipped map reads the ФНП branch only. Hence
+the wording of the report: "записей в реестре залогов не найдено", which is what
+was actually checked, and not "имущество не обременено".
 """
 
 from __future__ import annotations
@@ -31,6 +37,13 @@ from app.utils.dates import parse_date, utcnow
 PERSON_METHOD = "pledge_person"
 VIN_METHOD = "pledge_vin"
 MAX_RECORDS = 100
+
+# Дата рождения зовётся здесь иначе, чем в ФССП. Документация pledge_person
+# называет её ``datebirth`` во всех четырёх местах — во входной схеме, в примере
+# запроса, в примере ответа и в x-ai-схеме, — тогда как fssp_person везде пишет
+# ``dob``. На живом сервисе это не проверено (сайт документации мёртв), но из
+# двух вариантов правдоподобнее тот, который написан на странице метода.
+DATE_BIRTH_KEY = "datebirth"
 
 _TERMINATED_TOKENS = frozenset({"terminated", "excluded", "исключ", "прекращ", "погашен", "снят"})
 _ACTIVE_TOKENS = frozenset({"active", "действует", "действующее", "актуальн", "зарегистрирован"})
@@ -83,7 +96,7 @@ class NewDBPledgeProvider(NewDBMethodProvider):
             plans.append((VIN_METHOD, {"country": COUNTRY_RU, "vin": vin}))
 
         if _has_identity(subject) and PERSON_METHOD in mapped:
-            plans.append((PERSON_METHOD, person_params_for(subject)))
+            plans.append((PERSON_METHOD, person_params_for(subject, birth_date_key=DATE_BIRTH_KEY)))
         return plans
 
 

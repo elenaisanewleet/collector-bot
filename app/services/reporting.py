@@ -16,6 +16,7 @@ from app.domain.enums import (
     BUSINESS_ROLE_TITLES,
     COURT_CASE_ROLE_TITLES,
     MATCH_LEVEL_TITLES,
+    PLEDGE_STATUS_TITLES,
     PROVIDER_TITLES,
     SCORE_CATEGORY_TITLES,
     MatchLevel,
@@ -256,7 +257,7 @@ def _pledge_block(report: DebtorReport) -> str:
 
 
 def _pledge_lines(item: PledgeRecord) -> list[str]:
-    state = "действует" if item.is_active else "исключён"
+    state = PLEDGE_STATUS_TITLES.get(item.status, "состояние записи не определено")
     lines = [f"• {truncate(item.subject or 'предмет залога не указан', 90)} — {state}"]
     if item.pledgee_name:
         lines.append(f"  Залогодержатель: {truncate(item.pledgee_name, 90)}")

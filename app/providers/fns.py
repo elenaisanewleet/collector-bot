@@ -12,6 +12,15 @@ active sole proprietorship means the person is registered, not that they earn.
 key already configured for ФССП. That method answers about sole proprietors
 only: a person with no ИП registered has no ЕГРЮЛ roles reported here, and the
 report must not read that as "no business ties at all".
+
+``egrul_ip`` is nonetheless the one method the shipped example map leaves out.
+The archived documentation shows a single response for it and that response is
+empty (``"data": []``); everything about the contents of a row is prose — "в
+блоке search.matches[] обычно возвращаются ИНН, ОГРНИП, ... статус" — without a
+single key name, and the ``egrul`` page it refers to is not in the snapshot. A
+guessed map here would be the worst of both worlds: the method reads as
+connected and answers "ИП не найдено" about a debtor nobody parsed. Until a live
+response is captured, no entry means "не подключено", which is true.
 """
 
 from __future__ import annotations
@@ -32,7 +41,7 @@ from app.domain.models import BusinessRelation, ProviderResult
 from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import as_text
-from app.providers.newdb import NewDBMethodProvider, inn_params
+from app.providers.newdb import NewDBMethodProvider, individual_inn, inn_params
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
 from app.utils.dates import parse_date, utcnow
 
@@ -158,15 +167,17 @@ class NewDBBusinessProvider(NewDBMethodProvider):
     methods = (NEWDB_METHOD,)
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
-        if not subject.inn:
+        inn = individual_inn(subject)
+        if inn is None:
             # Раньше здесь был откат на ФИО с датой рождения. Живой сервис его
             # не принимает — ``Отсутствует обязательный параметр: innfiz``, —
             # так что откат давал бы не запасной путь, а отклонённый запрос.
+            # Десятизначный ИНН отвергается там же: ``innfiz`` — двенадцать цифр.
             return self.insufficient_query(
-                "Для проверки ИП нужен ИНН — источник ищет только по нему"
+                "Для проверки ИП нужен ИНН физлица (12 цифр) — источник ищет только по нему"
             )
 
-        records, raw = await self.rows_for(NEWDB_METHOD, inn_params(subject.inn))
+        records, raw = await self.rows_for(NEWDB_METHOD, inn_params(inn))
         parsed = [_to_relation(record) for record in records[:MAX_RECORDS]]
         return ProviderResult(
             provider=self.name,

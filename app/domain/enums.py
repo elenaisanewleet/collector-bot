@@ -179,6 +179,15 @@ class PledgeStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
+PLEDGE_STATUS_TITLES: dict[PledgeStatus, str] = {
+    PledgeStatus.ACTIVE: "действует",
+    PledgeStatus.TERMINATED: "исключён",
+    # Не «исключён»: непрочитанное состояние записи, поданное как снятый залог,
+    # читается взыскателем как «вещь свободна» — ровно наоборот.
+    PledgeStatus.UNKNOWN: "состояние записи не определено",
+}
+
+
 class CourtCaseRole(StrEnum):
     """Кем должник проходит по делу."""
 

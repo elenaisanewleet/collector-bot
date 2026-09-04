@@ -2,20 +2,36 @@
   "_comment": [
     "Row maps for NewDB methods beyond fssp_person, keyed by method name.",
     "",
-    "WHY THIS FILE EXISTS. The NewDB envelope — POST /v2, params.method,",
-    "requestId, the queued/complete/failed lifecycle — is implemented in code",
-    "because it was read from the published contract. The *rows* each method",
-    "returns were not: only fssp_person has been checked against a real",
-    "response. Inventing key names for the rest and shipping them would produce",
-    "an integration that looks connected and reports 'ничего не найдено' about",
-    "people it never actually parsed.",
+    "WHERE THESE PATHS COME FROM. Not from a live response — from NewDB's own",
+    "documentation, recovered from a web-archive snapshot taken 07.02.2026:",
+    "http://web.archive.org/web/20260207111510/https://newdb.net/docs/",
+    "The live docs site is gone, and this snapshot is the only source left.",
+    "Every path below is copied from the 'Пример ответа' of the method's own",
+    "page, not inferred from prose: where a page describes its rows in words",
+    "instead of showing them, the method is left out of this file entirely.",
     "",
-    "So: every path below is a PLACEHOLDER. Replace it with the real one from",
-    "your NewDB contract before enabling the method. A method with no entry in",
-    "this file is not queried at all and is reported as 'не подключено'.",
+    "WHAT THAT STILL DOES NOT MEAN. None of it is confirmed against a real",
+    "answer — there is no key here, and a documented example is not a response.",
+    "The snapshot is also seven months old and wrong in places we can already",
+    "prove: the bankruptcy page is titled 'fedresurs_bankrot' and sends that",
+    "name in its request example, while the live API accepts only",
+    "'bankrot_person' — the name its own response example uses. Read every",
+    "entry below as a well-sourced hypothesis. The first paid call may refute",
+    "it; run one debtor with STORE_RAW_RESPONSES=true and compare before",
+    "letting a batch of eight hundred through.",
     "",
-    "`fields` maps a domain key to a dotted path inside one row of",
-    "results.<method>.result.data. `value_maps` normalizes vendor vocabulary.",
+    "HOW A METHOD FAILS SAFE. A method absent from this file is not queried and",
+    "is reported as 'не подключено'. A method whose paths all miss is not",
+    "reported as 'ничего не найдено' either: rows the map cannot read at all",
+    "become 'unexpected_schema', because 'не разобрано' and 'чисто' are",
+    "opposite answers.",
+    "",
+    "SYNTAX. `records_path` names the nested array a method wraps its records",
+    "in, counted from ONE ROW of results.<method>.result.data (the envelope is",
+    "unwrapped by the client). Omit it when the row is itself the record.",
+    "`fields` maps a domain key — the ones the provider actually reads — to a",
+    "dotted path inside one record; list indices are allowed ('judges.0.court').",
+    "`value_maps` normalizes vendor vocabulary, matched case-insensitively.",
     "`extra_params` is merged into the request and wins over what the adapter",
     "would send — use it when your contract names a parameter differently.",
     "",
@@ -23,96 +39,137 @@
     "that is eight hundred calls per method, so enable what you will read."
   ],
 
+  "_bankrot_person": [
+    "Источник: fedresurs_bankrot (страница названа так, метод зовётся иначе).",
+    "Строка data — это объект-персона, дела лежат в её массиве 'bankruptcy'.",
+    "",
+    "Источник НЕ отдаёт на уровне дела: debtor_name, debtor_type, procedure,",
+    "started_at, completed_at, message_date. ФИО, ИНН и тип должника есть, но в",
+    "соседнем блоке data[].commmon (опечатка вендора), куда плоский путь из",
+    "строки-дела не дотягивается; процедура угадывается только по тексту",
+    "publications[].title; дат в ответе нет вообще. Поэтому ИНН должника",
+    "проставляет код — тот, по которому шёл поиск, — а имя остаётся пустым.",
+    "case_url приходит относительным ('/legalcases/...'); хост приклеивает код."
+  ],
   "bankrot_person": {
+    "records_path": "bankruptcy",
     "fields": {
-      "debtor_name": "Debtor",
-      "debtor_type": "DebtorType",
-      "inn": "INN",
-      "case_number": "CaseNumber",
-      "procedure": "Procedure",
-      "status": "ProcedureStatus",
-      "started_at": "ProcedureStartDate",
-      "completed_at": "ProcedureEndDate",
-      "message_date": "MessageDate",
-      "source_url": "Url"
-    },
-    "value_maps": {
-      "debtor_type": {
-        "физическое лицо": "individual",
-        "индивидуальный предприниматель": "ип",
-        "юридическое лицо": "organization"
-      }
+      "case_number": "case_number",
+      "status": "status",
+      "source_url": "case_url"
     }
   },
 
-  "egrul_ip": {
-    "fields": {
-      "inn": "INN",
-      "ogrn": "OGRNIP",
-      "name": "Name",
-      "role": "Role",
-      "status": "Status",
-      "registration_date": "RegistrationDate",
-      "termination_date": "TerminationDate",
-      "source_url": "Url"
-    },
-    "value_maps": {
-      "role": {
-        "индивидуальный предприниматель": "ип"
-      }
-    }
-  },
+  "_egrul_ip": [
+    "Записи для egrul_ip здесь намеренно НЕТ, и это ответ, а не пробел.",
+    "",
+    "Единственный пример ответа в документации пустой ('data': []), а строки",
+    "описаны прозой без единого имени ключа: 'в блоке search.matches[] обычно",
+    "возвращаются ИНН, ОГРНИП, краткое и полное имя, статус, дата регистрации,",
+    "коды ОКВЭД и ссылки'. Из 'возвращается ИНН' нельзя узнать, зовётся ключ",
+    "inn, INN или tax_number; страницы egrul, на которую ссылается текст, в",
+    "снимке нет. Выдуманная карта здесь опаснее отсутствующей: с ней метод",
+    "выглядит подключённым и отвечает 'ИП не найдено' про должника, чьи данные",
+    "никто не разобрал. Без неё ФНС честно отчитывается 'не подключено'.",
+    "",
+    "Чтобы дописать: один живой ответ по ИНН заведомо действующего ИП,",
+    "сохранённый с STORE_RAW_RESPONSES=true. Учтите и то, что egrul_ip знает",
+    "только ЕГРИП: ролей в юрлицах (директор, учредитель) он не возвращает."
+  ],
 
+  "_arbitr_person": [
+    "Строка data — это уже дело КАД, вложенного массива нет.",
+    "",
+    "participants_defendants / participants_plaintiffs — не поля отчёта, а",
+    "списки участников: плоского поля роли у КАД нет, и код определяет роль по",
+    "тому, в каком из списков нашлось ФИО должника.",
+    "",
+    "Источник НЕ отдаёт: filed_at (даты подачи нет; calendar_events[0].date —",
+    "это первое событие, а не подача), closed_at, роль отдельным полем.",
+    "amount не заполняется намеренно: financials.total_amount — сумма по",
+    "последнему разобранному судебному акту, а не цена иска, и в отчёте она",
+    "печатается без подписи, то есть прочиталась бы как сумма требований.",
+    "participant_name тоже не заполняется: card_pdf_analysis...parties.debtor —",
+    "должник по конкретному акту, который не обязан быть нашим субъектом.",
+    "ИНН на запись проставляет код — тот, по которому шёл поиск.",
+    "",
+    "Весь блок card_pdf_analysis — разбор ОДНОГО PDF; если вендор его не делал,",
+    "пути внутри дадут None, а номер дела, статус, суд и ссылка всё равно",
+    "прочитаются."
+  ],
   "arbitr_person": {
     "fields": {
-      "case_number": "CaseNumber",
-      "court_name": "Court",
-      "case_type": "CaseType",
-      "status": "CaseStatus",
-      "amount": "ClaimAmount",
-      "filed_at": "FilingDate",
-      "closed_at": "DecisionDate",
-      "participant_name": "Participant",
-      "inn": "INN",
-      "role": "ParticipantRole",
-      "source_url": "Url"
+      "case_number": "case_number",
+      "status": "status",
+      "court_name": "judges.0.court",
+      "case_type": "card_pdf_analysis.detail_info.classification.case_type",
+      "participants_defendants": "participants.defendants",
+      "participants_plaintiffs": "participants.plaintiffs",
+      "source_url": "source_url"
     },
     "value_maps": {
-      "role": {
-        "ответчик": "ответчик",
-        "истец": "истец"
+      "case_type": {
+        "bankruptcy": "банкротство"
       }
     }
   },
 
+  "_pledge_person": [
+    "Строка data — контейнер на субъекта: уведомления ФНП в массиве 'fnp',",
+    "сообщения Федресурса (лизинг, возникновение права залога) — в соседнем",
+    "'fedresurs'. Одна запись карты описывает один набор строк, поэтому",
+    "читается только ФНП. Пока это так, отсутствие результата означает 'в",
+    "реестре ФНП не найдено', а не 'имущество не обременено'.",
+    "",
+    "status берётся из типа сообщения: состояния у уведомления ФНП нет, есть",
+    "событие. 'Возникновение залога' переведено в 'действует' — иначе запись",
+    "получила бы UNKNOWN. Типы про исключение залога код уже узнаёт по",
+    "подстрокам 'исключ'/'прекращ', поэтому в словаре одна строка.",
+    "",
+    "Источник НЕ отдаёт: terminated_at (снятие приходит отдельным уведомлением",
+    "с другим номером), pledgor_inn. Предмет залога описан только",
+    "идентификатором (VIN или иной номер), и он отправлен в vin, а не в subject:",
+    "в отчёте vin маскируется, а subject печатается как есть."
+  ],
   "pledge_person": {
+    "records_path": "fnp",
     "fields": {
-      "registration_number": "NotificationNumber",
-      "registered_at": "RegistrationDate",
-      "terminated_at": "ExclusionDate",
-      "pledgor_name": "Pledgor",
-      "pledgor_birth_date": "PledgorBirthDate",
-      "pledgor_inn": "PledgorINN",
-      "pledgee_name": "Pledgee",
-      "subject": "PledgeSubject",
-      "vin": "VIN",
-      "status": "NotificationStatus",
-      "source_url": "Url"
+      "registration_number": "reference_number",
+      "registered_at": "json_extra.registrationTime",
+      "pledgor_name": "pledgor",
+      "pledgor_birth_date": "pledgor_detail_birthdate",
+      "pledgee_name": "pledgee",
+      "vin": "pledge_subject_ids_raw",
+      "status": "message_type",
+      "source_url": "fnp_url"
+    },
+    "value_maps": {
+      "status": {
+        "возникновение залога": "действует"
+      }
     }
   },
 
+  "_pledge_vin": [
+    "Тот же контейнер и та же строка ФНП, что у pledge_person, но по одной",
+    "машине. Дополнительно к списку выше здесь нет и pledgor_birth_date: этот",
+    "ключ есть только в ответе поиска по человеку."
+  ],
   "pledge_vin": {
+    "records_path": "fnp",
     "fields": {
-      "registration_number": "NotificationNumber",
-      "registered_at": "RegistrationDate",
-      "terminated_at": "ExclusionDate",
-      "pledgor_name": "Pledgor",
-      "pledgor_birth_date": "PledgorBirthDate",
-      "pledgee_name": "Pledgee",
-      "subject": "PledgeSubject",
-      "vin": "VIN",
-      "status": "NotificationStatus",
-      "source_url": "Url"
+      "registration_number": "reference_number",
+      "registered_at": "json_extra.registrationTime",
+      "pledgor_name": "pledgor",
+      "pledgee_name": "pledgee",
+      "vin": "pledge_subject_ids_raw",
+      "status": "message_type",
+      "source_url": "fnp_url"
+    },
+    "value_maps": {
+      "status": {
+        "возникновение залога": "действует"
+      }
     }
   }
 }
