@@ -286,7 +286,8 @@ async def test_records_path_unwraps_the_array_inside_a_row(
     result = await NewDBBankruptcyProvider(settings, maps).fetch(inn_subject)
 
     assert result.status is ProviderStatus.SUCCESS
-    assert [record.case_number for record in result.records] == ["А73-7992/2017", "А73-1/2019"]
+    cases = [record for record in result.records if isinstance(record, BankruptcyRecord)]
+    assert [record.case_number for record in cases] == ["А73-7992/2017", "А73-1/2019"]
 
 
 @respx.mock
