@@ -627,7 +627,7 @@ async def test_pledge_without_vin_or_identity_is_not_queried(
 
 @respx.mock
 async def test_extra_params_override_what_the_adapter_would_send(
-    live_settings: Settings, tmp_path: Path, person_subject: SearchSubject
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
 ) -> None:
     """The escape hatch for a contract that names a parameter differently."""
     path = tmp_path / "newdb.json"
@@ -654,13 +654,13 @@ async def test_extra_params_override_what_the_adapter_would_send(
         return_value=httpx.Response(200, json=envelope("bankrot_person", data=[]))
     )
 
-    await NewDBBankruptcyProvider(settings, NewDBFieldMaps.load(path)).fetch(person_subject)
+    await NewDBBankruptcyProvider(settings, NewDBFieldMaps.load(path)).fetch(inn_subject)
 
     body = json.loads(route.calls[0].request.content)
     assert body["params"]["country"] == "kz"
     assert body["params"]["source"] == "efrsb"
     # Everything the adapter derives from the subject still travels.
-    assert body["params"]["lastname"] == "Тестов"
+    assert body["params"]["innfiz"] == "770912345601"
 
 
 # ---------------------------------------------------------------- сборка
