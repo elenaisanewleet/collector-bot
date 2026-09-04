@@ -138,6 +138,19 @@ class Settings(BaseSettings):
     # Во сколько раз долг должен превышать пошлину, чтобы процесс окупался.
     min_debt_to_fee_ratio: Annotated[float, Field(ge=1.0, le=100.0)] = 2.0
 
+    # ---------------------------------------------------------------- веб-отчёты
+    # Отчёт отдаётся ссылкой на страницу, а не простынёй в чат: в сообщении
+    # Telegram нет ни таблиц, ни навигации, а смотреть надо на сорок строк
+    # производств сразу.
+    web_enabled: bool = True
+    web_host: str = "0.0.0.0"
+    web_port: Annotated[int, Field(ge=1, le=65535)] = 8080
+    # Публичный адрес, который уходит в ссылку. Пустой — ссылки не отправляются:
+    # бот не должен слать URL, по которому оператор не откроет страницу.
+    web_public_url: str = ""
+    # Ссылка живёт ограниченное время: за ней персональные данные должника.
+    share_link_ttl_hours: Annotated[int, Field(ge=1, le=24 * 30)] = 72
+
     # ---------------------------------------------------------------- массовая проверка
     # Каждый должник — это реальные запросы к платным источникам, поэтому прогон
     # ограничен и требует подтверждения оператора.
@@ -153,6 +166,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "newdb_base_url",
+        "web_public_url",
         "fedresurs_base_url",
         "fns_base_url",
     )
@@ -181,6 +195,15 @@ class Settings(BaseSettings):
     @property
     def is_demo(self) -> bool:
         return self.app_mode is AppMode.DEMO
+
+    @property
+    def web_links_enabled(self) -> bool:
+        """Отправлять ли ссылки на веб-отчёт.
+
+        Без публичного адреса ссылка бесполезна, поэтому бот в этом случае
+        остаётся на текстовом отчёте, а не шлёт нерабочий URL.
+        """
+        return self.web_enabled and bool(self.web_public_url)
 
     @property
     def cache_enabled(self) -> bool:

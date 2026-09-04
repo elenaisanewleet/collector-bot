@@ -17,11 +17,12 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
+from app.bot import view
 from app.bot.common import answer_callback, callback_message
 from app.bot.keyboards import (
     BATCH_PREFIX,
     batch_confirm_keyboard,
-    batch_result_keyboard,
+    batch_result_keyboard_with_link,
     main_menu,
 )
 from app.bot.states import BatchCheck
@@ -31,6 +32,7 @@ from app.domain.verdict import VERDICT_TITLES, Verdict
 from app.logging_setup import get_logger
 from app.services.batch import BatchEstimate, BatchProgress, BatchSummary
 from app.services.export import queue_to_csv
+from app.services.share import ShareKind, ShareTarget
 from app.utils.formatting import pluralize_ru, split_message
 from app.utils.money import format_amount
 
@@ -68,12 +70,7 @@ def render_estimate(estimate: BatchEstimate, app_name: str) -> str:
 
 
 def render_progress(progress: BatchProgress) -> str:
-    filled = round(progress.percent / 5)
-    bar = "█" * filled + "·" * (20 - filled)
-    text = f"Проверяю базу\n\n{bar}  {progress.percent}%\n{progress.processed} из {progress.total}"
-    if progress.failed:
-        text += f"\nОшибок: {progress.failed}"
-    return text
+    return view.batch_progress(progress.processed, progress.total, progress.failed)
 
 
 def render_summary(summary: BatchSummary) -> str:
@@ -164,10 +161,16 @@ def build_router() -> Router:
                 logger.debug("batch.progress_edit_failed")
 
         summary = await container.batch_service.run(telegram_user_id=user_id, progress=report)
+        # Ссылка на веб-очередь — главное действие после прогона: таблицу на
+        # восемьсот строк в сообщении Telegram не показать.
+        url = await container.share_service.issue(
+            ShareTarget(ShareKind.QUEUE, summary.run_id), telegram_user_id=user_id
+        )
+        keyboard = batch_result_keyboard_with_link(url)
         try:
-            await notice.edit_text(render_summary(summary), reply_markup=batch_result_keyboard())
+            await notice.edit_text(render_summary(summary), reply_markup=keyboard)
         except Exception:
-            await message.answer(render_summary(summary), reply_markup=batch_result_keyboard())
+            await message.answer(render_summary(summary), reply_markup=keyboard)
 
     @router.callback_query(F.data.startswith(f"{BATCH_PREFIX}:list:"))
     async def handle_batch_list(

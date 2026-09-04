@@ -77,6 +77,7 @@ def bot(sent: SentMessages, monkeypatch: pytest.MonkeyPatch) -> Iterator[Bot]:
         if isinstance(method, EditMessageText):
             # Прогресс правится на месте — для теста это такой же текст.
             sent.texts.append(method.text or "")
+            sent.markups.append(method.reply_markup)
             return True
         if isinstance(method, SendDocument):
             document = method.document
@@ -506,3 +507,105 @@ async def test_cached_search_is_announced(
     await run_person_search()
 
     assert sent.contains("Использованы кэшированные данные")
+
+
+# ---------------------------------------------------------------- веб-отчёты
+
+
+@pytest.fixture
+def linked(container: Container) -> Container:
+    """Контейнер с включёнными ссылками на веб-отчёт."""
+    from app.services.share import ShareLinkService
+
+    settings = container.settings.model_copy(
+        update={"web_public_url": "https://reports.example.test"}
+    )
+    return Container(
+        settings=settings,
+        database=container.database,
+        registry=container.registry,
+        search_service=container.search_service,
+        import_service=container.import_service,
+        batch_service=container.batch_service,
+        verdict_engine=container.verdict_engine,
+        share_service=ShareLinkService(settings, container.database),
+        subject_store=container.subject_store,
+    )
+
+
+@pytest.fixture
+def linked_dispatcher(linked: Container) -> Dispatcher:
+    return setup_dispatcher(Dispatcher(storage=MemoryStorage()), linked)
+
+
+async def test_search_sends_a_card_with_a_link_not_a_wall(
+    linked_dispatcher: Dispatcher, bot: Bot, sent: SentMessages, linked: Container
+) -> None:
+    """С включённым вебом в чат уходит карточка и кнопка, а не отчёт текстом."""
+    await feed(linked_dispatcher, bot, callback_query=make_callback("menu:person"))
+    await feed(linked_dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(linked_dispatcher, bot, message=make_message("12.03.1985"))
+    await feed(linked_dispatcher, bot, callback_query=make_callback("skip"))
+    await feed(linked_dispatcher, bot, callback_query=make_callback("region:moscow"))
+
+    assert sent.contains("Тестов Андрей Сергеевич")
+    assert sent.contains("Recovery Score")
+    # Полного текстового отчёта нет — он теперь на странице.
+    assert not sent.contains("ИСТОЧНИКИ")
+    urls = [
+        button.url
+        for markup in sent.markups
+        if markup is not None
+        for row in markup.inline_keyboard
+        for button in row
+        if button.url
+    ]
+    assert any(url.startswith("https://reports.example.test/r/") for url in urls)
+
+
+async def test_search_falls_back_to_text_without_a_public_url(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Без публичного адреса лучше простыня, чем нерабочая кнопка."""
+    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
+    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(dispatcher, bot, message=make_message("12.03.1985"))
+    await feed(dispatcher, bot, callback_query=make_callback("skip"))
+    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+
+    assert sent.contains("ИСТОЧНИКИ")
+
+
+async def test_batch_offers_the_queue_page(
+    linked_dispatcher: Dispatcher, bot: Bot, sent: SentMessages, linked: Container
+) -> None:
+    await linked.import_service.import_file(linked.settings.internal_csv_path)
+
+    await feed(linked_dispatcher, bot, message=make_message("/batch"))
+    await feed(linked_dispatcher, bot, callback_query=make_callback("batch:run"))
+
+    urls = [
+        button.url
+        for markup in sent.markups
+        if markup is not None
+        for row in markup.inline_keyboard
+        for button in row
+        if button.url
+    ]
+    assert any(url.startswith("https://reports.example.test/q/") for url in urls)
+
+
+async def test_progress_message_is_edited_not_reposted(
+    linked_dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Одно сообщение, которое меняется, вместо очереди новых."""
+    await feed(linked_dispatcher, bot, callback_query=make_callback("menu:person"))
+    await feed(linked_dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(linked_dispatcher, bot, message=make_message("12.03.1985"))
+    await feed(linked_dispatcher, bot, callback_query=make_callback("skip"))
+    sent.texts.clear()
+    await feed(linked_dispatcher, bot, callback_query=make_callback("region:moscow"))
+
+    # Первое — прогресс, дальше правка того же сообщения результатом.
+    assert any("Проверяю" in text for text in sent.texts)
+    assert sent.contains("Recovery Score")

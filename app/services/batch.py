@@ -21,10 +21,11 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from app.config import Settings
-from app.db.models import BatchItem, Debtor
+from app.db.models import BatchItem, BatchRun, Debtor
 from app.db.repository import AuditRepository, BatchRepository, DebtorRepository
 from app.db.session import Database
 from app.domain.enums import SearchType
@@ -94,6 +95,42 @@ class BatchSummary:
         return self.fee(Verdict.DROP)
 
 
+@dataclass(slots=True)
+class QueueSnapshot:
+    """Очередь одного прогона целиком — то, что показывает веб-страница."""
+
+    run_id: int
+    started_at: datetime
+    finished_at: datetime | None
+    total: int
+    processed: int
+    failed: int
+    counts: dict[str, int]
+    totals: dict[str, Decimal]
+    items: list[BatchItem]
+
+    def count(self, verdict: Verdict) -> int:
+        return self.counts.get(verdict.value, 0)
+
+    def debt(self, verdict: Verdict) -> Decimal:
+        return self.totals.get(f"{verdict.value}:debt", Decimal("0"))
+
+    def fee(self, verdict: Verdict) -> Decimal:
+        return self.totals.get(f"{verdict.value}:fee", Decimal("0"))
+
+    @property
+    def saved_fees(self) -> Decimal:
+        return self.fee(Verdict.DROP)
+
+    @property
+    def actionable(self) -> int:
+        return self.count(Verdict.FILE) + self.count(Verdict.ORDER)
+
+    @property
+    def actionable_debt(self) -> Decimal:
+        return self.debt(Verdict.FILE) + self.debt(Verdict.ORDER)
+
+
 class BatchService:
     """Прогон всей выгрузки и построение очереди."""
 
@@ -109,6 +146,30 @@ class BatchService:
         self._database = database
         self._search = search_service
         self._verdict = verdict_engine or VerdictEngine(settings)
+
+    async def queue_snapshot(
+        self, run_id: int, *, limit: int | None = None
+    ) -> QueueSnapshot | None:
+        """Собрать очередь прогона для веб-страницы."""
+        async with self._database.session() as session:
+            repo = BatchRepository(session)
+            run = await session.get(BatchRun, run_id)
+            if run is None:
+                return None
+            items = await repo.queue(run_id, limit=limit or self._settings.batch_max_debtors)
+            counts = await repo.verdict_counts(run_id)
+            totals = await repo.verdict_totals(run_id)
+            return QueueSnapshot(
+                run_id=run.id,
+                started_at=run.started_at,
+                finished_at=run.finished_at,
+                total=run.total,
+                processed=run.processed,
+                failed=run.failed,
+                counts=counts,
+                totals=totals,
+                items=items,
+            )
 
     # ------------------------------------------------------------- estimate
 

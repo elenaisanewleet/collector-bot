@@ -190,6 +190,29 @@ class BatchItem(Base):
     )
 
 
+class ShareLink(Base):
+    """Ссылка на веб-отчёт.
+
+    Токен непредсказуем и живёт ограниченное время: по этому адресу лежат
+    персональные данные должника, а страница открывается без авторизации —
+    ровно как отчёт по ссылке в знакомых оператору сервисах. Непредсказуемость
+    и срок жизни здесь и есть контроль доступа, поэтому токен длинный, а
+    просроченная ссылка отдаёт 404, а не содержимое.
+    """
+
+    __tablename__ = "share_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    target_id: Mapped[int] = mapped_column(Integer, index=True)
+    telegram_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, index=True)
+    opened_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_opened_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+
+
 class AuditEvent(Base):
     """Append-only trail of who did what.
 
