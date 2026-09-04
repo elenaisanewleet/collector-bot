@@ -197,8 +197,17 @@ def _build_payload(method: str, params: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _state_of(envelope: Any) -> str:
+    """The envelope's ``state``, normalized to underscores.
+
+    The live service answers ``"in progress"`` — with a space — where its own
+    documentation writes ``in_progress``. Read literally, that value matches
+    neither the terminal states nor ``PENDING_STATES``, so a first response that
+    arrives already in progress rather than queued would be rejected as an
+    unrecognizable envelope and the source reported unavailable. Verified
+    against api.newdb.net on 05.09.2026.
+    """
     state = as_text(dig(envelope, "state"))
-    return state.lower() if state else ""
+    return state.strip().lower().replace(" ", "_") if state else ""
 
 
 def _errors_info(envelope: Any) -> list[Mapping[str, Any]]:
@@ -272,6 +281,10 @@ class MethodMap:
     method: str
     field_map: FieldMap
     extra_params: Mapping[str, Any] = field(default_factory=dict)
+    #: Поля, лежащие в самой строке ``data`` рядом с вложенным массивом.
+    row_map: FieldMap | None = None
+    #: Настройки разбора, которые нужны адаптеру, а не карте полей.
+    options: Mapping[str, Any] = field(default_factory=dict)
 
     def apply(self, rows: Iterable[Any]) -> MappedRows:
         """Map every row of ``data``, unwrapping the nested array if one is named.
@@ -282,6 +295,19 @@ class MethodMap:
         that array **inside one row of ``data``**, so a response carrying two
         subjects loses neither — which an absolute path from ``data`` (``0.fnp``)
         would.
+
+        Whose records those are is the other half of the same problem, and it is
+        what ``row_fields`` answers. The identity of a container sits *beside*
+        the nested array — ``bankrot_person`` keeps it in ``data[].commmon`` —
+        and a path counted from inside a case cannot reach it, so the adapters
+        used to stamp the ИНН the search was made with onto every row they got
+        back. For one subject that is true by construction; for two it hands the
+        second subject's cases to the first. ``row_fields`` is read from the
+        container and merged into each of its records, so the answer says who
+        the record is about instead of the question assuming it.
+
+        Counting is per record, not per row: a container whose second notice the
+        map could not read must not be covered up by the first one it could.
         """
         records: list[RecordDict] = []
         unreadable = 0
@@ -290,30 +316,36 @@ class MethodMap:
                 unreadable += 1
                 continue
             nested = self.field_map.extract_records(row)
-            mapped = [
-                record for record in (self.field_map.apply(item) for item in nested) if _any(record)
-            ]
-            if mapped:
-                records.extend(mapped)
+            if not nested:
+                # Пустой массив — это ответ («уведомлений нет»). Массив,
+                # которого нет или который пришёл не массивом, — это про карту.
+                unreadable += int(self._records_path_unreadable(row))
                 continue
-            if nested or self._path_missing(row):
-                # Либо строки внутри есть, но карта не нашла в них ни одного
-                # поля, либо названного картой массива в строке нет вовсе. И то
-                # и другое значит «не разобрано», а не «ничего не найдено».
-                unreadable += 1
+            owner = self.row_map.apply(row) if self.row_map is not None else {}
+            for item in nested:
+                record = self.field_map.apply(item)
+                if _has_any_value(record):
+                    records.append({**owner, **record})
+                else:
+                    # Строки внутри есть, но карта не нашла в них ни одного
+                    # поля: «не разобрано», а не «ничего не найдено».
+                    unreadable += 1
         return MappedRows(records=records, unreadable=unreadable)
 
-    def _path_missing(self, row: Mapping[str, Any]) -> bool:
-        """A named array that is absent, as opposed to present and empty.
+    def _records_path_unreadable(self, row: Mapping[str, Any]) -> bool:
+        """A named array that is absent — or present as something that is not one.
 
-        ``"fnp": []`` is an answer — no notices. A row with no ``fnp`` at all is
-        a row shaped differently from what the map describes.
+        ``"fnp": []`` is an answer: no notices. A row with no ``fnp`` at all is
+        a row shaped differently from what the map describes. So is a row where
+        ``fnp`` came back as ``null``, ``0`` or ``"нет данных"``: reading a
+        scalar as an empty list is how a source that said something unexpected
+        turns into a source that said nothing.
         """
         path = self.field_map.records_path
-        return bool(path) and dig(row, path) is None
+        return bool(path) and not isinstance(dig(row, path), (list, Mapping))
 
 
-def _any(record: Mapping[str, Any]) -> bool:
+def _has_any_value(record: Mapping[str, Any]) -> bool:
     """Did the map fill in anything at all?
 
     An all-``None`` record is not a finding, it is a set of paths that missed.
@@ -384,9 +416,17 @@ def _method_map(path: Path, method: str, entry: Any) -> MethodMap:
         # An empty map would map every row onto an all-None record: not an
         # integration, just a source that always answers "nothing known".
         raise FieldMapError(f"{path}: у метода {method!r} нет непустого раздела fields")
-    extra = entry.get("extra_params", {})
-    if not isinstance(extra, Mapping):
-        raise FieldMapError(f"{path}: extra_params метода {method!r} должны быть объектом")
+    extra = _object_section(path, method, entry, "extra_params")
+    options = _object_section(path, method, entry, "options")
+    row_fields = _object_section(path, method, entry, "row_fields")
+    records_path = str(entry.get("records_path", ""))
+    if row_fields and not records_path:
+        # Без вложенного массива строка ``data`` и есть запись, и «поля строки»
+        # не отличались бы от ``fields`` ничем, кроме места в файле.
+        raise FieldMapError(
+            f"{path}: row_fields метода {method!r} имеют смысл только вместе с records_path"
+        )
+    value_maps = entry.get("value_maps", {})
     return MethodMap(
         method=method,
         field_map=FieldMap(
@@ -394,12 +434,32 @@ def _method_map(path: Path, method: str, entry: Any) -> MethodMap:
             # client, so ``records_path`` starts *inside one of them*: it names
             # the nested array a method wraps its records in (``fnp``,
             # ``bankruptcy``). Absent, the row itself is the record.
-            records_path=str(entry.get("records_path", "")),
+            records_path=records_path,
             fields={str(key): str(value) for key, value in fields.items()},
-            value_maps=entry.get("value_maps", {}),
+            value_maps=value_maps,
         ),
         extra_params=dict(extra),
+        # Paths counted from the row itself, for what the container knows about
+        # its records: who they belong to.
+        row_map=(
+            FieldMap(
+                fields={str(key): str(value) for key, value in row_fields.items()},
+                value_maps=value_maps,
+            )
+            if row_fields
+            else None
+        ),
+        options=dict(options),
     )
+
+
+def _object_section(
+    path: Path, method: str, entry: Mapping[str, Any], key: str
+) -> Mapping[str, Any]:
+    section = entry.get(key, {})
+    if not isinstance(section, Mapping):
+        raise FieldMapError(f"{path}: {key} метода {method!r} должны быть объектом")
+    return section
 
 
 def person_params(
@@ -529,22 +589,46 @@ class NewDBMethodProvider(BaseProvider):
         merged = [{**params, **mapping.extra_params} for params in param_sets]
         response = await self._client.call(method, *merged)
         mapped = mapping.apply(response.rows)
-        if mapped.unreadable and not mapped.records:
-            # The source answered, and the map read nothing in the answer.
-            # Reporting that as ``NO_RESULTS`` would tell the operator the
-            # register is clean on the strength of a file of wrong paths.
-            raise ProviderUnavailableError(
-                "unexpected_schema",
-                f"Карта полей не разобрала ни одной строки ответа NewDB ({method})",
-            )
         if mapped.unreadable:
+            # **Any** unreadable record fails the call, not just all of them.
+            #
+            # The alternative — keep what parsed, log the rest — is what this
+            # used to do, and it is the quiet version of the failure this whole
+            # project is built against: the report has no way to say "one of the
+            # two notices was dropped", so an answer with a lost row is
+            # indistinguishable from a complete one. A debtor with two pledges,
+            # one of them in a shape the map does not describe, would come back
+            # carrying exactly one, and nothing anywhere would say otherwise.
+            #
+            # Failing the source loses the rows that did parse, and that is the
+            # cheaper loss on purpose: ``unexpected_schema`` reports "не
+            # проверено", which is honest and visible, while a silently short
+            # list reports "вот всё, что есть", which is neither. The map is a
+            # deployment artifact — a half-right one is a thing to fix before
+            # the run of eight hundred, which is what the first single-debtor
+            # run with STORE_RAW_RESPONSES=true is for.
             logger.warning(
                 "newdb.unreadable_rows",
                 method=method,
                 unreadable=mapped.unreadable,
                 parsed=len(mapped.records),
             )
+            raise ProviderUnavailableError(
+                "unexpected_schema",
+                f"Карта полей не разобрала {mapped.unreadable} из "
+                f"{mapped.unreadable + len(mapped.records)} записей ответа NewDB ({method})",
+            )
         return mapped.records, response.raw
+
+    def option(self, method: str, key: str, default: str) -> str:
+        """Настройка разбора из карты полей — та, что не является путём к полю.
+
+        Нужна там, где адаптеру приходится знать имя ключа *внутри* значения:
+        участники дела у КАД приходят списком объектов, и какой в них ключ
+        держит имя, знает контракт деплоя, а не этот код.
+        """
+        value = self._field_maps.require(method).options.get(key)
+        return str(value) if value not in (None, "") else default
 
     def raw_for(self, raw: str) -> str | None:
         return raw if self._settings.store_raw_responses else None

@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from app.domain.enums import (
+    BANKRUPTCY_STATUS_TITLES,
     BUSINESS_ROLE_TITLES,
     COURT_CASE_ROLE_TITLES,
     MATCH_LEVEL_TITLES,
@@ -44,6 +45,14 @@ MAX_LISTED_PROCEEDINGS = 5
 MAX_LISTED_BUSINESSES = 5
 MAX_LISTED_PLEDGES = 5
 MAX_LISTED_CASES = 5
+# Что именно закрывает источник залогов. Ответ pledge_* несёт две ветки — ФНП и
+# Федресурс, — а карта полей описывает один набор строк и читает только первую.
+# Без этой оговорки «залогов не найдено» прочиталось бы как «имущество не
+# обременено», то есть шире проверенного.
+PLEDGE_SCOPE_NOTE = (
+    "Проверен только реестр уведомлений ФНП: лизинг и иные обременения "
+    "Федресурса, а также ипотека в Росреестре сюда не входят."
+)
 DISCLAIMER = "Оценка является аналитической и не заменяет юридическую проверку."
 DEMO_BANNER = "⚠️ ДЕМО-РЕЖИМ: данные вымышленные, внешние источники не опрашивались."
 
@@ -195,7 +204,11 @@ def _bankruptcy_block(report: DebtorReport) -> str:
 
 
 def _bankruptcy_lines(item: BankruptcyRecord) -> list[str]:
-    state = "активно" if item.is_active else "завершено"
+    # Через словарь, а не через ``is_active``: у булева флага два значения, а
+    # состояний три. Источник отдаёт состояние не всегда — ``bankrot_person``,
+    # например, не отдаёт ни процедуры, ни дат, — и непрочитанное состояние,
+    # напечатанное как «завершено», сообщает оператору обратное правде.
+    state = BANKRUPTCY_STATUS_TITLES.get(item.status, "состояние процедуры не определено")
     lines = [f"• {item.procedure or 'процедура банкротства'} — {state}"]
     if item.case_number:
         lines.append(f"  Дело: {item.case_number}")
@@ -244,7 +257,10 @@ def _pledge_block(report: DebtorReport) -> str:
 
     usable = [item for item in report.pledges if item.is_usable]
     if not usable:
-        return f"{header}\nЗаписей в реестре залогов не найдено.\n{_checked_at(result)}"
+        return (
+            f"{header}\nЗаписей в реестре залогов не найдено. "
+            f"{PLEDGE_SCOPE_NOTE}\n{_checked_at(result)}"
+        )
 
     lines = [header]
     for item in usable[:MAX_LISTED_PLEDGES]:
@@ -252,6 +268,7 @@ def _pledge_block(report: DebtorReport) -> str:
     hidden = len(usable) - MAX_LISTED_PLEDGES
     if hidden > 0:
         lines.append(f"…и ещё {hidden}")
+    lines.append(PLEDGE_SCOPE_NOTE)
     lines.append(_checked_at(result))
     return "\n".join(lines)
 
@@ -306,6 +323,11 @@ def _court_lines(item: CourtCase) -> list[str]:
     role = COURT_CASE_ROLE_TITLES.get(item.role, "участник")
     state = "идёт" if item.is_active else "завершено"
     lines = [f"• {item.case_number} — {role}, {state}"]
+    if item.case_type:
+        # Категория дела заполняется картой полей и нормализуется — значит, её
+        # надо и показывать. Для взыскания она не декорация: арбитражное дело,
+        # классифицированное как банкротство, меняет план действий целиком.
+        lines.append(f"  Категория: {truncate(item.case_type, 60)}")
     if item.amount is not None:
         lines.append(f"  {format_amount(item.amount)}")
     if item.court_name:

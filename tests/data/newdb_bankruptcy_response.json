@@ -1,0 +1,82 @@
+{
+    "params": {
+        "innfiz": "270392288605",
+        "country": "ru",
+        "method": "bankrot_person",
+        "newdb_qid": "EOAIIPOM7p-vMygB"
+    },
+    "requestId": "a5962f88-2916-4779-b59d-43c023faa903",
+    "datecreated": "2025-12-06 17:05:34",
+    "state": "complete",
+    "balance": 9933,
+    "tasks": 1,
+    "is_repeat": false,
+    "results": {
+        "bankrot_person": {
+            "result": {
+                "status": 200,
+                "data": [
+                    {
+                        "bankruptcy": [
+                            {
+                                "case_number": "А73-7992/2017",
+                                "case_url": "/legalcases/7975d0c7-9c63-41b4-b649-cd17331c759e",
+                                "status": "Производство по делу завершено",
+                                "messages": [
+                                    {
+                                        "message_info": "2475822 от 20.02.2018",
+                                        "url": "/bankruptmessages/125ea70c-fb5b-29cb-5674-bbc1a56552a8",
+                                        "type": "Сообщение о судебном акте"
+                                    },
+                                    {
+                                        "message_info": "2399553 от 23.01.2018",
+                                        "url": "/bankruptmessages/5f394cfc-149e-b52b-b5d4-f5a018d7d5ba",
+                                        "type": "Сообщение о собрании кредиторов"
+                                    },
+                                    {
+                                        "message_info": "2230490 от 14.11.2017",
+                                        "url": "/bankruptmessages/96fd6a47-5290-3b19-a7c4-7b51d9e8593d",
+                                        "type": "Уведомление о получении требований кредитора"
+                                    }
+                                ]
+                            }
+                        ],
+                        "commmon": {
+                            "type": "person",
+                            "name_or_fio": "Иванов Иван Иванович",    "inn": "270392288605",
+                            "reg_number_type": "ОГРНИП",
+                            "reg_number": "323270000057022",
+                            "activity": "Торговля розничная, осуществляемая непосредственно при помощи информационно-коммуникационной сети Интернет",
+                            "address": null,
+                            "status": null,
+                            "details_url": "/persons/19f439eb-3f9c-4d9e-88f8-94704f04d2ca"
+                        },
+                        "encumbrances": [],
+                        "publications": [
+                            {
+                                "category": "О лице",
+                                "number_date": "2475822 от 20.02.2018",
+                                "title": "Сообщение о судебном акте. о завершении реализации имущества гражданина",
+                                "url": "/bankruptmessages/125ea70c-fb5b-29cb-5674-bbc1a56552a8"
+                            },
+                            {
+                                "category": "О лице",
+                                "number_date": "2399553 от 23.01.2018",
+                                "title": "Сообщение о собрании кредиторов",
+                                "url": "/bankruptmessages/5f394cfc-149e-b52b-b5d4-f5a018d7d5ba"
+                            },
+                            {
+                                "category": "О лице",
+                                "number_date": "2230490 от 14.11.2017",
+                                "title": "Уведомление о получении требований кредитора",
+                                "url": "/bankruptmessages/96fd6a47-5290-3b19-a7c4-7b51d9e8593d"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "taskId": "81bd1835-e01f-4206-8594-172a5c31e80b",
+            "dateupdated": "2025-12-06 17:05:55"
+        }
+    }
+}

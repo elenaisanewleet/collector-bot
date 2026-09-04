@@ -51,7 +51,11 @@ MAX_RECORDS = 50
 # API его отвергает, а в примере ОТВЕТА на той же странице и params.method, и
 # секция results названы ``bankrot_person``. Прав код — чинить обратно не надо.
 NEWDB_METHOD = "bankrot_person"
-FEDRESURS_BANKRUPTCY_HOST = "https://bankrot.fedresurs.ru"
+# Хост для относительных ссылок вида '/legalcases/<guid>'. Взят не с потолка:
+# в том же снимке документации ссылки, которые вендор отдаёт абсолютными
+# (message_url у залогов), стоят на голом fedresurs.ru. Раньше здесь был
+# bankrot.fedresurs.ru — правдоподобная догадка, но именно догадка.
+FEDRESURS_BANKRUPTCY_HOST = "https://fedresurs.ru"
 
 
 class FedresursProvider(BaseProvider):
@@ -194,16 +198,19 @@ class NewDBBankruptcyProvider(NewDBMethodProvider):
 def _searched_by_inn(record: BankruptcyRecord, inn: str) -> BankruptcyRecord:
     """Carry the ИНН we searched by into a record that has none of its own.
 
-    The method's rows are cases, and a case carries a number and a status but
-    not the debtor: the identity sits in a sibling block of the response that a
-    flat field map cannot reach. Without this the record would arrive with no
-    identifiers at all, the matcher would rate it a weak match, and a real
-    bankruptcy found by the debtor's own ИНН would be dropped from the report as
-    somebody else's.
+    A row of this method is a *case*, and a case carries a number and a status
+    but not the debtor: the identity sits in the ``commmon`` block beside the
+    array of cases. Without any ИНН the record arrives with no identifiers at
+    all, the matcher rates it a weak match, and a real bankruptcy found by the
+    debtor's own ИНН is dropped from the report as somebody else's.
 
-    Claiming the ИНН is not a guess: it is the parameter the search was made
-    with, and the source answers about that person. The debtor's *name* is not
-    filled in for the same reason in reverse — nothing in the row asserts it.
+    Only when the record has none of its own, and that condition is the whole
+    safety of it. ``row_fields`` in the shipped map reads ``commmon.inn``, so a
+    response describing a second subject arrives carrying *that* subject's ИНН,
+    the matcher sees the contradiction and the case does not become the
+    debtor's. Where a deployment's map omits ``row_fields``, this falls back to
+    the question that was asked — which is sound for the one-subject answer the
+    method documents, and is the reason the shipped map does not omit it.
     """
     if record.inn is None:
         record.inn = inn
@@ -215,8 +222,9 @@ def _searched_by_inn(record: BankruptcyRecord, inn: str) -> BankruptcyRecord:
 def _absolute_url(url: str) -> str:
     """``/legalcases/<guid>`` -> a link that can actually be clicked.
 
-    The vendor returns Федресурс paths, not URLs. The host is inferred from the
-    path shape and is not verified; a wrong host and a bare path are equally
-    broken, and a working link is worth the inference.
+    The vendor returns Федресурс paths, not URLs. The host is taken from the
+    absolute links the same vendor returns elsewhere in the same snapshot and is
+    still not verified against a live one; a wrong host and a bare path are
+    equally broken, and a working link is worth the inference.
     """
     return f"{FEDRESURS_BANKRUPTCY_HOST}{url}" if url.startswith("/") else url

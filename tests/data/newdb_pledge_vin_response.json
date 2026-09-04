@@ -1,0 +1,59 @@
+{
+  "params": {
+    "method": "pledge_vin",
+    "country": "ru",
+    "vin": "JTEHD21A850036287",
+    "newdb_qid": "EK0LIPKclrO0MygC"
+  },
+  "requestId": "a5962f88-2926-4279-b59d-43c023faa195",
+  "datecreated": "2025-12-22 17:10:18",
+  "state": "complete",
+  "balance": 7977,
+  "tasks": 1,
+  "is_repeat": false,
+  "results": {
+    "pledge_vin": {
+      "result": {
+        "status": 200,
+        "data": [
+          {
+            "fnp": [
+              {
+                "source": "ФНП",
+                "registry": "Реестр уведомлений о залоге движимого имущества",
+                "message_number_and_date": "2015-000-291842-833 от 29.01.2015",
+                "reference_number": "2015-000-291842-833",
+                "message_type": "Возникновение залога",
+                "pledge_subject_ids_raw": "JTEHD21A850036287",
+                "pledgor": "Игорь Юрьевич Семенов",
+                "pledgee": "АКЦИОНЕРНЫЙ БАНК \"ИНТЕРПРОГРЕССБАНК\" (ЗАКРЫТОЕ АКЦИОНЕРНОЕ ОБЩЕСТВО)",
+                "guid": "e612c5ce-2e10-3d20-9112-cf520df444ac",
+                "fnp_url": "https://www.reestr-zalogov.ru/search/notification/e612c5ce-2e10-3d20-9112-cf520df444ac",
+                "json_extra": {
+                  "registrationTime": "2015-01-29T16:40:08",
+                  "referenceNumber": "2015-000-291842-833",
+                  "guid": "e612c5ce-2e10-3d20-9112-cf520df444ac",
+                  "pledgors": [
+                    "Игорь Юрьевич Семенов"
+                  ],
+                  "pledgees": [
+                    "АКЦИОНЕРНЫЙ БАНК \"ИНТЕРПРОГРЕССБАНК\" (ЗАКРЫТОЕ АКЦИОНЕРНОЕ ОБЩЕСТВО)"
+                  ],
+                  "subjects": [
+                    "JTEHD21A850036287"
+                  ],
+                  "fnpUrl": "https://www.reestr-zalogov.ru/search/notification/e612c5ce-2e10-3d20-9112-cf520df444ac"
+                }
+              }
+            ],
+            "fedresurs": [],
+            "fnp_urls": [
+              "https://www.reestr-zalogov.ru/search/notification/e612c5ce-2e10-3d20-9112-cf520df444ac"
+            ]
+          }
+        ]
+      },
+      "dateupdated": "2025-12-22 17:10:33"
+    }
+  }
+}

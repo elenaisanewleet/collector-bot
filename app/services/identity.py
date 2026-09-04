@@ -3,8 +3,14 @@
 This is the safety-critical part of the tool. Two people can share a name, and
 acting on someone else's enforcement proceedings is both wrong and expensive, so
 a name match on its own never produces a confirmed result. Confidence only
-reaches the confirmed band when a discriminating identifier — date of birth or
-INN — agrees.
+reaches the confirmed band when a discriminating identifier — date of birth,
+INN, or a VIN the operator themself put in the query — agrees.
+
+The mirror-image failure is just as bad and less obvious: a record that *is* the
+debtor's, scored as somebody else's, vanishes from the report and the score
+rewards its absence. Two guards against it live here — names are compared
+without regard to word order (:func:`app.domain.identity.compare_names`), and an
+exact query VIN carries a record that has no other identifier at all.
 """
 
 from __future__ import annotations
@@ -12,7 +18,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from app.domain.identity import PersonName, SearchSubject, normalize_phone
+from app.domain.identity import (
+    NameMatch,
+    PersonName,
+    SearchSubject,
+    compare_names,
+    normalize_phone,
+    normalize_vin,
+)
 from app.domain.models import (
     BankruptcyRecord,
     BusinessRelation,
@@ -21,6 +34,7 @@ from app.domain.models import (
     InternalDebtorRecord,
     PledgeRecord,
     SourcedFact,
+    VehicleRecord,
 )
 from app.utils.hashing import normalize_token
 
@@ -28,6 +42,12 @@ from app.utils.hashing import normalize_token
 # and a date-of-birth conflict always sinks a record.
 FULL_NAME_MATCH = 0.60
 SHORT_NAME_MATCH = 0.45
+# «Бычков Д.Ю.»: фамилия целиком, имя и отчество — инициалами. Меньше короткого
+# совпадения, потому что доказывает меньше, но обязательно больше, чем
+# ``NAME_UNKNOWN``: имя, которое сошлось хотя бы инициалами, не может стоить
+# дешевле отсутствующего. Само по себе оно по-прежнему не доводит запись даже до
+# «возможного совпадения» — только вместе с датой рождения или ИНН.
+INITIALS_NAME_MATCH = 0.30
 NAME_UNKNOWN = 0.25
 BIRTH_DATE_MATCH_BONUS = 0.30
 INN_MATCH_BONUS = 0.30
@@ -37,6 +57,8 @@ NO_DISCRIMINATOR_PENALTY = -0.05
 COMMON_SURNAME_PENALTY = -0.05
 CONFLICTING_BIRTH_DATE_CONFIDENCE = 0.05
 IDENTIFIER_LOOKUP_CONFIDENCE = 1.0
+# A VIN the operator typed into the query, echoed back by the record.
+VIN_QUERY_MATCH_CONFIDENCE = 0.95
 
 # Surnames common enough that a name match carries noticeably less evidence.
 COMMON_SURNAMES: frozenset[str] = frozenset(
@@ -116,6 +138,7 @@ class IdentityMatcher:
                     reasons=(*reasons, "дата рождения не совпадает"),
                 )
 
+        contradicted = False
         if subject.inn and record_inn:
             if _digits_equal(subject.inn, record_inn):
                 confidence += INN_MATCH_BONUS
@@ -123,10 +146,17 @@ class IdentityMatcher:
             else:
                 confidence += INN_MISMATCH_PENALTY
                 reasons = (*reasons, "ИНН не совпадает")
+                contradicted = True
 
         if subject.phone and record_phone and _phones_equal(subject.phone, record_phone):
             confidence += PHONE_MATCH_BONUS
             reasons = (*reasons, "совпадает телефон")
+
+        if not contradicted and _vin_from_query_matches(subject, record):
+            return MatchAssessment(
+                confidence=max(_clamp(confidence), VIN_QUERY_MATCH_CONFIDENCE),
+                reasons=(*reasons, "совпадает VIN, по которому шёл поиск"),
+            )
 
         if not _has_discriminator(subject, record_birth_date, record_inn):
             confidence += NO_DISCRIMINATOR_PENALTY
@@ -142,12 +172,18 @@ class IdentityMatcher:
     ) -> tuple[float, tuple[str, ...]]:
         if subject_name is None or not record_name:
             return NAME_UNKNOWN, ("ФИО не сопоставлено",)
-        normalized_record = normalize_token(record_name)
-        if normalized_record == subject_name.normalized:
-            return FULL_NAME_MATCH, ("полное совпадение ФИО",)
-        if _short_form(normalized_record) == subject_name.normalized_short:
-            return SHORT_NAME_MATCH, ("совпадают фамилия и имя",)
-        return 0.0, ("ФИО не совпадает",)
+        # Order-free by construction: see ``compare_names``. Sources disagree
+        # about where the surname goes, and that disagreement is about
+        # formatting, not about who the person is.
+        match compare_names(subject_name, record_name):
+            case NameMatch.FULL:
+                return FULL_NAME_MATCH, ("полное совпадение ФИО",)
+            case NameMatch.SHORT:
+                return SHORT_NAME_MATCH, ("совпадают фамилия и имя",)
+            case NameMatch.INITIALS:
+                return INITIALS_NAME_MATCH, ("фамилия совпадает, имя — по инициалам",)
+            case _:
+                return 0.0, ("ФИО не совпадает",)
 
     def annotate(
         self,
@@ -225,6 +261,45 @@ def _record_phone(record: SourcedFact) -> str | None:
     return record.phone if isinstance(record, InternalDebtorRecord) else None
 
 
+def _record_vin(record: SourcedFact) -> str | None:
+    if isinstance(record, (PledgeRecord, VehicleRecord, InternalDebtorRecord)):
+        return record.vin
+    return None
+
+
+def _vin_from_query_matches(subject: SearchSubject, record: SourcedFact) -> bool:
+    """Did the operator ask about this exact vehicle, and does the record echo it?
+
+    Why this is a confidence floor and not a hole in the matching
+    ------------------------------------------------------------
+    ``pledge_vin`` answers with a notice and a pledgor name, and with neither a
+    date of birth nor an ИНН — so the ordinary rules cap such a record at a weak
+    match and the report drops it. The record then disappears *even though the
+    query was an exact 17-character VIN*, which is a stronger identifier than
+    anything the answer could have contained. That is the same inversion the
+    rest of this module exists to prevent, arriving from the other side.
+
+    The floor is granted by the **query**, never by the record, and that is what
+    keeps it honest:
+
+    *   It needs ``subject.vehicle.vin`` — a VIN the operator typed. A record
+        cannot talk its way into a match by carrying a VIN we never asked about.
+    *   Both sides go through :func:`normalize_vin`, so only a real VIN counts.
+        ``pledge_subject_ids_raw`` also carries non-VIN equipment numbers, and a
+        short shared identifier is not a unique one.
+    *   It never overrides a contradiction: a conflicting date of birth has
+        already returned above, and a conflicting ИНН suppresses it here. Only a
+        *name* disagreement is overridden, deliberately — for a VIN search the
+        vehicle is the subject, the pledgor may be a previous owner or a name
+        we never knew, and "this car is somebody's collateral" is true and
+        material either way.
+    """
+    subject_vin = normalize_vin(subject.vehicle.vin) if subject.vehicle else None
+    if subject_vin is None:
+        return False
+    return subject_vin == normalize_vin(_record_vin(record))
+
+
 def _has_discriminator(
     subject: SearchSubject, record_birth_date: date | None, record_inn: str | None
 ) -> bool:
@@ -235,10 +310,6 @@ def _has_discriminator(
 
 def _is_common_surname(name: PersonName) -> bool:
     return normalize_token(name.last_name) in COMMON_SURNAMES
-
-
-def _short_form(normalized_name: str) -> str:
-    return " ".join(normalized_name.split()[:2])
 
 
 def _digits_equal(left: str, right: str) -> bool:

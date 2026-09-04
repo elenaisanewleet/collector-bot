@@ -27,10 +27,19 @@ class FieldMapError(ProviderError):
 class FieldMap:
     """Maps a vendor payload onto the flat keys a provider expects.
 
-    ``records_path`` locates the array of records inside the response envelope,
-    and ``fields`` maps each domain key to a dotted path within one record.
+    ``records_path`` locates the array of records inside *the payload this map is
+    handed*, and ``fields`` maps each domain key to a dotted path within one
+    record. What that payload is depends on the caller: the vendor adapters pass
+    the whole response body, so the path is counted from the envelope, while
+    :class:`app.providers.newdb.MethodMap` has already unwrapped the envelope and
+    passes one row of ``data``, so the path names the array nested inside that
+    row. Both are "the array of records inside what you gave me"; neither is
+    "somewhere in the response".
+
     Missing paths yield ``None`` rather than raising: vendors omit fields, and a
-    partially-populated record is still useful.
+    partially-populated record is still useful. Whether a record that came out
+    entirely empty is a finding or a broken map is a question for the caller,
+    which is the only one that knows what it asked for.
     """
 
     def __init__(

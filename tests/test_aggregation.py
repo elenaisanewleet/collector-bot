@@ -10,9 +10,9 @@ from collections.abc import Sequence
 
 import pytest
 
-from app.domain.enums import ProviderName, ProviderStatus
+from app.domain.enums import BankruptcyStatus, ProviderName, ProviderStatus
 from app.domain.identity import SearchSubject
-from app.domain.models import ProviderResult
+from app.domain.models import BankruptcyRecord, ProviderResult
 from app.services.aggregation import Aggregator
 from app.services.reporting import render_report
 from app.services.scoring import RecoveryScoreEngine
@@ -223,6 +223,57 @@ def test_pledge_is_rendered_with_its_holder(person_subject: SearchSubject) -> No
     assert "Залогодержатель:" in text
 
 
+@pytest.mark.parametrize(
+    "status_and_records",
+    [(ProviderStatus.NO_RESULTS, []), (ProviderStatus.SUCCESS, [make_pledge()])],
+)
+def test_the_pledge_block_never_promises_unencumbered_property(
+    person_subject: SearchSubject,
+    status_and_records: tuple[ProviderStatus, list[object]],
+) -> None:
+    """Читается одна ветка ответа из двух — и раздел говорит именно это.
+
+    Ответ ``pledge_*`` несёт и ФНП, и Федресурс, а карта полей описывает один
+    набор строк. Пустой ФНП поэтому означает «в реестре уведомлений не
+    найдено», а не «имущество не обременено»: ипотеки в ФНП нет вовсе, а
+    договор лизинга лежит в непрочитанной ветке того же ответа.
+    """
+    status, records = status_and_records
+    text = render_for(
+        person_subject,
+        [provider_result(ProviderName.PLEDGE, status, records)],  # type: ignore[arg-type]
+    )
+
+    assert "не обременено" not in text
+    assert "Проверен только реестр уведомлений ФНП" in text
+
+
+def test_a_bankruptcy_of_unknown_state_is_not_rendered_as_completed(
+    person_subject: SearchSubject,
+) -> None:
+    """Третье состояние есть, и печатать его нужно третьим.
+
+    ``bankrot_person`` не отдаёт ни процедуры, ни дат, а состояние — одной
+    строкой, которая может оказаться незнакомой. Строка отчёта была
+    двузначной — «активно» или «завершено», — и всё непрочитанное доставалось
+    второму варианту: оператор читал «дело закрыто» там, где источник ничего
+    подобного не говорил.
+    """
+    record = BankruptcyRecord(
+        debtor_name="Тестов Андрей Сергеевич",
+        case_number="А40-1/2026",
+        status=BankruptcyStatus.UNKNOWN,
+    )
+    text = render_for(
+        person_subject,
+        [provider_result(ProviderName.FEDRESURS, ProviderStatus.SUCCESS, [record])],
+    )
+
+    assert "А40-1/2026" in text
+    assert "состояние процедуры не определено" in text
+    assert "завершено" not in text
+
+
 def test_court_block_says_what_it_does_not_cover(person_subject: SearchSubject) -> None:
     """«Дел не найдено» без оговорки прочиталось бы как «в суд на него не подавали»."""
     text = render_for(
@@ -241,3 +292,20 @@ def test_court_case_is_rendered_with_role_and_state(person_subject: SearchSubjec
     assert "А40-227414/2026" in text
     assert "ответчик" in text
     assert "идёт" in text
+
+
+def test_the_case_category_is_shown_when_the_map_read_one(person_subject: SearchSubject) -> None:
+    """Категорию дела карта заполняет и нормализует — значит, её видно.
+
+    Арбитражное дело, классифицированное как банкротство, меняет план действий
+    целиком; прочитать его и не показать — это отдельная разновидность того же
+    «найдено, но не показано».
+    """
+    case = make_court_case()
+    case.case_type = "банкротство"
+    text = render_for(
+        person_subject,
+        [provider_result(ProviderName.COURT, ProviderStatus.SUCCESS, [case])],
+    )
+
+    assert "Категория: банкротство" in text

@@ -155,9 +155,26 @@ class BusinessStatus(StrEnum):
 
 
 class BankruptcyStatus(StrEnum):
+    """Состояние процедуры банкротства.
+
+    ``UNKNOWN`` — не «нет процедуры» и не «процедура завершена»: дело найдено, а
+    его состояние в ответе источника не прочитано. Это самостоятельный ответ, и
+    показывать его надо им же.
+    """
+
     ACTIVE = "active"
     COMPLETED = "completed"
     UNKNOWN = "unknown"
+
+
+BANKRUPTCY_STATUS_TITLES: dict[BankruptcyStatus, str] = {
+    BankruptcyStatus.ACTIVE: "активно",
+    BankruptcyStatus.COMPLETED: "завершено",
+    # Не «завершено»: непрочитанное состояние, поданное как завершённая
+    # процедура, читается взыскателем как «путь свободен» — и ровно этим
+    # заканчивается для него дело, если процедура на самом деле идёт.
+    BankruptcyStatus.UNKNOWN: "состояние процедуры не определено",
+}
 
 
 class ProceedingStatus(StrEnum):

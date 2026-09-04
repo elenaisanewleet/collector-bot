@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Mapping, Sequence
 from datetime import date
@@ -109,6 +110,10 @@ FIELD_MAP: dict[str, Any] = {
 DOCUMENTED_MAP: dict[str, Any] = {
     "bankrot_person": {
         "records_path": "bankruptcy",
+        "row_fields": {
+            "debtor_name": "commmon.name_or_fio",
+            "inn": "commmon.inn",
+        },
         "fields": {
             "case_number": "case_number",
             "status": "status",
@@ -121,7 +126,8 @@ DOCUMENTED_MAP: dict[str, Any] = {
             "status": "status",
             "participants_defendants": "participants.defendants",
             "participants_plaintiffs": "participants.plaintiffs",
-        }
+        },
+        "options": {"participant_name_key": "name"},
     },
     "pledge_person": {
         "records_path": "fnp",
@@ -250,6 +256,36 @@ def test_field_map_rejects_a_non_object_entry(tmp_path: Path) -> None:
         NewDBFieldMaps.load(path)
 
 
+def test_field_map_rejects_row_fields_without_a_nested_array(tmp_path: Path) -> None:
+    """Без вложенного массива строка ответа и есть запись.
+
+    ``row_fields`` описывают контейнер, в котором записи лежат; там, где
+    контейнера нет, они молча делали бы то же, что ``fields``, и файл
+    утверждал бы про ответ то, чего в нём нет.
+    """
+    path = tmp_path / "broken.json"
+    path.write_text(
+        json.dumps(
+            {"bankrot_person": {"fields": {"case_number": "n"}, "row_fields": {"inn": "i"}}}
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FieldMapError):
+        NewDBFieldMaps.load(path)
+
+
+def test_field_map_rejects_non_object_options(tmp_path: Path) -> None:
+    path = tmp_path / "broken.json"
+    path.write_text(
+        json.dumps({"arbitr_person": {"fields": {"case_number": "n"}, "options": "name"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FieldMapError):
+        NewDBFieldMaps.load(path)
+
+
 def test_field_map_rejects_unreadable_json(tmp_path: Path) -> None:
     path = tmp_path / "broken.json"
     path.write_text("{not json", encoding="utf-8")
@@ -346,6 +382,71 @@ async def test_a_row_whose_nested_array_is_missing_is_not_an_empty_register(
     result = await NewDBBankruptcyProvider(settings, maps).fetch(inn_subject)
 
     assert result.error_code == "unexpected_schema"
+
+
+@pytest.mark.parametrize("instead_of_an_array", [None, 0, "нет данных", "", {"": ""}])
+@respx.mock
+async def test_a_nested_array_that_is_not_an_array_is_not_an_empty_register(
+    live_settings: Settings,
+    tmp_path: Path,
+    inn_subject: SearchSubject,
+    instead_of_an_array: Any,
+) -> None:
+    """``"bankruptcy": []`` — ответ. ``"bankruptcy": "нет данных"`` — не ответ.
+
+    Пропажу раньше ловило только ``None``, а всё остальное — скаляр, строка,
+    ноль — доходило до извлечения записей, там превращалось в пустой список и
+    выходило из источника как «проверено, ничего нет». Показать «в реестре
+    чисто» на строке, которую никто не смог прочитать, — это ровно та подмена,
+    против которой написан весь этот механизм.
+    """
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            200, json=envelope("bankrot_person", data=[{"bankruptcy": instead_of_an_array}])
+        )
+    )
+
+    result = await NewDBBankruptcyProvider(settings, maps).fetch(inn_subject)
+
+    assert result.error_code == "unexpected_schema"
+    assert not result.status.is_answered
+
+
+@respx.mock
+async def test_one_unreadable_record_fails_the_call_even_if_another_parsed(
+    live_settings: Settings, tmp_path: Path, person_subject: SearchSubject
+) -> None:
+    """Из двух уведомлений разобралось одно — показать одно нельзя.
+
+    Раньше «не разобрано» побеждало только когда не разобралось НИЧЕГО, а
+    частичная потеря уходила в лог. Отчёту нечем сказать «одно уведомление
+    выпало», поэтому короткий список неотличим от полного: у должника с двумя
+    залогами оператор увидел бы один и никакого предупреждения. Источник целиком
+    становится «не проверено» — потеря видимая и честная, в отличие от тихой.
+    """
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    container = {
+        "fnp": [
+            {
+                "reference_number": "2025-012-232030-634",
+                "message_type": "Возникновение залога",
+                "pledgor": "Тестов Андрей Сергеевич",
+            },
+            # Та же ветка, но строка другой формы: ни одного знакомого ключа.
+            {"notificationNumber": "2025-012-232031-100", "debtor": "Тестов А.С."},
+        ]
+    }
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("pledge_person", data=[container]))
+    )
+
+    result = await NewDBPledgeProvider(settings, maps).fetch(person_subject)
+
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "unexpected_schema"
+    assert result.records == []
+    assert "1 из 2" in (result.error_message or "")
 
 
 # ---------------------------------------------------------------- not configured
@@ -505,7 +606,7 @@ async def test_bankruptcy_record_carries_the_inn_it_was_searched_by(
     assert isinstance(record, BankruptcyRecord)
     assert record.inn == "770912345601"
     # Относительный путь Федресурса — не ссылка; в отчёт он идёт с хостом.
-    assert record.source_url == "https://bankrot.fedresurs.ru/legalcases/7975d0c7"
+    assert record.source_url == "https://fedresurs.ru/legalcases/7975d0c7"
 
 
 @respx.mock
@@ -689,6 +790,98 @@ async def test_arbitration_role_comes_from_the_participant_lists(
     assert record.is_against_debtor
     # Дело найдено по ИНН должника — этот ИНН и стоит на записи.
     assert record.inn == "770912345601"
+
+
+@respx.mock
+async def test_arbitration_role_survives_an_abbreviated_participant(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    """КАД сокращает участников, и роль не должна на этом теряться.
+
+    В примере документации третьи лица записаны как «Бычков Д.Ю.» — точному
+    равенству строк такое имя не равно ничему. Промах давал роль OTHER, дело
+    выпадало из исков к должнику, и скоринг начислял плюс «исков не найдено»,
+    печатая при этом само дело в отчёте выше.
+    """
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    row = {
+        "case_number": "А57-10442/2025",
+        "status": "Рассматривается в первой инстанции",
+        "participants": {
+            "plaintiffs": [{"name": "ПАО Сбербанк"}],
+            "defendants": [{"name": "ИП Тестов А.С."}],
+        },
+    }
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("arbitr_person", data=[row]))
+    )
+
+    result = await NewDBArbitrationProvider(settings, maps).fetch(inn_subject)
+
+    record = result.records[0]
+    assert isinstance(record, CourtCase)
+    assert record.role is CourtCaseRole.DEFENDANT
+    assert record.is_against_debtor
+
+
+@respx.mock
+async def test_the_key_holding_a_participant_name_comes_from_the_map(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    """Путь до списка участников живёт в карте — имя ключа внутри тоже.
+
+    ``"name"`` — то, что показывает документация, и не более того. Деплою,
+    контракт которого зовёт этот ключ иначе, захардкоженное имя стоило бы роли
+    по каждому делу, причём молча.
+    """
+    field_map = copy.deepcopy(DOCUMENTED_MAP)
+    field_map["arbitr_person"]["options"] = {"participant_name_key": "party.full_name"}
+    settings, maps = deployment(live_settings, tmp_path, field_map)
+    row = {
+        "case_number": "А57-10442/2025",
+        "participants": {
+            "defendants": [{"party": {"full_name": "Тестов Андрей Сергеевич"}}],
+        },
+    }
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("arbitr_person", data=[row]))
+    )
+
+    result = await NewDBArbitrationProvider(settings, maps).fetch(inn_subject)
+
+    record = result.records[0]
+    assert isinstance(record, CourtCase)
+    assert record.role is CourtCaseRole.DEFENDANT
+
+
+@respx.mock
+async def test_a_stranger_in_the_participant_list_does_not_make_a_role(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    """Свобода в написании имени — не свобода совпадений.
+
+    Дело нашлось по ИНН должника, но в списках его самого нет: он проходит
+    третьим лицом или дело досталось нам за компанию. Роль остаётся OTHER, и в
+    иски к должнику дело не попадает.
+    """
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    row = {
+        "case_number": "А57-10442/2025",
+        "participants": {
+            "plaintiffs": [{"name": "ПАО Сбербанк"}],
+            "defendants": [{"name": "Тестова Мария Сергеевна"}, {"name": "Тестов П.С."}],
+        },
+    }
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("arbitr_person", data=[row]))
+    )
+
+    result = await NewDBArbitrationProvider(settings, maps).fetch(inn_subject)
+
+    record = result.records[0]
+    assert isinstance(record, CourtCase)
+    assert record.role is CourtCaseRole.OTHER
+    assert not record.is_against_debtor
 
 
 @respx.mock

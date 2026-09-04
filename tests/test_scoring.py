@@ -13,10 +13,16 @@ from typing import Any
 
 import pytest
 
-from app.domain.enums import ProviderName, ProviderStatus, ScoreCategory
+from app.domain.enums import (
+    BankruptcyStatus,
+    PledgeStatus,
+    ProviderName,
+    ProviderStatus,
+    ScoreCategory,
+)
 from app.domain.identity import SearchSubject
-from app.domain.models import DebtorReport, FactRecord
-from app.domain.scoring import BASE_SCORE
+from app.domain.models import BankruptcyRecord, DebtorReport, FactRecord
+from app.domain.scoring import ACTIVE_BANKRUPTCY_PENALTY, BASE_SCORE
 from app.services.scoring import RecoveryScoreEngine
 from tests.conftest import (
     make_bankruptcy,
@@ -81,6 +87,33 @@ def test_active_bankruptcy_sinks_the_score(
     assert score.score == BASE_SCORE - 35
     assert score.category == ScoreCategory.LOW.value
     assert any(factor.name == "active_bankruptcy" for factor in score.factors)
+
+
+def test_a_bankruptcy_whose_state_was_not_read_gets_no_discount(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Непрочитанное состояние процедуры — не завершённая процедура.
+
+    Между активным банкротством и завершённым 25 баллов разницы, и запись с
+    непрочитанным состоянием попадала в дешёвую половину: источник промолчал —
+    должник получил скидку. Дороже ошибиться в другую сторону: недооценённая
+    живая процедура — это поданный иск и потраченная пошлина.
+    """
+    record = BankruptcyRecord(
+        debtor_name="Тестов Андрей Сергеевич",
+        case_number="А40-1/2026",
+        status=BankruptcyStatus.UNKNOWN,
+    )
+    record.match_confidence = 1.0
+    report = build_report(person_subject, fedresurs=(ProviderStatus.SUCCESS, [record]))
+
+    score = score_engine.evaluate(report)
+    factor = next(factor for factor in score.factors if factor.name == "bankruptcy_state_unknown")
+
+    assert factor.delta == ACTIVE_BANKRUPTCY_PENALTY
+    assert not any(factor.name == "completed_bankruptcy" for factor in score.factors)
+    # И тем более не плюс за чистую проверку: дело-то нашлось.
+    assert not any(factor.name == "no_bankruptcy" for factor in score.factors)
 
 
 def test_clean_bankruptcy_check_earns_a_bonus(
@@ -283,6 +316,45 @@ def test_excluded_pledge_is_not_counted_against_the_debtor(
 
     assert not any(factor.name == "active_pledge" for factor in score.factors)
     assert any(factor.name == "no_pledges" for factor in score.factors)
+
+
+def test_a_notice_of_unknown_state_cancels_the_no_pledge_bonus(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Уведомление, тип сообщения которого не прочитан, — не снятый залог.
+
+    Тот же класс ошибки, что и у банкротства, и та же цена: плюс «действующих
+    залогов не найдено» означает «мы посмотрели и ничего, что могло бы
+    действовать, не увидели». Найденная запись с непрочитанным состоянием это
+    утверждение опровергает — в отчёте она печатается как «состояние записи не
+    определено», и превращать её в плюс нельзя. Штрафа при этом нет:
+    домысливать «залог действует» тоже не на чем.
+    """
+    record = make_pledge()
+    record.status = PledgeStatus.UNKNOWN
+    report = build_report(person_subject, pledge=(ProviderStatus.SUCCESS, [record]))
+
+    score = score_engine.evaluate(report)
+    names = {factor.name for factor in score.factors}
+
+    assert "no_pledges" not in names
+    assert "active_pledge" not in names
+
+
+def test_the_no_pledge_bonus_claims_only_what_was_read(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Плюс называет прочитанный реестр, а не всё имущество должника.
+
+    Из двух веток ответа ``pledge_*`` карта полей читает одну — ФНП. Пока это
+    так, «имущество не обременено» шире проверенного ровно на лизинг, иные
+    обременения Федресурса и ипотеку, которой в ФНП нет вовсе.
+    """
+    report = build_report(person_subject, pledge=(ProviderStatus.NO_RESULTS, []))
+    factor = next(f for f in score_engine.evaluate(report).factors if f.name == "no_pledges")
+
+    assert "не обременено" not in factor.reason
+    assert "ФНП" in factor.reason
 
 
 def test_pledge_and_claim_counts_agree_in_russian(

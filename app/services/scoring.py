@@ -18,6 +18,8 @@ from decimal import Decimal
 
 from app.domain.enums import (
     PROVIDER_TITLES,
+    BankruptcyStatus,
+    PledgeStatus,
     ProviderName,
     ProviderStatus,
 )
@@ -52,6 +54,7 @@ from app.domain.scoring import (
     PROBABLE_MATCH_CONFIDENCE_FACTOR,
     PROVIDER_CONFIDENCE_WEIGHTS,
     TERMINATED_BUSINESS_PENALTY,
+    UNKNOWN_BANKRUPTCY_STATE_PENALTY,
     WEAK_IDENTITY_CONFIDENCE_FACTOR,
     categorize,
     clamp,
@@ -110,7 +113,29 @@ def _bankruptcy_factors(report: DebtorReport) -> list[ScoreFactor]:
             )
         ]
 
-    completed = [item for item in report.bankruptcies if item.is_usable and not item.is_active]
+    usable = [item for item in report.bankruptcies if item.is_usable]
+
+    # «Состояние не прочитано» — это не «процедура завершена». ``bankrot_person``
+    # не отдаёт ни процедуры, ни дат начала и окончания, поэтому у найденного
+    # дела состояние берётся из одной строки статуса, и незнакомая формулировка
+    # оставляет запись в UNKNOWN. Пока она попадала в ``completed``, найденное
+    # дело стоило должнику −10 вместо −35: неполнота ответа превращалась в
+    # скидку. Проверяется раньше завершённых: из двух дел решает худшее.
+    unknown = [item for item in usable if item.status is BankruptcyStatus.UNKNOWN]
+    if unknown:
+        return [
+            ScoreFactor(
+                name="bankruptcy_state_unknown",
+                delta=UNKNOWN_BANKRUPTCY_STATE_PENALTY,
+                reason=(
+                    "найдено дело о банкротстве, состояние процедуры источник не сообщил — "
+                    "считаем как незавершённое"
+                ),
+                source=ProviderName.FEDRESURS,
+            )
+        ]
+
+    completed = [item for item in usable if not item.is_active]
     if completed:
         return [
             ScoreFactor(
@@ -259,11 +284,30 @@ def _pledge_factors(report: DebtorReport) -> list[ScoreFactor]:
 
     active = report.active_pledges
     if not active:
+        # Уведомление, состояние которого прочитать не удалось, — это не
+        # снятый залог. Плюс здесь означает «мы посмотрели и ничего, что могло
+        # бы действовать, не увидели», поэтому такая запись его отменяет: у
+        # ФНП состояния как поля нет вообще, есть тип сообщения, и незнакомый
+        # тип оставляет запись UNKNOWN. Штрафа при этом нет — залоговый штраф
+        # считается за штуку и имеет потолок, а домысливать «залог
+        # действует» по непрочитанному типу сообщения не на чем.
+        unknown = [
+            item
+            for item in report.pledges
+            if item.is_usable and item.status is PledgeStatus.UNKNOWN
+        ]
+        if unknown:
+            return []
+        # Названо ровно тем, что проверено. Ответ pledge_* несёт две ветки, а
+        # карта полей читает одну — ФНП; ипотеки и лизинга здесь нет вовсе.
+        # «Имущество не обременено» было бы выводом обо всём имуществе на
+        # основании одного реестра движимого, и одного действующего лизинга
+        # хватило бы, чтобы этот плюс оказался ложью.
         return [
             ScoreFactor(
                 name="no_pledges",
                 delta=NO_PLEDGE_BONUS,
-                reason="действующих залогов не найдено — имущество не обременено",
+                reason="в реестре уведомлений ФНП действующих залогов не найдено",
                 source=ProviderName.PLEDGE,
             )
         ]

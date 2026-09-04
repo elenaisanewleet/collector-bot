@@ -22,16 +22,22 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.domain.enums import CourtCaseRole, ProviderName, ProviderStatus
-from app.domain.identity import PersonName, SearchSubject
+from app.domain.identity import NameMatch, PersonName, SearchSubject, compare_names
 from app.domain.models import CourtCase, ProviderResult
-from app.providers.mapping import as_text
+from app.providers.mapping import as_text, dig
 from app.providers.newdb import NewDBMethodProvider, individual_inn, inn_params
 from app.utils.dates import parse_date, utcnow
-from app.utils.hashing import normalize_token
 from app.utils.money import parse_amount
 
 NEWDB_METHOD = "arbitr_person"
 MAX_RECORDS = 50
+
+# Участник дела приходит объектом, а не строкой, и ключ с именем внутри него —
+# такая же часть контракта вендора, как путь до самого списка. Путь живёт в
+# карте полей, поэтому и ключ живёт там же: ``options.participant_name_key``.
+# Здесь — только значение по умолчанию, то самое, что стоит в документации.
+PARTICIPANT_NAME_KEY_OPTION = "participant_name_key"
+DEFAULT_PARTICIPANT_NAME_KEY = "name"
 
 _DEFENDANT_TOKENS = frozenset({"ответчик", "defendant", "должник"})
 _PLAINTIFF_TOKENS = frozenset({"истец", "plaintiff", "заявитель", "взыскатель"})
@@ -73,10 +79,14 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
             )
 
         rows, raw = await self.rows_for(NEWDB_METHOD, inn_params(inn))
+        name_key = self.option(
+            NEWDB_METHOD, PARTICIPANT_NAME_KEY_OPTION, DEFAULT_PARTICIPANT_NAME_KEY
+        )
         parsed = [
             case
             for row in rows[:MAX_RECORDS]
-            if (case := _to_case(row, subject=subject, searched_inn=inn)) is not None
+            if (case := _to_case(row, subject=subject, searched_inn=inn, name_key=name_key))
+            is not None
         ]
         return ProviderResult(
             provider=self.name,
@@ -87,7 +97,7 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
 
 
 def _to_case(
-    record: Mapping[str, Any], *, subject: SearchSubject, searched_inn: str
+    record: Mapping[str, Any], *, subject: SearchSubject, searched_inn: str, name_key: str
 ) -> CourtCase | None:
     """A row with no case number is not a case we can show or verify.
 
@@ -95,6 +105,12 @@ def _to_case(
     was returned for that ИНН, so the ИНН belongs on the record. Without it every
     case comes back with no identifiers, the matcher rates it weak, and the
     report drops a live claim as somebody else's business.
+
+    Safe here in a way it would not be everywhere: a row of this method is a
+    *case*, not a person, and every case in the answer came back for the ИНН
+    that was asked about. Methods whose rows are per-subject containers — the
+    bankruptcy one — read the subject's own identifiers out of the container
+    instead (``row_fields``).
     """
     case_number = as_text(record.get("case_number"))
     if case_number is None:
@@ -108,14 +124,14 @@ def _to_case(
         filed_at=parse_date(as_text(record.get("filed_at"))),
         participant_name=as_text(record.get("participant_name")),
         inn=as_text(record.get("inn")) or searched_inn,
-        role=_role_of(record, subject),
+        role=_role_of(record, subject, name_key),
         is_closed=_is_closed(record),
         source_url=as_text(record.get("source_url")),
         fetched_at=utcnow(),
     )
 
 
-def _role_of(record: Mapping[str, Any], subject: SearchSubject) -> CourtCaseRole:
+def _role_of(record: Mapping[str, Any], subject: SearchSubject, name_key: str) -> CourtCaseRole:
     """Роль по делу — из плоского поля, а если его нет, из списков участников.
 
     У КАД плоского поля роли нет: истцы и ответчики приходят отдельными списками
@@ -131,20 +147,33 @@ def _role_of(record: Mapping[str, Any], subject: SearchSubject) -> CourtCaseRole
         return CourtCaseRole.OTHER
     # Должник-банкрот стоит в обоих списках сразу — он и заявитель, и лицо, к
     # которому предъявлены требования. Для взыскания весомее второе.
-    if _names_include(record.get("participants_defendants"), subject.name):
+    if _names_include(record.get("participants_defendants"), subject.name, name_key):
         return CourtCaseRole.DEFENDANT
-    if _names_include(record.get("participants_plaintiffs"), subject.name):
+    if _names_include(record.get("participants_plaintiffs"), subject.name, name_key):
         return CourtCaseRole.PLAINTIFF
     return CourtCaseRole.OTHER
 
 
-def _names_include(participants: Any, name: PersonName) -> bool:
+def _names_include(participants: Any, name: PersonName, name_key: str) -> bool:
+    """Стоит ли субъект в этом списке участников.
+
+    Сравнение идёт через ``compare_names``, поэтому не зависит ни от порядка
+    слов, ни от того, записано ли имя целиком: КАД печатает участников то
+    «Фамилия Имя Отчество», то наоборот, то «Бычков Д.Ю.», то «ИП Иванов И.И.».
+    Точное равенство строк промахивалось по всем трём поводам, и промах давал
+    роль OTHER — дело выпадало из исков к должнику, а скоринг начислял плюс за
+    то, что исков не найдено, показывая при этом само дело в отчёте.
+
+    Инициалов здесь достаточно, и это не поблажка в отождествлении: дело уже
+    вернулось по ИНН должника, и вопрос стоит не «его ли это дело», а «на какой
+    он в нём стороне». Кем считать однофамильца с теми же инициалами в чужом
+    деле, этот код не решает — такое дело сюда не попадает.
+    """
     if not isinstance(participants, Sequence) or isinstance(participants, (str, bytes)):
         return False
     for item in participants:
-        raw = item.get("name") if isinstance(item, Mapping) else item
-        token = normalize_token(as_text(raw) or "")
-        if token and token in {name.normalized, name.normalized_short}:
+        raw = dig(item, name_key) if isinstance(item, Mapping) else item
+        if compare_names(name, as_text(raw)) is not NameMatch.NONE:
             return True
     return False
 

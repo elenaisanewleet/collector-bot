@@ -7,8 +7,10 @@ people goes through here so the rules live in exactly one place.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,6 +18,13 @@ from app.utils.hashing import normalize_token
 
 _NAME_SEPARATORS = re.compile(r"[\s ]+")
 _NAME_ALLOWED = re.compile(r"^[а-яёa-z\-']+$", re.IGNORECASE)
+# Anything that is not part of a word separates two words. Dots matter here:
+# sources abbreviate as «Бычков Д.Ю.», with no space to split on.
+_NAME_WORD_SPLIT = re.compile(r"[^\w'\-]+", re.UNICODE)
+_SOLE_PROPRIETOR_PREFIXES: tuple[tuple[str, ...], ...] = (
+    ("ип",),
+    ("индивидуальный", "предприниматель"),
+)
 
 FIO_MIN_PARTS = 2
 FIO_MAX_PARTS = 3
@@ -116,6 +125,119 @@ def parse_fio(raw: str) -> PersonName:
 def _capitalize_name(part: str) -> str:
     """Capitalize each hyphen-separated segment: ``петров-водкин`` -> ``Петров-Водкин``."""
     return "-".join(segment.capitalize() for segment in part.split("-"))
+
+
+class NameMatch(Enum):
+    """How strongly a free-form name agrees with a parsed one."""
+
+    NONE = "none"
+    #: Фамилия совпала, имя и отчество сошлись только инициалами.
+    INITIALS = "initials"
+    #: Фамилия и имя совпали, отчество сравнить не с чем.
+    SHORT = "short"
+    FULL = "full"
+
+
+def compare_names(name: PersonName, raw: str | None) -> NameMatch:
+    """Compare a free-form name against a parsed one **without using word order**.
+
+    Word order is not evidence about who a person is. ФНП prints its pledgors as
+    ``ИМЯ ОТЧЕСТВО ФАМИЛИЯ`` (``СЕРГЕЙ АНДРЕЕВИЧ ПЕТРОВ``), Федресурс as
+    ``Фамилия Имя Отчество``, our own CSV as whatever the operator typed. A
+    positional comparison read the first of those as a different person
+    entirely, and a found pledge came out of the report as "не найдено" — the
+    one inversion this tool must never produce.
+
+    What is compared is the *multiset* of words: the same words, each the same
+    number of times. That is deliberately not an intersection and not a subset
+    of convenience — «Иванов Иван Иванович» and «Иванов Иван Петрович» differ by
+    exactly one word and stay two different people, which is the whole reason a
+    name alone never reaches the confirmed band anyway.
+
+    Two concessions, both of them named in the result rather than hidden in it:
+
+    :attr:`NameMatch.SHORT` is the concession the positional comparison already
+    made — when one side carries no patronymic, a surname and a given name are
+    all there is to compare, and one unmatched extra word is tolerated.
+
+    :attr:`NameMatch.INITIALS` is for the sources that abbreviate. КАД prints
+    half of its participants as «Бычков Д.Ю.» and «ИП Иванов И.И.», and against
+    a full name those are neither equal nor a subset, so a strict comparison
+    called them strangers. A surname plus initials is genuinely weaker evidence
+    than a name — it is returned as its own level so that each caller can decide
+    what it is worth, and no caller has to guess from a boolean.
+    """
+    other = _name_words(raw)
+    if not other:
+        return NameMatch.NONE
+    counted = Counter(other)
+    if counted == Counter(_name_words(name.full)):
+        return NameMatch.FULL
+    if Counter(_name_words(name.normalized_short)) <= counted and len(other) <= FIO_MAX_PARTS:
+        return NameMatch.SHORT
+    if _initials_match(name, other):
+        return NameMatch.INITIALS
+    return NameMatch.NONE
+
+
+def _name_words(raw: str | None) -> list[str]:
+    """Split a name into comparable words, dots and commas included.
+
+    ``Бычков Д.Ю.`` has to become three words and not two, or the initials never
+    line up with anything. Hyphens and apostrophes stay inside a word:
+    ``Петров-Водкин`` is one surname, not two.
+    """
+    words = [word for word in _NAME_WORD_SPLIT.split(normalize_token(raw)) if _is_name_word(word)]
+    return _without_legal_form(words)
+
+
+def _is_name_word(word: str) -> bool:
+    return any(char.isalpha() for char in word)
+
+
+def _without_legal_form(words: list[str]) -> list[str]:
+    """``ИП Иванов И.И.`` -> ``Иванов И.И.``
+
+    A sole-proprietor prefix is a legal form, not part of anybody's name. Only
+    that one is dropped: a company name is not a person's name at all, and
+    trimming it into one would manufacture matches.
+    """
+    for prefix in _SOLE_PROPRIETOR_PREFIXES:
+        if words[: len(prefix)] == list(prefix):
+            return words[len(prefix) :]
+    return words
+
+
+def _initials_match(name: PersonName, words: list[str]) -> bool:
+    """Surname in full, given name and patronymic as bare initials.
+
+    Deliberately narrow. The surname must match as a whole word, every remaining
+    word must be a single letter, and the *given name's* initial must be among
+    them — «Бычков Ю.» is not Дмитрий Юрьевич with a letter missing, it is most
+    likely a different Бычков. When we ourselves hold no patronymic, one extra
+    initial is tolerated, which is the same allowance :attr:`NameMatch.SHORT`
+    makes for one extra word.
+    """
+    surname = normalize_token(name.last_name)
+    if surname not in words:
+        return False
+    rest = list(words)
+    rest.remove(surname)
+    if not rest or len(rest) > FIO_MAX_PARTS - 1:
+        return False
+    if any(len(word) != 1 for word in rest):
+        return False
+    expected = [
+        normalized[0]
+        for part in (name.first_name, name.middle_name)
+        if (normalized := normalize_token(part))
+    ]
+    given = Counter(rest)
+    # ``expected[0]`` — инициал имени, и он обязан присутствовать.
+    if not expected or not given[expected[0]]:
+        return False
+    surplus = given - Counter(expected)
+    return sum(surplus.values()) <= (0 if name.middle_name else 1)
 
 
 def normalize_phone(raw: str | None) -> str | None:

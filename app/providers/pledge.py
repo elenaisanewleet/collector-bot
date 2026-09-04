@@ -3,8 +3,9 @@
 Why this source earns a place in a recovery tool: **a pledged thing is not
 collateral we can reach.** The pledgeholder is satisfied ahead of an ordinary
 creditor, so finding the debtor's only car in the register turns an apparent
-asset into somebody else's security — and finding *nothing* means whatever the
-debtor owns is at least unencumbered.
+asset into somebody else's security. Finding *nothing* is worth much less, and
+is worded as such everywhere it surfaces: see the note on the two registries
+below.
 
 Two NewDB methods feed it:
 
@@ -17,9 +18,15 @@ no entry there is not queried, and the report says the source was not checked.
 
 Both answers carry two registries side by side: ``fnp`` — the pledge register —
 and ``fedresurs`` — leasing contracts and other encumbrances. One map entry
-describes one set of rows, so the shipped map reads the ФНП branch only. Hence
-the wording of the report: "записей в реестре залогов не найдено", which is what
-was actually checked, and not "имущество не обременено".
+describes one set of rows, so the shipped map reads the ФНП branch only, and a
+debtor whose only encumbrance is a leasing contract comes back ``NO_RESULTS``.
+
+Everything downstream is therefore worded to the branch that was actually read:
+the report prints "записей в реестре залогов не найдено" followed by
+``PLEDGE_SCOPE_NOTE``, and the score's positive factor says "в реестре
+уведомлений ФНП действующих залогов не найдено". Neither says "имущество не
+обременено" — that would be a claim about all of the debtor's property drawn
+from one register of movables, and one leasing contract would make it a lie.
 """
 
 from __future__ import annotations
