@@ -45,6 +45,8 @@ line-length = 100
 target-version = "py312"
 src = ["app", "tests", "scripts"]
 exclude = [".venv", "migrations/versions"]
+# Code samples in the docs are formatted for reading, not for the formatter.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = [

@@ -11,6 +11,11 @@ import asyncio
 import sys
 from pathlib import Path
 
+# Runnable straight from a checkout: executing a file puts *its* directory on
+# sys.path, not the project root, so the package would otherwise be invisible
+# unless the project happens to be installed.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from app.config import get_settings
 from app.container import build_container
 from app.logging_setup import configure_logging

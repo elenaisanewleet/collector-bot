@@ -11,6 +11,11 @@ import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import (
+    TelegramConflictError,
+    TelegramNetworkError,
+    TelegramUnauthorizedError,
+)
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.router import setup_dispatcher
@@ -24,6 +29,15 @@ MISSING_TOKEN = "TELEGRAM_BOT_TOKEN не задан. Укажите его в .e
 EMPTY_ALLOWLIST = (
     "ALLOWED_TELEGRAM_USER_IDS пуст: бот закрытый и никого не пустит. "
     "Укажите числовые Telegram ID через запятую."
+)
+BAD_TOKEN = "Telegram отклонил токен. Проверьте TELEGRAM_BOT_TOKEN в .env."
+NO_NETWORK = (
+    "Не удалось связаться с Telegram API. Проверьте сетевой доступ к "
+    "api.telegram.org (прокси, firewall, DNS)."
+)
+ALREADY_RUNNING = (
+    "С этим токеном уже запущен другой экземпляр бота. "
+    "Остановите его или используйте отдельный токен."
 )
 
 
@@ -53,6 +67,17 @@ async def start_bot(settings: Settings | None = None) -> None:
         # request after a restart is worse than losing it.
         await bot.delete_webhook(drop_pending_updates=True)
         await dispatcher.start_polling(bot)
+    except TelegramUnauthorizedError as exc:
+        raise SystemExit(BAD_TOKEN) from exc
+    except TelegramConflictError as exc:
+        raise SystemExit(ALREADY_RUNNING) from exc
+    except TelegramNetworkError as exc:
+        # An operator reading a stack trace learns nothing they can act on.
+        logger.error("bot.network_error", detail=str(exc))
+        raise SystemExit(NO_NETWORK) from exc
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("bot.stopped")
+        raise
     finally:
         await bot.session.close()
         await container.dispose()
