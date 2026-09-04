@@ -29,10 +29,18 @@ def test_defaults_are_safe() -> None:
     assert not settings.fns_configured
 
 
-def test_fssp_needs_both_token_and_url() -> None:
-    assert not make_settings(fssp_api_token="t").fssp_configured
-    assert not make_settings(fssp_base_url="https://x.test").fssp_configured
-    assert make_settings(fssp_api_token="t", fssp_base_url="https://x.test").fssp_configured
+def test_fssp_needs_a_newdb_key() -> None:
+    """ФССП is served by NEWDB now; the base URL defaults, so only the key is
+    genuinely missing out of the box."""
+    assert not make_settings().fssp_configured
+    assert not make_settings(newdb_base_url="https://x.test").fssp_configured
+    assert make_settings(newdb_api_key="k").fssp_configured
+    assert not make_settings(newdb_api_key="k", newdb_base_url="").fssp_configured
+
+
+def test_newdb_has_working_defaults() -> None:
+    assert make_settings().newdb_base_url == "https://api.newdb.net"
+    assert make_settings().newdb_method_path == "/v2"
 
 
 def test_fedresurs_needs_a_field_map(tmp_path: Path) -> None:
@@ -65,7 +73,7 @@ def test_demo_backends_are_configured_without_credentials() -> None:
 
 
 def test_base_urls_lose_their_trailing_slash() -> None:
-    assert make_settings(fssp_base_url="https://x.test/").fssp_base_url == "https://x.test"
+    assert make_settings(newdb_base_url="https://x.test/").newdb_base_url == "https://x.test"
 
 
 def test_cache_can_be_disabled() -> None:

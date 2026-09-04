@@ -84,14 +84,14 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./collector_bot.db"
     internal_csv_path: Path = Path("./data/demo_debtors.csv")
 
-    # ---------------------------------------------------------------- ФССП
-    fssp_api_token: str = ""
-    fssp_base_url: str = ""
-    fssp_search_path: str = "/api/v1.0/search/physical"
-    fssp_status_path: str = "/api/v1.0/status"
-    fssp_result_path: str = "/api/v1.0/result"
-    fssp_poll_attempts: Annotated[int, Field(ge=1, le=60)] = 10
-    fssp_poll_interval_seconds: Annotated[float, Field(ge=0.1, le=30)] = 2.0
+    # ---------------------------------------------------------------- ФССП (NewDB)
+    # The direct ФССП service (api-ip.fssp.gov.ru) is retired and answers
+    # HTTP 410 Gone; enforcement proceedings come from the NewDB aggregator.
+    newdb_api_key: str = ""
+    newdb_base_url: str = "https://api.newdb.net"
+    newdb_method_path: str = "/v2"
+    newdb_poll_attempts: Annotated[int, Field(ge=1, le=60)] = 10
+    newdb_poll_interval_seconds: Annotated[float, Field(ge=0.1, le=30)] = 2.0
 
     # ---------------------------------------------------------------- ЕФРСБ
     fedresurs_backend: FedresursBackend = FedresursBackend.NONE
@@ -138,7 +138,7 @@ class Settings(BaseSettings):
         return value.strip().upper() or "INFO"
 
     @field_validator(
-        "fssp_base_url",
+        "newdb_base_url",
         "fedresurs_base_url",
         "fns_base_url",
     )
@@ -174,7 +174,12 @@ class Settings(BaseSettings):
 
     @property
     def fssp_configured(self) -> bool:
-        return bool(self.fssp_api_token and self.fssp_base_url)
+        """Whether the ФССП provider can make a real call.
+
+        Named for the source, not the vendor: the domain asks about ФССП, and
+        which aggregator serves it stays a configuration detail.
+        """
+        return bool(self.newdb_api_key and self.newdb_base_url)
 
     @property
     def fedresurs_configured(self) -> bool:

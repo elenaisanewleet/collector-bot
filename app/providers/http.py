@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
+HTTP_PAYMENT_REQUIRED = 402
 HTTP_NOT_FOUND = 404
 HTTP_TOO_MANY_REQUESTS = 429
 HTTP_SERVER_ERROR_FLOOR = 500
@@ -133,6 +134,12 @@ def _classify(response: httpx.Response, *, provider: str) -> ProviderError | Non
         return None
     if status in {HTTP_UNAUTHORIZED, HTTP_FORBIDDEN}:
         return ProviderAuthError(f"{provider} rejected the credentials (HTTP {status})")
+    if status == HTTP_PAYMENT_REQUIRED:
+        # A depleted prepaid balance is not a transient fault: retrying spends
+        # nothing and fixes nothing, and the operator needs to be told plainly.
+        return ProviderBadResponseError(
+            "payment_required", f"{provider}: недостаточно средств на счёте (HTTP {status})"
+        )
     if status == HTTP_TOO_MANY_REQUESTS:
         return ProviderRateLimitedError(f"{provider} rate limit reached")
     if status >= HTTP_SERVER_ERROR_FLOOR:

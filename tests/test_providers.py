@@ -7,15 +7,20 @@ status and never raises.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping, Sequence
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
 import respx
 
 from app.config import AuthStyle, FedresursBackend, FNSBackend, Settings
-from app.domain.enums import ProviderStatus
-from app.domain.identity import SearchSubject
+from app.domain.enums import ProceedingStatus, ProviderStatus, Region
+from app.domain.identity import PersonName, SearchSubject
 from app.domain.models import BankruptcyRecord, EnforcementProceeding, ProviderResult
 from app.providers.base import StubProvider
 from app.providers.fedresurs import FedresursProvider
@@ -42,39 +47,95 @@ def only_record[T](result: object, expected: type[T]) -> T:
 
 
 BASE_URL = "https://api.example.test"
-SEARCH_URL = f"{BASE_URL}/api/v1.0/search/physical"
-RESULT_URL = f"{BASE_URL}/api/v1.0/result"
+NEWDB_URL = f"{BASE_URL}/v2"
 
-TASK_RESPONSE = {"status": 0, "response": {"task": "task-123"}}
-RESULT_RESPONSE = {
-    "status": 0,
-    "response": {
-        "result": [
-            {
-                "query": {"name": "Тестов Андрей Сергеевич"},
-                "result": [
-                    {
-                        "name": "Тестов Андрей Сергеевич, 12.03.1985",
-                        "exe_production": "12345/26/77001-ИП от 01.02.2026",
-                        "subject": "Взыскание задолженности: 91400 руб.",
-                        "department": "Демо ОСП",
-                        "ip_end": "",
-                    }
-                ],
-            }
-        ]
-    },
+# Fixtures below mirror the NEWDB contract exactly as published at
+# https://newdb.net/docs/fiz/01-fssp_person/ and in the OpenAPI document at
+# https://newdb.net/swagger/openapi.json — the async envelope, the
+# queued/in_progress/restart/complete/failed lifecycle, and the row keys the
+# fssp_person method returns.
+
+PROCEEDING_ROW: dict[str, Any] = {
+    "Debtor": "ИВАНОВ ИВАН ИВАНОВИЧ 01.01.1990 Г. МОСКВА",
+    "EnforcementProceeding": "88442/25/66049-ИП от 09.09.2025",
+    "WritDetails": "Исполнительный лист от 01.01.2026 № 00RS0000#2-1/2026#1 ПРИМЕРНЫЙ СУД",
+    "CompletionDateOrReason": "",
+    "Service": "",
+    "SubjectAndDebtAmount": (
+        "Иные взыскания имущественного характера в пользу физических и "
+        "юридических лиц Сумма долга: 30000.00 руб. "
+        "Остаток долга по исполнительному документу: 12500.00 руб."
+    ),
+    "BailiffDepartment": "Примерный РОСП 000000, Россия, г. Москва, ул. Примерная, д. 1",
+    "Phone": "+7(000)000-00-00",
+    "BailiffOfficer": "ИВАНОВ И. И.",
 }
+
+
+def newdb_envelope(
+    state: str = "complete",
+    *,
+    data: Sequence[Mapping[str, Any]] | None = None,
+    include_results: bool = True,
+    errors_info: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a NEWDB async envelope in the documented shape."""
+    envelope: dict[str, Any] = {
+        "params": {
+            "firstname": "Андрей",
+            "lastname": "Тестов",
+            "secondname": "Сергеевич",
+            "dob": "1985-03-12",
+            "country": "ru",
+            "method": "fssp_person",
+            "regioncode": 77,
+        },
+        "requestId": "00000000-0000-4000-8000-000000000001",
+        "datecreated": "2026-08-31 14:50:55",
+        "state": state,
+        "balance": 100,
+        "tasks": 1,
+        "is_repeat": False,
+    }
+    if errors_info is not None:
+        envelope["errors_info"] = list(errors_info)
+    if include_results and state == "complete":
+        envelope["results"] = {
+            "fssp_person": {
+                "taskId": "00000000-0000-4000-8000-000000000002",
+                "dateupdated": "2026-08-31 14:51:26",
+                "result": {"status": 200, "data": list(data) if data is not None else []},
+            },
+            "management": {},
+        }
+    return envelope
+
+
+# The real service answers a rejected or missing key with HTTP 200 and
+# state="failed" — never a 401 — so this envelope is the one that must not be
+# read as "checked, nothing found".
+AUTH_FAILURE_ENVELOPE = newdb_envelope(
+    "failed",
+    errors_info=[
+        {
+            "error": (
+                "Проверьте баланс и токен доступа (в HTTP заголовке X-API-KEY ), "
+                "обратитесь по адресу access@newdb.net"
+            )
+        }
+    ],
+)
 
 
 @pytest.fixture
 def fssp_settings(live_settings: Settings) -> Settings:
     return live_settings.model_copy(
         update={
-            "fssp_api_token": "test-token",
-            "fssp_base_url": BASE_URL,
-            "fssp_poll_attempts": 2,
-            "fssp_poll_interval_seconds": 0.01,
+            "newdb_api_key": "test-key",
+            "newdb_base_url": BASE_URL,
+            "newdb_method_path": "/v2",
+            "newdb_poll_attempts": 2,
+            "newdb_poll_interval_seconds": 0.01,
             "provider_max_retries": 1,
             "provider_retry_backoff_seconds": 0.0,
         }
@@ -141,65 +202,272 @@ async def test_fedresurs_missing_field_map_stays_unconfigured(
     assert result.status is ProviderStatus.NOT_CONFIGURED
 
 
-# ---------------------------------------------------------------- happy path
+# ---------------------------------------------------------------- ФССП happy path
 
 
 @respx.mock
 async def test_fssp_parses_a_successful_response(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, json=TASK_RESPONSE))
-    respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=RESULT_RESPONSE))
+    route = respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=newdb_envelope(data=[PROCEEDING_ROW]))
+    )
 
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
 
     assert result.status is ProviderStatus.SUCCESS
     record = only_record(result, EnforcementProceeding)
-    assert record.proceeding_number.startswith("12345/26/77001-ИП")
-    # The amount is embedded in the subject line, not a dedicated field.
-    assert record.amount == 91400
+    # The trailing "от <дата>" is stripped so the number is a stable key.
+    assert record.proceeding_number == "88442/25/66049-ИП"
+    assert record.debtor_name == "ИВАНОВ ИВАН ИВАНОВИЧ"
+    assert record.debtor_birth_date == date(1990, 1, 1)
+    # The outstanding balance wins over the original sum.
+    assert record.amount == Decimal("12500.00")
+    assert record.subject is not None
+    assert record.subject.startswith("Иные взыскания имущественного характера")
+    assert "Сумма долга" not in record.subject
+    assert record.department is not None
+    assert record.department.startswith("Примерный РОСП")
+    assert record.status is ProceedingStatus.ACTIVE
+
+    request = route.calls[0].request
+    assert request.headers["X-API-KEY"] == "test-key"
+    body = json.loads(request.content)
+    # method travels inside params, and every mandatory field is present.
+    assert body["params"]["method"] == "fssp_person"
+    assert body["params"]["country"] == "ru"
+    assert body["params"]["lastname"] == "Тестов"
+    assert body["params"]["firstname"] == "Андрей"
+    assert body["params"]["secondname"] == "Сергеевич"
+    assert body["params"]["dob"] == "1985-03-12"
+    assert body["params"]["regioncode"] == 77
+    assert body["requestId"]
+
+
+@respx.mock
+async def test_fssp_falls_back_to_the_total_when_no_remainder_is_stated(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    row = {
+        **PROCEEDING_ROW,
+        "SubjectAndDebtAmount": "Взыскание налогов и сборов Сумма долга: 4200.55 руб.",
+    }
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=newdb_envelope(data=[row])))
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+    assert only_record(result, EnforcementProceeding).amount == Decimal("4200.55")
+
+
+@respx.mock
+async def test_fssp_marks_a_completed_proceeding_as_closed(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    row = {**PROCEEDING_ROW, "CompletionDateOrReason": "Окончено 01.03.2026, ст. 46 ч.1 п.3"}
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=newdb_envelope(data=[row])))
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+    record = only_record(result, EnforcementProceeding)
+    assert record.status is ProceedingStatus.CLOSED
+    assert record.status_text is not None
 
 
 @respx.mock
 async def test_fssp_reports_no_results_when_the_source_is_empty(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, json=TASK_RESPONSE))
-    respx.get(RESULT_URL).mock(
-        return_value=httpx.Response(200, json={"status": 0, "response": {"result": []}})
-    )
+    """An empty ``data`` array is a real answer, so NO_RESULTS is correct here."""
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=newdb_envelope(data=[])))
 
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
     assert result.status is ProviderStatus.NO_RESULTS
+    assert result.records == []
 
 
 @respx.mock
 async def test_fssp_queries_each_region(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    from app.domain.enums import Region
-
-    search = respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, json=TASK_RESPONSE))
-    respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=RESULT_RESPONSE))
+    route = respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=newdb_envelope(data=[PROCEEDING_ROW]))
+    )
 
     subject = person_subject.model_copy(
         update={"regions": (Region.MOSCOW.value, Region.MOSCOW_OBLAST.value)}
     )
     result = await FSSPProvider(fssp_settings).fetch(subject)
 
-    assert search.call_count == 2
+    assert route.call_count == 2
+    assert [json.loads(call.request.content)["params"]["regioncode"] for call in route.calls] == [
+        77,
+        50,
+    ]
     # The same proceeding returned for both regions is reported once.
     assert len(result.records) == 1
 
 
-# ---------------------------------------------------------------- failures
+@respx.mock
+async def test_fssp_falls_back_to_all_regions(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """A region we hold no code for widens the search instead of guessing one."""
+    route = respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=newdb_envelope(data=[]))
+    )
+
+    subject = person_subject.model_copy(update={"regions": (Region.OTHER.value,)})
+    await FSSPProvider(fssp_settings).fetch(subject)
+
+    assert json.loads(route.calls[0].request.content)["params"]["regioncode"] == 100
+
+
+@respx.mock
+async def test_fssp_sends_an_empty_patronymic_when_absent(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """``secondname`` is mandatory upstream, so the key is always present."""
+    route = respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=newdb_envelope(data=[]))
+    )
+
+    name = PersonName(last_name="Тестов", first_name="Андрей")
+    await FSSPProvider(fssp_settings).fetch(person_subject.model_copy(update={"name": name}))
+
+    assert json.loads(route.calls[0].request.content)["params"]["secondname"] == ""
+
+
+# ---------------------------------------------------------------- ФССП polling
+
+
+@respx.mock
+async def test_fssp_polls_until_the_task_completes(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """queued -> in_progress -> complete, polled by re-POSTing the same request."""
+    route = respx.post(NEWDB_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=newdb_envelope("queued")),
+            httpx.Response(200, json=newdb_envelope("in_progress")),
+            httpx.Response(200, json=newdb_envelope(data=[PROCEEDING_ROW])),
+        ]
+    )
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.SUCCESS
+    assert route.call_count == 3
+    # Polling addresses the same task, so the requestId never changes.
+    ids = {json.loads(call.request.content)["requestId"] for call in route.calls}
+    assert len(ids) == 1
+
+
+@respx.mock
+async def test_fssp_treats_restart_as_still_running(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    respx.post(NEWDB_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=newdb_envelope("restart")),
+            httpx.Response(200, json=newdb_envelope(data=[PROCEEDING_ROW])),
+        ]
+    )
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+    assert result.status is ProviderStatus.SUCCESS
+
+
+@respx.mock
+async def test_fssp_poll_budget_exhaustion_is_unavailable(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=newdb_envelope("in_progress")))
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "poll_timeout"
+    assert result.records == []
+
+
+# ---------------------------------------------------------------- ФССП failures
+
+
+@respx.mock
+async def test_rejected_token_is_an_error_not_an_empty_result(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """The load-bearing case for this integration.
+
+    NEWDB answers a bad or missing key with HTTP 200 and ``state: "failed"``.
+    Read naively that is an empty result — a clean ФССП section for a debtor
+    nobody actually checked.
+    """
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=AUTH_FAILURE_ENVELOPE))
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.ERROR
+    assert result.error_code == "unauthorized"
+    assert not result.status.is_answered
+    assert result.records == []
+
+
+@respx.mock
+async def test_insufficient_balance_is_reported(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=newdb_envelope(
+                "failed",
+                errors_info=[
+                    {
+                        "error": "Недостаточно средств",
+                        "error_code": 402,
+                        "docs_url": "https://newdb.net/docs/",
+                    }
+                ],
+            ),
+        )
+    )
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+    assert result.status is ProviderStatus.ERROR
+    assert result.error_code == "payment_required"
+
+
+@respx.mock
+async def test_missing_parameter_failure_is_reported(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "params": {"method": "fssp_person", "country": "ru"},
+                "requestId": "00000000-0000-4000-8000-000000000003",
+                "state": "failed",
+                "errors_info": [
+                    {
+                        "error": "Отсутствует обязательный параметр: dob",
+                        "error_code": 400,
+                        "docs_url": "https://newdb.net/docs/fiz/01-fssp_person/",
+                    }
+                ],
+            },
+        )
+    )
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+    assert result.status is ProviderStatus.ERROR
+    assert result.records == []
 
 
 @respx.mock
 async def test_timeout_is_unavailable_not_error(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    respx.get(SEARCH_URL).mock(side_effect=httpx.ConnectTimeout("timed out"))
+    respx.post(NEWDB_URL).mock(side_effect=httpx.ConnectTimeout("timed out"))
 
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
 
@@ -209,10 +477,10 @@ async def test_timeout_is_unavailable_not_error(
 
 
 @respx.mock
-async def test_unauthorized_is_reported_and_not_retried(
+async def test_http_unauthorized_is_reported_and_not_retried(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    route = respx.get(SEARCH_URL).mock(return_value=httpx.Response(401))
+    route = respx.post(NEWDB_URL).mock(return_value=httpx.Response(401))
 
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
 
@@ -223,10 +491,36 @@ async def test_unauthorized_is_reported_and_not_retried(
 
 
 @respx.mock
+async def test_http_forbidden_is_reported_and_not_retried(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    route = respx.post(NEWDB_URL).mock(return_value=httpx.Response(403))
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.ERROR
+    assert result.error_code == "unauthorized"
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_http_payment_required_is_reported(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    route = respx.post(NEWDB_URL).mock(return_value=httpx.Response(402))
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.ERROR
+    assert result.error_code == "payment_required"
+    assert route.call_count == 1
+
+
+@respx.mock
 async def test_rate_limit_is_retried_then_reported(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    route = respx.get(SEARCH_URL).mock(return_value=httpx.Response(429))
+    route = respx.post(NEWDB_URL).mock(return_value=httpx.Response(429))
 
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
 
@@ -239,13 +533,12 @@ async def test_rate_limit_is_retried_then_reported(
 async def test_rate_limit_recovers_on_retry(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    respx.get(SEARCH_URL).mock(
+    respx.post(NEWDB_URL).mock(
         side_effect=[
             httpx.Response(429),
-            httpx.Response(200, json=TASK_RESPONSE),
+            httpx.Response(200, json=newdb_envelope(data=[PROCEEDING_ROW])),
         ]
     )
-    respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=RESULT_RESPONSE))
 
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
     assert result.status is ProviderStatus.SUCCESS
@@ -255,7 +548,7 @@ async def test_rate_limit_recovers_on_retry(
 async def test_server_error_is_unavailable(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    route = respx.get(SEARCH_URL).mock(return_value=httpx.Response(500))
+    route = respx.post(NEWDB_URL).mock(return_value=httpx.Response(500))
 
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
 
@@ -268,7 +561,7 @@ async def test_server_error_is_unavailable(
 async def test_malformed_json_is_an_error_not_a_crash(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, text="<html>not json</html>"))
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, text="<html>not json</html>"))
 
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
 
@@ -277,11 +570,12 @@ async def test_malformed_json_is_an_error_not_a_crash(
 
 
 @respx.mock
-async def test_unexpected_schema_does_not_invent_records(
+async def test_unknown_state_does_not_invent_records(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    """A response we cannot understand is an error, never an empty clean result."""
-    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, json={"totally": "unexpected"}))
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json={"requestId": "x", "totally": "unexpected"})
+    )
 
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
 
@@ -291,18 +585,33 @@ async def test_unexpected_schema_does_not_invent_records(
 
 
 @respx.mock
-async def test_poll_timeout_is_reported(
+async def test_complete_without_a_result_section_is_not_no_results(
     fssp_settings: Settings, person_subject: SearchSubject
 ) -> None:
-    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, json=TASK_RESPONSE))
-    respx.get(RESULT_URL).mock(
-        return_value=httpx.Response(200, json={"status": 1, "response": None})
+    """A complete envelope missing ``results`` is a schema problem, not a clean
+    ФССП record."""
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=newdb_envelope("complete", include_results=False))
     )
 
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
 
     assert result.status is ProviderStatus.UNAVAILABLE
-    assert result.error_code == "poll_timeout"
+    assert result.error_code == "unexpected_schema"
+    # Not an answer, so the report must not print "проверено, записей нет".
+    assert not result.status.is_answered
+
+
+@respx.mock
+async def test_raw_response_is_not_kept_by_default(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=newdb_envelope(data=[PROCEEDING_ROW]))
+    )
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+    assert result.raw_response is None
 
 
 async def test_provider_bug_is_contained(person_subject: SearchSubject) -> None:
@@ -331,6 +640,20 @@ async def test_insufficient_query_is_not_no_results(
     result = await FSSPProvider(fssp_settings).fetch(nameless_subject)
     assert result.status is not ProviderStatus.NO_RESULTS
     assert result.error_code == "insufficient_query"
+
+
+async def test_missing_birth_date_is_not_no_results(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """dob is mandatory upstream; without it we say so rather than report a
+    clean ФССП section."""
+    subject = person_subject.model_copy(update={"birth_date": None})
+
+    result = await FSSPProvider(fssp_settings).fetch(subject)
+
+    assert result.status is ProviderStatus.ERROR
+    assert result.error_code == "insufficient_query"
+    assert not result.status.is_answered
 
 
 # ---------------------------------------------------------------- vendor adapters
