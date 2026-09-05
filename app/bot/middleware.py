@@ -27,13 +27,21 @@ class AllowlistMiddleware(BaseMiddleware):
     An empty allowlist denies everyone: a closed tool must fail shut, never open.
     """
 
-    def __init__(self, allowed_user_ids: frozenset[int]) -> None:
+    def __init__(self, allowed_user_ids: frozenset[int], *, open_access: bool = False) -> None:
         self._allowed = allowed_user_ids
-        if not allowed_user_ids:
+        self._open = open_access
+        if open_access:
+            logger.warning(
+                "allowlist.open",
+                note="bot is open to everyone: every stranger spends the balance",
+            )
+        elif not allowed_user_ids:
             logger.warning("allowlist.empty", note="no user can access the bot")
 
     def is_allowed(self, user_id: int | None) -> bool:
-        return user_id is not None and user_id in self._allowed
+        if user_id is None:
+            return False
+        return self._open or user_id in self._allowed
 
     async def __call__(
         self,

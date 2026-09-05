@@ -23,7 +23,6 @@ from app.domain.enums import (
     CourtCaseRole,
     PledgeStatus,
     ProviderName,
-    ProviderStatus,
 )
 from app.domain.models import (
     BusinessRelation,
@@ -484,13 +483,27 @@ def _confidence(report: DebtorReport) -> tuple[float, list[str]]:
     for provider_key, weight in PROVIDER_CONFIDENCE_WEIGHTS.items():
         total_weight += weight
         provider = ProviderName(provider_key)
-        if provider is ProviderName.INTERNAL:
-            if report.internal_records:
-                answered_weight += weight
-            else:
-                notes.append(_internal_note(report))
-            continue
         result = report.result_for(provider)
+        if provider is ProviderName.INTERNAL:
+            if result is not None and result.is_answered:
+                # База ответила — вес засчитан. Пустой ответ это тоже ответ, и
+                # называть его непроверенным значит занижать уверенность.
+                answered_weight += weight
+                if not report.internal_records:
+                    notes.append("нет данных во внутренней базе")
+                continue
+            if result is None:
+                # Состояния внутренней базы в отчёте нет вовсе — отчёт собран в
+                # обход SearchService. Единственное честное утверждение выводится
+                # из самого субъекта: «не нашли» и «нечем было искать» разные
+                # вещи, а записи могут лежать в отчёте и без ProviderResult.
+                if report.internal_records:
+                    answered_weight += weight
+                else:
+                    notes.append(_internal_note(report))
+                continue
+            # База ответила отказом: причину назовёт общая ветка ниже, из ответа
+            # источника, а не из догадки по субъекту.
         if result is not None and result.is_answered:
             answered_weight += weight
             if result.is_partial:
@@ -523,6 +536,14 @@ def _internal_note(report: DebtorReport) -> str:
     ``SearchService._internal_candidates``), поэтому субъект, у которого нет ни
     ФИО, ни телефона, ни договора, ни машины, ни адреса, приходит сюда с пустым
     результатом, которого никто не получал.
+
+    Запасной путь: он работает только там, где состояния источника в отчёте нет
+    (отчёт собран мимо ``SearchService``). Когда состояние есть, то же самое
+    говорит сам источник — ``insufficient_query`` из
+    :meth:`app.services.search.SearchService.lookup_internal_result`. Предикат
+    ниже перечисляет ровно те же поля, что ``search._has_internal_query``;
+    правится один — правится и второй, иначе фолбэк начнёт врать про поиск,
+    которого не было.
     """
     subject = report.subject
     vehicle = subject.vehicle
@@ -544,18 +565,28 @@ def _internal_note(report: DebtorReport) -> str:
 
 
 def _unanswered_note(provider: ProviderName, result: ProviderResult | None) -> str:
+    """Строка про непроверенный источник в «Ограничениях оценки».
+
+    Формулировка берётся из общей таблицы состояний, а не сочиняется здесь:
+    свой набор слов на четвёртом выводе уже терял разницу между «не хватило
+    данных для запроса» и «ошибка обращения».
+
+    Единственное исключение — «недостаточно данных». Таблица знает, что данных
+    не хватило, но не знает, каких именно; знает это только провайдер, и
+    оператору нужно ровно это. Без названия поля строка читается как сбой
+    («попробуйте позже»), а не как «дошлите ИНН», — то есть «не спросили» опять
+    маскируется под «спросили, не вышло». Такая же связка «таблица плюс
+    сообщение провайдера» стоит в :mod:`app.services.verdict` и в
+    :func:`app.services.reporting.unanswered_line`, третьего набора слов не
+    появляется.
+    """
+    from app.services.reporting import SourceStateCode, source_state
+
     title = PROVIDER_TITLES.get(provider, provider.value)
-    if result is None:
-        return f"{title}: источник не опрошен"
-    if result.status is ProviderStatus.NOT_CONFIGURED:
-        return f"{title}: источник не подключён"
-    if result.status is ProviderStatus.UNAVAILABLE:
-        return f"{title}: источник недоступен"
-    if result.error_code == "insufficient_query":
-        # Обращения не было вовсе — называть это ошибкой обращения значит
-        # прятать нехватку данных за сбоем и подсказывать «попробуйте позже».
-        return f"{title}: {result.error_message or 'нечем было спросить'}"
-    return f"{title}: ошибка обращения к источнику"
+    state = source_state(result)
+    if state.code is SourceStateCode.INSUFFICIENT and result is not None and result.error_message:
+        return f"{title}: {result.error_message}"
+    return f"{title}: {state.label}"
 
 
 def _has_only_probable_matches(report: DebtorReport) -> bool:

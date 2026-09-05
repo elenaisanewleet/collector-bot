@@ -119,8 +119,48 @@ def test_a_complete_subject_keeps_the_keyboard_as_short_as_before(
 
     texts = button_texts(markup)
     assert not any(text.startswith(("➕", "📅", "🪪")) for text in texts)
-    assert "📄 Открыть отчёт" in texts
+    assert "📄 Полный отчёт по человеку" in texts
     assert "🔄 Обновить" in texts
+
+
+def test_the_export_row_rides_along_with_the_link(
+    bridge_settings: Settings, subject: SearchSubject
+) -> None:
+    """Выгрузка живёт в той же клавиатуре, что и предложения добрать данные.
+
+    Клавиатур под карточкой ровно одна: пока их было две, «Полный отчёт» и
+    «➕ Добавить ИНН» показывались взаимоисключающе, и оператор терял то одно,
+    то другое.
+    """
+    markup = report_keyboard(
+        url="https://reports.example.test/r/x",
+        refresh_token="tok",
+        subject=subject,
+        bridge=PassportInnProvider(bridge_settings),
+        text_url="https://reports.example.test/r/x/report.txt",
+        print_url="https://reports.example.test/r/x/print",
+    )
+
+    texts = button_texts(markup)
+    assert "🖨 PDF / печать" in texts
+    assert "⬇️ Текстом" in texts
+    assert any(text.startswith("➕") for text in texts)
+
+
+def test_without_a_link_there_is_nothing_to_export(
+    bridge_settings: Settings, subject: SearchSubject
+) -> None:
+    """Деплой без веба: кнопок выгрузки нет, предложения добрать данные есть."""
+    markup = report_keyboard(
+        url=None,
+        refresh_token="tok",
+        subject=subject,
+        bridge=PassportInnProvider(bridge_settings),
+    )
+
+    texts = button_texts(markup)
+    assert not any(text.startswith(("🖨", "⬇️", "📄")) for text in texts)
+    assert any(text.startswith("➕") for text in texts)
 
 
 def test_offers_never_appear_for_a_vehicle_search(bridge_settings: Settings) -> None:

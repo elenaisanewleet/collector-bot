@@ -103,7 +103,7 @@ async def _demo_batch(container: Container) -> None:
 
     print(f"\n{SEPARATOR}\nМассовая проверка всей выгрузки\n{SEPARATOR}\n")
     estimate = await container.batch_service.estimate()
-    print(render_estimate(estimate, container.settings.app_name))
+    print(render_estimate(estimate))
 
     summary = await container.batch_service.run(telegram_user_id=DEMO_USER_ID)
     print(f"\n{render_summary(summary)}\n")

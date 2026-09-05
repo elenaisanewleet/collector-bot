@@ -62,7 +62,7 @@ DOCUMENTED_PERSON = SearchSubject(
 # VIN ровно из «Примера запроса» страницы pledge_vin.
 DOCUMENTED_VIN = SearchSubject(
     search_type=SearchType.VIN.value,
-    vehicle=VehicleDescriptor(vin="JTEHD21A850036287"),
+    vehicle=VehicleDescriptor(vin="XWEHD21A800000017"),
 )
 
 
@@ -214,7 +214,7 @@ async def test_documented_pledge_vin_response_reaches_the_report(
     )
 
     record = pledges_of(report)[0]
-    assert record.vin == "JTEHD21A850036287"
+    assert record.vin == "XWEHD21A800000017"
     assert record.pledgor_name == "Игорь Юрьевич Семенов"
     assert record.is_usable
     assert "совпадает VIN, по которому шёл поиск" in record.match_reasons
@@ -239,12 +239,12 @@ async def test_a_vin_inside_a_list_of_subject_numbers_still_carries_the_record(
     """
     response = copy.deepcopy(documented_response("pledge_vin"))
     rows = response["results"]["pledge_vin"]["result"]["data"]
-    rows[0]["fnp"][0]["pledge_subject_ids_raw"] = "JTEHD21A850036287, 15218-1, 15274-1"
+    rows[0]["fnp"][0]["pledge_subject_ids_raw"] = "XWEHD21A800000017, 15218-1, 15274-1"
 
     report = await pledge_report(shipped_settings, shipped_maps, DOCUMENTED_VIN, response)
 
     record = pledges_of(report)[0]
-    assert record.vin == "JTEHD21A850036287"
+    assert record.vin == "XWEHD21A800000017"
     assert record.is_usable
     assert "совпадает VIN, по которому шёл поиск" in record.match_reasons
 

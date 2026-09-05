@@ -18,12 +18,12 @@ from app.domain.enums import (
     MISSING_INPUT_TITLES,
     PROVIDER_TITLES,
     MissingInput,
-    ProviderStatus,
     SearchType,
 )
 from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport
-from app.domain.verdict import VERDICT_TITLES, FeeBasis, Verdict, VerdictDecision
+from app.domain.verdict import FeeBasis, Verdict, VerdictDecision
+from app.services.reporting import DEMO_BANNER, SourceStateCode, source_state
 from app.utils.dates import format_date, format_datetime
 from app.utils.masking import mask_passport, mask_phone, mask_vin
 from app.utils.money import format_amount
@@ -124,7 +124,11 @@ def batch_progress(processed: int, total: int, failed: int) -> str:
 
 
 def report_card(
-    report: DebtorReport, decision: VerdictDecision, *, notes: Sequence[str] = ()
+    report: DebtorReport,
+    decision: VerdictDecision,
+    *,
+    notes: Sequence[str] = (),
+    demo_mode: bool = False,
 ) -> str:
     """Короткая карточка в чат. Подробности — на странице по кнопке.
 
@@ -132,8 +136,17 @@ def report_card(
     «Принял:» и по той же причине: отчёт обязан показывать не только то, что он
     учёл, но и то, чего он не учёл, — иначе «проверено» и «нечем было
     проверить» сливаются в одну бодрую карточку.
+
+    Порядок первых строк — баннер, имя, эхо, оговорки — не произвольный:
+    баннер относится ко всему тексту и обязан стоять до него, а эхо и оговорки
+    относятся к субъекту и идут за его именем.
     """
-    lines = [report.subject.display_name]
+    lines: list[str] = []
+    if demo_mode:
+        # Тот же баннер, что в текстовом отчёте: карточка с выдуманными данными
+        # не должна быть неотличима от настоящей проверки.
+        lines.extend((DEMO_BANNER, ""))
+    lines.append(report.subject.display_name)
     echo = accepted_line(report.subject)
     if echo:
         lines.append(echo)
@@ -153,6 +166,10 @@ def report_card(
             f"уверенность данных {round(score.confidence * 100)}%"
         )
 
+    # Состояние источника определяет общая таблица (``reporting.source_state``);
+    # карточка решает только, как сгруппировать и назвать. Плоского списка «Не
+    # проверено: ФССП, Авто» здесь быть не должно: три беды с тремя разными
+    # действиями оператора он схлопывает в одну строку.
     gaps = _gaps(report)
     if gaps:
         lines.append("")
@@ -162,31 +179,14 @@ def report_card(
         lines.append("")
         lines.append(f"Данные проверки от {format_datetime(report.cached_at)}")
 
-    return "\n".join(lines)
+    # Карточка — это выжимка, и она обязана сказать, что за кнопкой лежит
+    # остальное. Иначе оператор читает пять строк и считает, что это всё, что
+    # система знает о человеке: производства, дела, залоги и связи с юрлицами
+    # в чат не помещаются и живут только на странице.
+    lines.append("")
+    lines.append("По кнопке ниже — всё, что собрано об этом человеке:")
+    lines.append("производства, банкротство, залоги, суды, связи с юрлицами.")
 
-
-def batch_card(
-    *,
-    processed: int,
-    total: int,
-    failed: int,
-    counts: dict[str, int],
-    actionable_debt: str,
-    saved_fees: str,
-) -> str:
-    lines = ["Проверка завершена", "", f"Проверено: {processed} из {total}"]
-    for verdict in (Verdict.FILE, Verdict.ORDER, Verdict.REVIEW, Verdict.DROP):
-        count = counts.get(verdict.value, 0)
-        if count:
-            lines.append(f"{VERDICT_TITLES[verdict]}: {count}")
-    if actionable_debt:
-        lines.append("")
-        lines.append(f"В суд можно нести на {actionable_debt}")
-    if saved_fees:
-        lines.append(f"Не уйдёт на пошлины по безнадёжным: {saved_fees}")
-    if failed:
-        lines.append("")
-        lines.append(f"Не удалось проверить: {failed}")
     return "\n".join(lines)
 
 
@@ -206,6 +206,13 @@ def _gaps(report: DebtorReport) -> list[str]:
     как пять проблем. Причина сравнивается машинно
     (:attr:`ProviderResult.missing_input`), потому что группировать по подстроке
     сообщения — значит развалить карточку от первой правки формулировки.
+
+    Само состояние источника определяется не здесь: его называет общая таблица
+    :func:`app.services.reporting.source_state`, та же, что кормит список
+    источников на странице и в текстовом отчёте. Второй разбор статусов в чате
+    уже был, и он ровно так и разъезжается: порядок «сначала insufficient, потом
+    unavailable» правится в одном месте и забывается в другом. Карточка решает
+    только, как сгруппировать и какими словами позвать оператора к действию.
     """
     unqueried: dict[tuple[str, ...], list[str]] = {}
     unspecified: dict[str, list[str]] = {}
@@ -213,22 +220,24 @@ def _gaps(report: DebtorReport) -> list[str]:
     unavailable: list[str] = []
 
     for result in report.provider_results:
-        if result.is_answered:
+        state = source_state(result)
+        if state.answered:
             continue
         title = PROVIDER_TITLES.get(result.provider, result.provider.value)
-        if result.status is ProviderStatus.NOT_CONFIGURED:
-            not_configured.append(title)
-        elif result.error_code == "insufficient_query":
-            if result.missing_input:
-                unqueried.setdefault(tuple(result.missing_input), []).append(title)
-            else:
-                # Записи из кэша поля не несут — колонки под него нет. Откат на
-                # текст провайдера: группировка теряется, честность нет.
-                unspecified.setdefault(result.error_message or "нечем было спросить", []).append(
-                    title
-                )
-        else:
-            unavailable.append(title)
+        match state.code:
+            case SourceStateCode.NOT_CONFIGURED:
+                not_configured.append(title)
+            case SourceStateCode.INSUFFICIENT:
+                if result.missing_input:
+                    unqueried.setdefault(tuple(result.missing_input), []).append(title)
+                else:
+                    # Записи из кэша поля не несут — колонки под него нет. Откат
+                    # на текст провайдера: группировка теряется, честность нет.
+                    unspecified.setdefault(
+                        result.error_message or "нечем было спросить", []
+                    ).append(title)
+            case _:
+                unavailable.append(title)
 
     lines = [
         f"Нечем спросить: {', '.join(titles)} — {_reason(missing)}"

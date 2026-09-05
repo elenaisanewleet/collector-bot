@@ -11,11 +11,13 @@ Two rules shape everything here:
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
+from enum import StrEnum
 
 from app.domain.enums import (
     BANKRUPTCY_STATUS_TITLES,
     BUSINESS_ROLE_TITLES,
-    BUSINESS_STATE_TITLES,
+    BUSINESS_STATUS_TITLES,
     COURT_CASE_ROLE_TITLES,
     MATCH_LEVEL_TITLES,
     PLEDGE_STATUS_TITLES,
@@ -54,8 +56,131 @@ PLEDGE_SCOPE_NOTE = (
     "Проверен только реестр уведомлений ФНП: лизинг и иные обременения "
     "Федресурса, а также ипотека в Росреестре сюда не входят."
 )
+# Что этот источник не покрывает. Печатается и когда дела найдены, и когда их
+# нет: «арбитражных дел не найдено» без оговорки читается как «на него никто не
+# подавал», а иски к физлицу идут в суд общей юрисдикции.
+COURT_SCOPE_NOTE = "Суды общей юрисдикции этот источник не покрывает."
 DISCLAIMER = "Оценка является аналитической и не заменяет юридическую проверку."
 DEMO_BANNER = "⚠️ ДЕМО-РЕЖИМ: данные вымышленные, внешние источники не опрашивались."
+NO_FACTORS_NOTE = "Факторов для оценки недостаточно — источники не дали данных."
+
+
+# ---------------------------------------------------------------- состояния источника
+
+
+class SourceStateCode(StrEnum):
+    """Различимых состояний источника ровно столько, сколько здесь.
+
+    Ответ источника и его отсутствие — разные утверждения, и ни одно из
+    состояний ниже не сводится к другому. Всё, что показывает эти состояния —
+    текстовый отчёт, веб-страница, карточка в чате, ограничения оценки, — берёт
+    подписи отсюда: второй набор формулировок неизбежно разъедется с первым, и
+    тогда «не проверено» где-нибудь да прочитается как «чисто».
+    """
+
+    FOUND = "found"  # ответил и нашёл
+    EMPTY = "empty"  # ответил и не нашёл
+    PARTIAL = "partial"  # ответил, но сам сказал, что прислал не всё
+    NOT_CONFIGURED = "not_configured"  # не подключён
+    INSUFFICIENT = "insufficient"  # не хватило данных для запроса
+    UNAVAILABLE = "unavailable"  # временно недоступен
+    ERROR = "error"  # ошибка обращения
+    NOT_QUERIED = "not_queried"  # результата нет вовсе: источник не опрашивался
+
+
+@dataclass(frozen=True, slots=True)
+class SourceState:
+    """Одно состояние источника во всех видах, какие нужны отображению."""
+
+    code: SourceStateCode
+    # Короткая подпись для списка источников: «проверено, записей нет».
+    label: str
+    # Знак, различимый без цвета: в чате, в ч/б печати и для дальтоника это
+    # единственный носитель смысла, а цвет — только усиление.
+    mark: str
+    answered: bool
+
+    @property
+    def is_unchecked(self) -> bool:
+        return not self.answered
+
+
+def source_state(result: ProviderResult | None, *, records: int | None = None) -> SourceState:
+    """Состояние источника по его результату.
+
+    ``records`` — сколько записей показать в подписи, когда они живут не в
+    ``result.records``: у внутренней базы записи лежат в самом отчёте, а
+    результат несёт только состояние.
+
+    Порядок веток важен: ``insufficient_query`` проверяется до ``UNAVAILABLE``,
+    иначе «нам нечего было спросить» превратится в «источник лежал»; а
+    ``is_partial`` — до ``SUCCESS``/``NO_RESULTS``, иначе источник, который сам
+    сообщил, что прислал не всё, получит подпись «проверено, записей нет».
+    """
+    if result is None:
+        return SourceState(SourceStateCode.NOT_QUERIED, "не опрашивался", "○", False)
+    if result.is_partial and result.is_answered:
+        count = len(result.records) if records is None else records
+        return SourceState(SourceStateCode.PARTIAL, f"ответ неполный, {count} зап.", "⚠", True)
+    if result.status is ProviderStatus.SUCCESS:
+        count = len(result.records) if records is None else records
+        return SourceState(SourceStateCode.FOUND, f"{count} зап.", "✓", True)
+    if result.status is ProviderStatus.NO_RESULTS:
+        return SourceState(SourceStateCode.EMPTY, "проверено, записей нет", "—", True)
+    if result.status is ProviderStatus.NOT_CONFIGURED:
+        return SourceState(SourceStateCode.NOT_CONFIGURED, "не подключено", "○", False)
+    if result.error_code == "insufficient_query":
+        return SourceState(SourceStateCode.INSUFFICIENT, "недостаточно данных", "?", False)
+    if result.status is ProviderStatus.UNAVAILABLE:
+        code = result.error_code or "ошибка"
+        return SourceState(SourceStateCode.UNAVAILABLE, f"недоступно ({code})", "!", False)
+    code = result.error_code or "unknown"
+    return SourceState(SourceStateCode.ERROR, f"ошибка ({code})", "✗", False)
+
+
+def unanswered_line(
+    result: ProviderResult | None, *, bridge: ProviderResult | None = None
+) -> str | None:
+    """Строка для источника, который не ответил, или ``None``, если ответил.
+
+    Это тот самый предохранитель, который не даёт «не проверено» прочитаться
+    как «ничего не найдено». Разметку вокруг него каждый вывод делает свою,
+    а текст — общий: функция здесь одна на чат и на страницу намеренно, второй
+    набор формулировок разъедется с первым за одну правку.
+
+    ``bridge`` уточняет ровно один случай — «нужен ИНН физлица» у трёх
+    источников, которые ищут только по нему. Без уточнения одна и та же строка
+    означала бы четыре разных вещи: паспорта не дали, мост выключен, **ФНС
+    ответила и ИНН нет**, **мост не отработал**. Последние две — это
+    ``NO_RESULTS`` против ``UNAVAILABLE``, тот самый инвариант в миниатюре, ради
+    которого мост и строился; потерять его здесь значило бы заплатить за
+    различение и выбросить его.
+    """
+    state = source_state(result)
+    match state.code:
+        case SourceStateCode.FOUND | SourceStateCode.EMPTY | SourceStateCode.PARTIAL:
+            # Неполный ответ — всё же ответ: о его неполноте говорит сам раздел
+            # (``_source_notes``/``_empty_block``), а не строка «не проверено».
+            return None
+        case SourceStateCode.NOT_QUERIED:
+            return "Источник не опрашивался."
+        case SourceStateCode.NOT_CONFIGURED:
+            return "Не проверено: источник не подключён."
+        case SourceStateCode.INSUFFICIENT:
+            detail = (result.error_message if result else None) or "недостаточно данных"
+            return f"Не проверено: {detail}.{_bridge_note(bridge)}"
+        case SourceStateCode.UNAVAILABLE:
+            return "Не проверено: источник временно недоступен."
+        case _:
+            code = (result.error_code if result else None) or "unknown"
+            return f"Не проверено: ошибка обращения к источнику ({code})."
+
+
+def answered_count(report: DebtorReport) -> tuple[int, int]:
+    """Сколько источников ответило из скольких опрошенных."""
+    total = len(report.provider_results)
+    answered = sum(1 for result in report.provider_results if result.is_answered)
+    return answered, total
 
 
 def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
@@ -154,7 +279,7 @@ def _internal_lines(record: InternalDebtorRecord) -> list[str]:
 def _enforcement_block(report: DebtorReport) -> str:
     result = report.result_for(ProviderName.FSSP)
     header = "ФССП"
-    unanswered = _unanswered_line(result)
+    unanswered = unanswered_line(result)
     if unanswered:
         return f"{header}\n{unanswered}"
 
@@ -198,7 +323,7 @@ def _proceeding_lines(item: EnforcementProceeding) -> list[str]:
 def _bankruptcy_block(report: DebtorReport) -> str:
     result = report.result_for(ProviderName.FEDRESURS)
     header = "БАНКРОТСТВО"
-    unanswered = _unanswered_line(result, bridge=report.result_for(ProviderName.INN_BRIDGE))
+    unanswered = unanswered_line(result, bridge=report.result_for(ProviderName.INN_BRIDGE))
     if unanswered:
         return f"{header}\n{unanswered}"
 
@@ -236,7 +361,7 @@ def _bankruptcy_lines(item: BankruptcyRecord) -> list[str]:
 def _business_block(report: DebtorReport) -> str:
     result = report.result_for(ProviderName.FNS)
     header = "БИЗНЕС"
-    unanswered = _unanswered_line(result, bridge=report.result_for(ProviderName.INN_BRIDGE))
+    unanswered = unanswered_line(result, bridge=report.result_for(ProviderName.INN_BRIDGE))
     if unanswered:
         return f"{header}\n{unanswered}"
 
@@ -262,11 +387,14 @@ def _business_block(report: DebtorReport) -> str:
 
 
 def _business_line(item: BusinessRelation) -> str:
-    # Три состояния, а не два. ``egrul_ip`` не отдаёт статус у строк физлица
-    # вовсе — во всех живых записях ``status: null``, — и печатать это как
-    # «прекращено» значит закрывать действующее ИП должника одним словом.
-    # Отсутствие признака никогда не выводится как прекращение.
-    state = BUSINESS_STATE_TITLES[item.status]
+    # Через словарь, а не через ``is_active``: состояний три, а у булева флага
+    # два. ``egrul_ip`` не отдаёт статус у строк физлица вовсе — во всех живых
+    # записях ``status: null``, — и печатать это как «прекращено» значит
+    # закрывать действующее ИП должника одним словом. Отсутствие признака
+    # никогда не выводится как прекращение.
+    state = BUSINESS_STATUS_TITLES[item.status]
+    # ``person_name`` первым: у живых строк ``egrul_ip`` ``name`` пуст, ФИО
+    # лежит в нём, и без него найденное ИП покажется строкой «— ИНН».
     name = item.person_name or item.name or item.inn or "—"
     role = BUSINESS_ROLE_TITLES.get(item.role, "связь")
     return f"• {role}: {name} — {state} ({_match_note(item.match_level)})"
@@ -275,7 +403,7 @@ def _business_line(item: BusinessRelation) -> str:
 def _pledge_block(report: DebtorReport) -> str:
     result = report.result_for(ProviderName.PLEDGE)
     header = "ЗАЛОГИ"
-    unanswered = _unanswered_line(result)
+    unanswered = unanswered_line(result)
     if unanswered:
         return f"{header}\n{unanswered}"
 
@@ -326,7 +454,7 @@ def _court_block(report: DebtorReport) -> str:
     """
     result = report.result_for(ProviderName.COURT)
     header = "СУДЫ (АРБИТРАЖ)"
-    unanswered = _unanswered_line(result, bridge=report.result_for(ProviderName.INN_BRIDGE))
+    unanswered = unanswered_line(result, bridge=report.result_for(ProviderName.INN_BRIDGE))
     if unanswered:
         return f"{header}\n{unanswered}"
 
@@ -338,7 +466,7 @@ def _court_block(report: DebtorReport) -> str:
             "Арбитражных дел не найдено.",
             found=len(report.court_cases),
             noun="дело",
-            tail="Суды общей юрисдикции этот источник не покрывает.",
+            tail=COURT_SCOPE_NOTE,
         )
 
     lines = [header]
@@ -347,8 +475,12 @@ def _court_block(report: DebtorReport) -> str:
     hidden = len(usable) - MAX_LISTED_CASES
     if hidden > 0:
         lines.append(f"…и ещё {hidden}")
+    # Порядок «оговорки источника → оговорка охвата → отметка о проверке» тот
+    # же, что в _pledge_block: источник говорит о полноте своего ответа, а
+    # константа — о том, чего он не видит в принципе. Это разные вещи, и обе
+    # обязаны быть напечатаны.
     lines.extend(_source_notes(result))
-    lines.append("Суды общей юрисдикции этот источник не покрывает.")
+    lines.append(COURT_SCOPE_NOTE)
     lines.append(_checked_at(result))
     return "\n".join(lines)
 
@@ -396,7 +528,7 @@ def _score_block(score: RecoveryScore | None) -> str:
         lines.extend(f"{signed(f.delta)} — {f.reason}" for f in negatives)
     if not score.factors:
         lines.append("")
-        lines.append("Факторов для оценки недостаточно — источники не дали данных.")
+        lines.append(NO_FACTORS_NOTE)
     if score.confidence_notes:
         lines.append("")
         lines.append("Ограничения оценки:")
@@ -408,37 +540,26 @@ def _score_block(score: RecoveryScore | None) -> str:
 
 
 def _sources_block(report: DebtorReport) -> str:
-    lines = ["ИСТОЧНИКИ"]
-    if report.internal_records:
-        lines.append("✓ Наши данные")
-    else:
-        lines.append("○ Наши данные — совпадений нет")
-    for result in report.provider_results:
-        lines.append(_source_line(result))
+    answered, total = answered_count(report)
+    lines = [f"ИСТОЧНИКИ (ответили {answered} из {total})"]
+    lines.extend(_source_line(report, result) for result in report.provider_results)
     return "\n".join(lines)
 
 
-def _source_line(result: ProviderResult) -> str:
+def _source_line(report: DebtorReport, result: ProviderResult) -> str:
     title = PROVIDER_TITLES.get(result.provider, result.provider.value)
+    # Мост записей не приносит, он их делает возможными: общая ветка напечатала
+    # бы «✓ … — 0 зап.» для успешно полученного ИНН.
     if result.provider is ProviderName.INN_BRIDGE:
         return _bridge_source_line(result, title)
-    if result.is_partial and result.is_answered:
-        # «Проверено, записей нет» про источник, который сам сообщил, что
-        # прислал не всё, — это подпись под неправдой в списке источников.
-        return f"⚠ {title} — ответ неполный, {len(result.records)} зап."
-    match result.status:
-        case ProviderStatus.SUCCESS:
-            return f"✓ {title} — {len(result.records)} зап."
-        case ProviderStatus.NO_RESULTS:
-            return f"✓ {title} — проверено, записей нет"
-        case ProviderStatus.NOT_CONFIGURED:
-            return f"○ {title} — не подключено"
-        case ProviderStatus.UNAVAILABLE:
-            return f"✗ {title} — недоступно ({result.error_code or 'ошибка'})"
-        case _:
-            if result.error_code == "insufficient_query":
-                return f"○ {title} — недостаточно данных для запроса"
-            return f"✗ {title} — ошибка ({result.error_code or 'unknown'})"
+    # У внутренней базы записи лежат в самом отчёте, а не в результате: он
+    # несёт только состояние источника.
+    records = len(report.internal_records) if result.provider is ProviderName.INTERNAL else None
+    # Все остальные состояния, включая «ответ неполный», приходят из общей
+    # таблицы source_state: подпись в списке источников и чип на веб-странице
+    # обязаны говорить об одном источнике одно и то же.
+    state = source_state(result, records=records)
+    return f"{state.mark} {title} — {state.label}"
 
 
 def _bridge_source_line(result: ProviderResult, title: str) -> str:
@@ -501,21 +622,37 @@ def _empty_block(
     нет. Печатается во всех трёх случаях, потому что говорит о другом — о том,
     чего этот источник не знает в принципе, независимо от полноты ответа.
     """
-    lines = [header]
-    notes = _source_notes(result)
-    if notes:
-        lines.extend(notes)
-    elif found:
-        word = pluralize_ru(found, noun, _plural_noun(noun), _genitive_noun(noun))
-        lines.append(
-            f"Источник вернул {found} {word}, но сопоставить с должником не удалось "
-            "ни одну — требуется ручная проверка."
-        )
-    else:
-        lines.append(empty_line)
+    lines = [header, *empty_reason(result, found=found, noun=noun, empty_line=empty_line)]
     lines.append(tail)
     lines.append(_checked_at(result))
     return "\n".join(line for line in lines if line)
+
+
+def empty_reason(
+    result: ProviderResult | None, *, found: int, noun: str, empty_line: str
+) -> list[str]:
+    """Строки о том, ПОЧЕМУ в разделе не показано ни одной записи.
+
+    Публичная и общая на чат и на страницу намеренно: раньше решение принимали
+    оба вывода порознь, и веб-страница печатала голое «не найдено» там, где
+    текст бота уже говорил «источник вернул 1 запись, сопоставить не удалось».
+    Один и тот же должник получал два разных ответа, причём неправ был именно
+    лист, который уходит в дело.
+
+    Оговорки источника возвращаются ВМЕСТО «не найдено», а не вместе с ним:
+    «записей не найдено» рядом с «в реестре ФНП найдено 13 уведомлений» —
+    это две взаимоисключающие фразы в одном абзаце.
+    """
+    notes = _source_notes(result)
+    if notes:
+        return notes
+    if found:
+        word = pluralize_ru(found, noun, _plural_noun(noun), _genitive_noun(noun))
+        return [
+            f"Источник вернул {found} {word}, но сопоставить с должником не удалось "
+            "ни одну — требуется ручная проверка."
+        ]
+    return [empty_line]
 
 
 _NOUN_FORMS: dict[str, tuple[str, str]] = {
@@ -536,35 +673,6 @@ def _genitive_noun(noun: str) -> str:
 def _source_notes(result: ProviderResult | None) -> list[str]:
     """То, что источник сказал о полноте собственного ответа."""
     return list(result.notes) if result is not None else []
-
-
-def _unanswered_line(
-    result: ProviderResult | None, *, bridge: ProviderResult | None = None
-) -> str | None:
-    """The line used when a source did not actually answer.
-
-    This is the guard that keeps "not checked" from reading as "nothing found".
-
-    ``bridge`` уточняет ровно один случай — «нужен ИНН физлица» у трёх
-    источников, которые ищут только по нему. Без уточнения одна и та же строка
-    означала бы четыре разных вещи: паспорта не дали, мост выключен, **ФНС
-    ответила и ИНН нет**, **мост не отработал**. Последние две — это ``NO_RESULTS``
-    против ``UNAVAILABLE``, тот самый инвариант в миниатюре, ради которого мост и
-    строился; потерять его здесь значило бы заплатить за различение и выбросить
-    его.
-    """
-    if result is None:
-        return "Источник не опрашивался."
-    if result.is_answered:
-        return None
-    if result.status is ProviderStatus.NOT_CONFIGURED:
-        return "Не проверено: источник не подключён."
-    if result.error_code == "insufficient_query":
-        reason = result.error_message or "недостаточно данных"
-        return f"Не проверено: {reason}.{_bridge_note(bridge)}"
-    if result.status is ProviderStatus.UNAVAILABLE:
-        return "Не проверено: источник временно недоступен."
-    return f"Не проверено: ошибка обращения к источнику ({result.error_code or 'unknown'})."
 
 
 def _bridge_note(bridge: ProviderResult | None) -> str:

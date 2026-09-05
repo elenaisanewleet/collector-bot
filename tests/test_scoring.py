@@ -217,7 +217,9 @@ def test_confidence_notes_name_the_missing_sources(
 ) -> None:
     report = build_report(person_subject, fssp=(ProviderStatus.NOT_CONFIGURED, []))
     score = score_engine.evaluate(report)
-    assert any("не подключён" in note for note in score.confidence_notes)
+    # Формулировка приходит из общей таблицы состояний источника, а не из
+    # собственного набора слов в скоринге.
+    assert any("ФССП: не подключено" in note for note in score.confidence_notes)
 
 
 def test_an_unqueried_source_is_not_called_an_error(
@@ -306,6 +308,56 @@ def test_a_searchable_internal_base_still_says_nothing_found(
     notes = score_engine.evaluate(build_report(person_subject)).confidence_notes
 
     assert any(note == "нет данных во внутренней базе" for note in notes)
+
+
+def test_a_broken_internal_base_is_not_called_empty(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Упавшая база и база без совпадений — разные вещи, и путать их нельзя.
+
+    Записей нет в обоих случаях, поэтому по одному ``internal_records`` их не
+    отличить: решает состояние источника. «Нет данных во внутренней базе» на
+    упавшей базе — это ровно «не проверено», показанное как «ничего не
+    найдено», и оно ещё и разошлось бы со строкой «недоступно» в списке
+    источников на той же странице.
+    """
+    report = build_report(person_subject)
+    report.provider_results.append(
+        ProviderResult(
+            provider=ProviderName.INTERNAL,
+            status=ProviderStatus.ERROR,
+            error_code="internal_source_failed",
+        )
+    )
+
+    notes = score_engine.evaluate(report).confidence_notes
+
+    assert not any("нет данных во внутренней базе" in note for note in notes)
+    assert any("internal_source_failed" in note for note in notes)
+
+
+def test_an_honest_empty_internal_answer_counts_as_coverage(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Пустой ответ — тоже ответ: источник проверен, и вес обязан засчитаться."""
+    answered = build_report(person_subject)
+    answered.provider_results.append(
+        ProviderResult(provider=ProviderName.INTERNAL, status=ProviderStatus.NO_RESULTS)
+    )
+    broken = build_report(person_subject)
+    broken.provider_results.append(
+        ProviderResult(
+            provider=ProviderName.INTERNAL,
+            status=ProviderStatus.ERROR,
+            error_code="internal_source_failed",
+        )
+    )
+
+    assert score_engine.evaluate(answered).confidence > score_engine.evaluate(broken).confidence
+    assert any(
+        note == "нет данных во внутренней базе"
+        for note in score_engine.evaluate(answered).confidence_notes
+    )
 
 
 def test_search_without_birth_date_lowers_confidence(

@@ -27,6 +27,7 @@ from app.bot.keyboards import (
 )
 from app.bot.states import BatchCheck
 from app.container import Container
+from app.db.models import BatchItem
 from app.db.repository import BatchRepository
 from app.domain.verdict import VERDICT_TITLES, Verdict
 from app.logging_setup import get_logger
@@ -45,7 +46,7 @@ NO_RUN = "Прогонов ещё не было. Запустите провер
 LIST_PAGE_SIZE = 15
 
 
-def render_estimate(estimate: BatchEstimate, app_name: str) -> str:
+def render_estimate(estimate: BatchEstimate) -> str:
     noun = pluralize_ru(estimate.debtors, "должник", "должника", "должников")
     lines = [
         "Массовая проверка",
@@ -149,7 +150,7 @@ def build_router() -> Router:
             return
         await state.set_state(BatchCheck.waiting_confirm)
         await message.answer(
-            render_estimate(estimate, container.settings.app_name),
+            render_estimate(estimate),
             reply_markup=batch_confirm_keyboard(),
         )
 
@@ -185,7 +186,10 @@ def build_router() -> Router:
         url = await container.share_service.issue(
             ShareTarget(ShareKind.QUEUE, summary.run_id), telegram_user_id=user_id
         )
-        keyboard = batch_result_keyboard_with_link(url)
+        csv_url, print_url = (
+            container.share_service.export_urls(url, ShareKind.QUEUE) if url else (None, None)
+        )
+        keyboard = batch_result_keyboard_with_link(url, csv_url=csv_url, print_url=print_url)
         try:
             await notice.edit_text(render_summary(summary), reply_markup=keyboard)
         except Exception:
@@ -257,7 +261,7 @@ def build_router() -> Router:
     return router
 
 
-def _queue_line(index: int, item) -> str:  # type: ignore[no-untyped-def]
+def _queue_line(index: int, item: BatchItem) -> str:
     debtor = item.debtor
     name = (debtor.fio if debtor else None) or (debtor.contract_number if debtor else None) or "—"
     parts = [f"{index}. {name}"]

@@ -87,11 +87,20 @@ async def run_and_send_report(
     # добыл мост. Иначе «Обновить» и предложения под карточкой рассуждали бы о
     # вопросе, а не об ответе.
     token = container.subject_store.put(report.subject)
+    # Клавиатура строится до раннего возврата без ссылки, а ``export_urls``
+    # принимает str — поэтому адреса выгрузки считаются под условием, как в
+    # ``handlers/batch.py``.
+    text_url: str | None = None
+    print_url: str | None = None
+    if url is not None:
+        text_url, print_url = container.share_service.export_urls(url, ShareKind.REPORT)
     keyboard = report_actions.report_keyboard(
         url=url,
         refresh_token=token,
         subject=report.subject,
         bridge=container.registry.inn_bridge,
+        text_url=text_url,
+        print_url=print_url,
     )
 
     if url is None:
@@ -106,7 +115,10 @@ async def run_and_send_report(
         return report
 
     await _edit_or_send(
-        notice, message, view.report_card(report, decision, notes=notes), reply_markup=keyboard
+        notice,
+        message,
+        view.report_card(report, decision, notes=notes, demo_mode=container.settings.is_demo),
+        reply_markup=keyboard,
     )
     return report
 

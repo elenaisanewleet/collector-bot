@@ -10,7 +10,7 @@ deployment. Until a real map is provided, those adapters stay unconfigured.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -143,14 +143,6 @@ def dig(payload: Any, path: str) -> Any:
         else:
             return None
     return node
-
-
-def first_present(record: Mapping[str, Any], keys: Iterable[str]) -> Any:
-    for key in keys:
-        value = record.get(key)
-        if value not in (None, ""):
-            return value
-    return None
 
 
 def as_text(value: Any) -> str | None:

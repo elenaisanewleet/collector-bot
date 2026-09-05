@@ -801,7 +801,7 @@ async def test_bankruptcy_record_carries_the_inn_it_was_searched_by(
             {
                 "case_number": "А73-1111/2017",
                 "status": "Производство по делу завершено",
-                "case_url": "/legalcases/7975d0c7",
+                "case_url": "/legalcases/11111111",
             }
         ],
     }
@@ -815,7 +815,7 @@ async def test_bankruptcy_record_carries_the_inn_it_was_searched_by(
     assert isinstance(record, BankruptcyRecord)
     assert record.inn == "770912345601"
     # Относительный путь Федресурса — не ссылка; в отчёт он идёт с хостом.
-    assert record.source_url == "https://fedresurs.ru/legalcases/7975d0c7"
+    assert record.source_url == "https://fedresurs.ru/legalcases/11111111"
 
 
 @respx.mock

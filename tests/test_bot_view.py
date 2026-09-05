@@ -187,6 +187,34 @@ def test_parse_notes_survive_into_the_card(settings: Settings) -> None:
     assert "ИНН организации" in text
 
 
+def test_the_demo_banner_stands_above_everything_about_the_person(settings: Settings) -> None:
+    """Карточка на выдуманных данных не должна читаться как настоящая проверка.
+
+    Баннер относится ко всему тексту, поэтому стоит первой строкой — до имени,
+    эха разбора и оговорок, которые все про субъект. Порядок наоборот дал бы
+    первой строкой «Принял: ФИО · ИНН …», то есть разбор реального человека
+    раньше предупреждения о том, что человек выдуман.
+    """
+    from app.services.reporting import DEMO_BANNER
+
+    report = DebtorReport(subject=person(inn="770912345601"))
+    report.recovery_score = RecoveryScoreEngine().evaluate(report)
+    decision = VerdictEngine(settings).decide(report)
+
+    text = view.report_card(
+        report, decision, notes=["7709123456 — это ИНН организации."], demo_mode=True
+    )
+    lines = text.splitlines()
+
+    assert lines[0] == DEMO_BANNER
+    assert lines[1] == ""
+    assert lines[2] == report.subject.display_name
+    assert lines[3].startswith("Принял: ")
+    assert lines[4] == "7709123456 — это ИНН организации."
+    # И наоборот: вне демо баннера быть не должно ни одной строкой.
+    assert DEMO_BANNER not in view.report_card(report, decision)
+
+
 # ---------------------------------------------------------------- заголовок
 
 

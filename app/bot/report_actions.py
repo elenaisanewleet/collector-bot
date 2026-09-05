@@ -15,13 +15,12 @@
 паспортом. Провайдер и кнопка не могут разойтись, потому что это один и тот же
 код.
 
-Про дубль. «📄 Открыть отчёт», «🔄 Обновить» и «🔍 Новая проверка» повторяют
-:func:`app.bot.keyboards.report_keyboard`. Дубль сознательный и временный:
-``keyboards.py`` правит другое слияние, и трогать его сейчас — гарантированный
-конфликт.
+Про дубль. Его больше нет: временная копия в ``keyboards.report_keyboard``
+жила только до слияния ветки веб-UI и удалена вместе с ним. Ссылка, ряд
+выгрузки, «Обновить» и «Новая проверка» собираются здесь и только здесь —
+двух клавиатур под одной карточкой быть не должно, они разъезжаются первой же
+переименованной кнопкой.
 """
-
-# TODO(merge): свести с keyboards.report_keyboard после слияния ветки веб-UI.
 
 from __future__ import annotations
 
@@ -61,16 +60,29 @@ def report_keyboard(
     refresh_token: str | None,
     subject: SearchSubject,
     bridge: InnBridgeProvider | None,
+    text_url: str | None = None,
+    print_url: str | None = None,
 ) -> InlineKeyboardMarkup:
-    """Клавиатура под карточкой: ссылка, чем добрать проверку, и повтор.
+    """Клавиатура под карточкой: ссылка, выгрузка, чем добрать проверку, и повтор.
 
     При полном вводе (ФИО, дата, ИНН) остаются ровно три кнопки — столько же,
     сколько было до правки. Предложения появляются там, где чего-то не хватило,
     и исчезают, как только его дали.
+
+    Ссылка идёт первой и отдельной строкой: за ней вся таблица, и это главное
+    действие. Выгрузка стоит сразу за ней — отчёт чаще печатают и подшивают,
+    чем дочитывают до конца.
     """
     rows: list[list[InlineKeyboardButton]] = []
     if url:
-        rows.append([InlineKeyboardButton(text="📄 Открыть отчёт", url=url)])
+        rows.append([InlineKeyboardButton(text="📄 Полный отчёт по человеку", url=url)])
+    export: list[InlineKeyboardButton] = []
+    if print_url:
+        export.append(InlineKeyboardButton(text="🖨 PDF / печать", url=print_url))
+    if text_url:
+        export.append(InlineKeyboardButton(text="⬇️ Текстом", url=text_url))
+    if export:
+        rows.append(export)
     if refresh_token:
         rows.extend(_offers(subject, bridge, token=refresh_token))
         rows.append(

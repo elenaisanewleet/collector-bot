@@ -14,6 +14,7 @@ from app.container import Container
 from app.db.repository import AuditRepository, DebtorRepository
 from app.domain.enums import PROVIDER_TITLES
 from app.utils.dates import format_datetime
+from app.utils.formatting import pluralize_ru
 from app.utils.masking import mask_secret
 
 
@@ -63,6 +64,23 @@ def build_router() -> Router:
         lines.append(f"Токен бота: {mask_secret(settings.telegram_bot_token)}")
         lines.append(f"Допущенных пользователей: {len(settings.allowed_user_ids)}")
         await message.answer("\n".join(lines))
+
+    @router.message(Command("revoke"))
+    async def handle_revoke(message: Message, container: Container, user_id: int) -> None:
+        """Погасить все свои действующие ссылки.
+
+        Сценарий ровно один и он бытовой: переслал не туда. До этой команды
+        утёкшая ссылка жила до конца TTL, и сделать с ней было нечего.
+        """
+        count = await container.share_service.revoke_all(telegram_user_id=user_id)
+        if not count:
+            await message.answer("Действующих ссылок нет — отзывать нечего.")
+            return
+        noun = pluralize_ru(count, "ссылка", "ссылки", "ссылок")
+        await message.answer(
+            f"Отозвано {count} {noun}. Старые адреса больше не открываются — "
+            "запросите отчёт заново, бот выдаст новый."
+        )
 
     @router.message(Command("audit"))
     async def handle_audit(message: Message, container: Container) -> None:

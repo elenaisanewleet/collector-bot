@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import unicodedata
-from collections.abc import Iterable
 
 HASH_LENGTH = 32
 
@@ -27,7 +26,3 @@ def stable_hash(*parts: str | None) -> str:
     """Hash of normalized parts, truncated to a comfortable storage width."""
     payload = "|".join(normalize_token(part) for part in parts)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:HASH_LENGTH]
-
-
-def stable_hash_of(parts: Iterable[str | None]) -> str:
-    return stable_hash(*parts)

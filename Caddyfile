@@ -1,0 +1,41 @@
+# Обратный прокси перед веб-отчётами. Сертификат Caddy получает и продлевает сам.
+#
+# За этим адресом лежат персональные данные должников, поэтому здесь же —
+# заголовки, которые не должны зависеть от приложения: страница не индексируется,
+# не кэшируется и не утекает адресом в Referer при переходе по внешним ссылкам
+# отчёта (а они там есть: fedresurs.ru, reestr-zalogov.ru, kad.arbitr.ru).
+
+{$DOMAIN} {
+	tls {$ACME_EMAIL}
+
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		# Адрес отчёта содержит токен: без этого он уедет на чужой сайт в Referer.
+		Referrer-Policy "no-referrer"
+		X-Robots-Tag "noindex, nofollow, noarchive"
+		-Server
+	}
+
+	reverse_proxy bot:8080
+
+	log {
+		output file /data/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		# Путь запроса содержит токен доступа к персональным данным. Журнал
+		# живёт дольше ссылки и читается шире, поэтому URI из него вырезается
+		# целиком: кто и когда заходил — видно, куда именно — нет.
+		format filter {
+			wrap console
+			fields {
+				uri delete
+				request>uri delete
+			}
+		}
+	}
+}

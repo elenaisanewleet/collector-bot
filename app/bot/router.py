@@ -59,7 +59,10 @@ def setup_dispatcher(dispatcher: Dispatcher, container: Container) -> Dispatcher
     observers *before* the routers, so no handler can run for a user outside the
     allowlist.
     """
-    allowlist = AllowlistMiddleware(container.settings.allowed_user_ids)
+    allowlist = AllowlistMiddleware(
+        container.settings.allowed_user_ids,
+        open_access=container.settings.telegram_access_is_open,
+    )
     dependencies = DependencyMiddleware(container=container)
 
     for observer in (dispatcher.message, dispatcher.callback_query):

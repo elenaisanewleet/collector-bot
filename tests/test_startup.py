@@ -10,7 +10,13 @@ import pytest
 
 from app.config import Settings
 from app.container import build_container
-from app.main import BAD_NEWDB_FIELD_MAP, EMPTY_ALLOWLIST, MISSING_TOKEN, _validate
+from app.main import (
+    BAD_NEWDB_FIELD_MAP,
+    EMPTY_ALLOWLIST,
+    INSECURE_WEB_URL,
+    MISSING_TOKEN,
+    _validate,
+)
 
 
 def test_missing_token_stops_startup(settings: Settings) -> None:
@@ -87,3 +93,27 @@ async def test_database_schema_matches_the_migration(tmp_path) -> None:  # type:
     await engine.dispose()
 
     assert diff == [], f"schema drift: {diff}"
+
+
+def test_http_public_url_stops_startup(settings: Settings) -> None:
+    """Токен доступа едет в пути URL, и по http его видит весь маршрут."""
+    with pytest.raises(SystemExit) as exc_info:
+        _validate(settings.model_copy(update={"web_public_url": "http://reports.example.test"}))
+    assert INSECURE_WEB_URL in str(exc_info.value)
+
+
+def test_http_public_url_is_allowed_only_explicitly(settings: Settings) -> None:
+    _validate(
+        settings.model_copy(
+            update={"web_public_url": "http://localhost:8080", "web_allow_insecure": True}
+        )
+    )
+
+
+def test_https_public_url_passes(settings: Settings) -> None:
+    _validate(settings.model_copy(update={"web_public_url": "https://reports.example.test"}))
+
+
+def test_web_does_not_listen_on_every_interface_by_default(settings: Settings) -> None:
+    """Наружу порт выставляет TLS-терминатор, а не приложение."""
+    assert settings.web_host == "127.0.0.1"

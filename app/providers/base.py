@@ -61,11 +61,6 @@ class BaseProvider(ABC):
     def is_configured(self) -> bool:
         """Whether this provider has everything it needs to make a real call."""
 
-    @property
-    def supports_subject(self) -> bool:
-        """Overridden by providers that only handle certain search types."""
-        return True
-
     @abstractmethod
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         """Perform the lookup. May raise :class:`ProviderError`."""

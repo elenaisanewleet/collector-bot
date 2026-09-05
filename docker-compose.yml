@@ -14,6 +14,20 @@ services:
       # Keep the database on the mounted volume rather than in the container.
       DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/var/collector_bot.db}
       INTERNAL_CSV_PATH: ${INTERNAL_CSV_PATH:-/app/data/demo_debtors.csv}
+      # Внутри контейнера слушаем все интерфейсы: наружу порт выставляет
+      # TLS-терминатор, а не сам контейнер.
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: ${WEB_PORT:-8080}
+    ports:
+      # По умолчанию только на петлю хоста: снаружи страницу публикует
+      # reverse-proxy с TLS. Отдать порт в мир по http означает ссылку с
+      # персданными и токеном открытым текстом.
+      #
+      # WEB_BIND переопределяет адрес и порт публикации — он нужен ровно на
+      # время, пока домен и сертификат не подняты, и задаётся в .env на
+      # сервере, а не правкой этого файла: правка здесь переживёт ровно до
+      # следующей выкладки.
+      - "${WEB_BIND:-127.0.0.1:${WEB_PORT:-8080}}:8080"
     volumes:
       - bot-data:/app/var
       # Drop customer exports here to import them without rebuilding.

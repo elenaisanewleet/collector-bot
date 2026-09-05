@@ -1,0 +1,54 @@
+# Боевое развёртывание: бот, веб-отчёты и обратный прокси с автоматическим TLS.
+#
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Отличия от docker-compose.yml, который для локального запуска:
+#   * веб-порт наружу не публикуется — снаружи доступен только Caddy;
+#   * Caddy сам получает и продлевает сертификат Let's Encrypt по DOMAIN;
+#   * данные и сертификаты лежат в именованных томах и переживают пересборку.
+#
+# В .env на сервере обязательны: DOMAIN, ACME_EMAIL, TELEGRAM_BOT_TOKEN,
+# NEWDB_API_KEY, ALLOWED_TELEGRAM_USER_IDS, WEB_PUBLIC_URL=https://${DOMAIN}
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/var/collector_bot.db}
+      INTERNAL_CSV_PATH: ${INTERNAL_CSV_PATH:-/app/data/demo_debtors.csv}
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: 8080
+    volumes:
+      - bot-data:/app/var
+      - ./data:/app/data:ro
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - bot
+    environment:
+      DOMAIN: ${DOMAIN:?укажите DOMAIN в .env}
+      ACME_EMAIL: ${ACME_EMAIL:?укажите ACME_EMAIL в .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  bot-data:
+  caddy-data:
+  caddy-config:

@@ -420,7 +420,7 @@ async def test_a_status_the_source_never_gave_is_not_a_termination(
 
     text = render_report(report)
     assert "прекращено" not in text
-    assert "состояние не указано источником" in text
+    assert "состояние не определено" in text
     assert "terminated_business_relation" not in factor_names(report)
 
 

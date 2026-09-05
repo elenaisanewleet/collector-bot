@@ -82,7 +82,7 @@ async def test_the_bridge_adds_no_calls_to_a_batch_today(loaded: Container) -> N
     assert estimate.providers_per_debtor == 5
     assert estimate.requests == 30
 
-    text = render_estimate(estimate, loaded.settings.app_name)
+    text = render_estimate(estimate)
     assert "ИНН по паспорту: 0 вызовов" in text
     assert "проверены НЕ будут" in text
 
@@ -104,7 +104,7 @@ async def test_the_bridge_shows_up_as_its_own_line_when_it_will_fire(
         bridge_calls=800,
         without_inn=800,
     )
-    text = render_estimate(estimate, loaded.settings.app_name)
+    text = render_estimate(estimate)
 
     assert estimate.requests == 800 * 5 + 800
     assert "ИНН по паспорту (ФНС): 800 вызовов — по одному на должника" in text

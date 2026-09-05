@@ -958,7 +958,9 @@ def _assert_three_sources_unchecked(report: DebtorReport) -> None:
 def _source_line_for(result: ProviderResult) -> str:
     from app.services.reporting import _source_line
 
-    return _source_line(result)
+    # Счётчик записей внутренней базы живёт в отчёте, а не в результате, поэтому
+    # строка источника собирается по паре (отчёт, результат).
+    return _source_line(_report_with_bridge(result), result)
 
 
 def _report_with_bridge(bridge: ProviderResult) -> DebtorReport:

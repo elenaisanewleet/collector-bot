@@ -13,6 +13,16 @@ from datetime import date
 from app.domain.models import InternalDebtorRecord
 
 
+class InternalSourceError(RuntimeError):
+    """Внутренний источник не отработал, и подменить его нечем.
+
+    Пустой список от упавшей базы и пустой список от честного поиска выглядят
+    одинаково, а значат противоположное: во втором случае совпадений нет, в
+    первом мы просто не смотрели. Отчёт обязан различать эти два случая, поэтому
+    отказ поднимается наверх, а не гасится в ноль записей.
+    """
+
+
 class InternalDebtorProvider(ABC):
     """Lookup by each identifier the business actually has to hand.
 

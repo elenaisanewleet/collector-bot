@@ -185,7 +185,13 @@ class BusinessStatus(StrEnum):
 
     ``UNKNOWN`` — источник о состоянии не сказал. Это не «прекращено»: живой
     ``egrul_ip`` не отдаёт статус у строк физлица вообще, и должник с
-    действующим ИП приходит именно так.
+    действующим ИП приходит именно так — то есть непрочитанное состояние здесь
+    норма, а не редкий край.
+
+    Действующее ИП с непрочитанным статусом — это плюс к перспективе взыскания,
+    и терять его нельзя: свёрнутое в ``TERMINATED`` (или в булев ``is_active``)
+    оно убирает из поля зрения оператора единственный реальный источник денег и
+    вдобавок штрафует должника фактором «прекращённые связи».
     """
 
     ACTIVE = "active"
@@ -193,10 +199,15 @@ class BusinessStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
-BUSINESS_STATE_TITLES: dict[BusinessStatus, str] = {
+BUSINESS_STATUS_TITLES: dict[BusinessStatus, str] = {
     BusinessStatus.ACTIVE: "действует",
     BusinessStatus.TERMINATED: "прекращено",
-    BusinessStatus.UNKNOWN: "состояние не указано источником",
+    # Не «прекращено»: непрочитанное состояние, поданное как закрытая
+    # регистрация, убирает из поля зрения оператора живое ИП. Формулировка
+    # намеренно та же, что у соседей BANKRUPTCY_STATUS_TITLES и
+    # PLEDGE_STATUS_TITLES: слова про одно и то же состояние должны совпадать в
+    # тексте бота и на веб-странице.
+    BusinessStatus.UNKNOWN: "состояние не определено",
 }
 
 
@@ -264,10 +275,3 @@ COURT_CASE_ROLE_TITLES: dict[CourtCaseRole, str] = {
     CourtCaseRole.PLAINTIFF: "истец",
     CourtCaseRole.OTHER: "иная роль",
 }
-
-
-class ImportRowOutcome(StrEnum):
-    CREATED = "created"
-    UPDATED = "updated"
-    SKIPPED = "skipped"
-    FAILED = "failed"

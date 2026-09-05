@@ -219,6 +219,9 @@ class ShareLink(Base):
     expires_at: Mapped[datetime] = mapped_column(UtcDateTime, index=True)
     opened_count: Mapped[int] = mapped_column(Integer, default=0)
     last_opened_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    # Отзыв. Утёкшую ссылку надо чем-то закрыть до истечения срока: сценарий,
+    # ради которого отзыв и нужен, — «переслал не туда», и он случается.
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
 
 
 class AuditEvent(Base):
