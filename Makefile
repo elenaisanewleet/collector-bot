@@ -9,7 +9,7 @@ BIN    := $(VENV)/bin
 PY     := $(BIN)/python
 
 .DEFAULT_GOAL := help
-.PHONY: help install venv run demo seed migrate migration test lint format typecheck check clean docker-build docker-up docker-down
+.PHONY: help install venv run demo seed onec-doctor migrate migration test lint format typecheck check clean docker-build docker-up docker-down
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -34,6 +34,9 @@ demo:  ## Run the full pipeline in the terminal — no credentials needed
 
 seed:  ## Load data/demo_debtors.csv into the local database
 	$(PY) scripts/seed_demo.py
+
+onec-doctor:  ## Inventory the customer's published 1С OData and check ONEC_FIELD_MAP
+	$(PY) scripts/onec_doctor.py
 
 migrate:  ## Apply database migrations
 	$(BIN)/alembic upgrade head

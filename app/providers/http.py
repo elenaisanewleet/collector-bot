@@ -71,12 +71,26 @@ def build_client(
     base_url: str,
     timeout_seconds: float,
     headers: Mapping[str, str] | None = None,
+    verify: bool | str = True,
+    max_connections: int | None = None,
 ) -> httpx.AsyncClient:
+    """An async client with the project's timeout and redirect policy.
+
+    ``verify`` exists for on-premise publications: a 1С server inside the
+    customer's network usually presents a corporate or self-signed certificate,
+    and ``httpx`` ships its own ``certifi`` bundle that ``SSL_CERT_FILE`` does
+    not override. Pass a path to the CA bundle — or, knowingly, ``False``.
+    """
+    limits = (
+        httpx.Limits(max_connections=max_connections) if max_connections is not None else None
+    )
     return httpx.AsyncClient(
         base_url=base_url,
         timeout=httpx.Timeout(timeout_seconds),
         headers=dict(headers or {}),
         follow_redirects=True,
+        verify=verify,
+        **({"limits": limits} if limits is not None else {}),
     )
 
 

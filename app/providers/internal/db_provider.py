@@ -16,6 +16,8 @@ from app.providers.internal.base import InternalDebtorProvider
 
 
 class DatabaseInternalDebtorProvider(InternalDebtorProvider):
+    source_label = "внутренняя база"
+
     def __init__(self, database: Database) -> None:
         self._database = database
 

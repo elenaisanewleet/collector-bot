@@ -35,6 +35,8 @@ class CSVInternalDebtorProvider(InternalDebtorProvider):
     not each parse the file.
     """
 
+    source_label = "выгрузка CSV"
+
     def __init__(self, path: Path) -> None:
         self._path = path
         self._lock = asyncio.Lock()

@@ -8,9 +8,47 @@ invisible above this line — which is the whole point of having it.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date
 
+from app.domain.enums import ProviderStatus
 from app.domain.models import InternalDebtorRecord
+
+
+@dataclass(frozen=True, slots=True)
+class InternalSourceFailure:
+    """One internal source that did not answer, named.
+
+    Without this the internal contour has no status channel at all: a 1С that
+    timed out and a database with no such debtor both arrive as an empty list,
+    and the report prints the same "совпадений не найдено" for both.
+    """
+
+    source: str
+    status: ProviderStatus
+    error_code: str
+    error_message: str
+
+
+class InternalRecords(list[InternalDebtorRecord]):
+    """The records, plus the sources that never got as far as producing any.
+
+    A subclass of ``list`` on purpose: every ``find_by_*`` signature stays
+    ``list[InternalDebtorRecord]``, ``if not records`` and ``records.extend()``
+    keep working, and the CSV and database providers need no changes at all.
+    """
+
+    __slots__ = ("failures",)
+
+    def __init__(
+        self,
+        records: Iterable[InternalDebtorRecord] = (),
+        *,
+        failures: Iterable[InternalSourceFailure] = (),
+    ) -> None:
+        super().__init__(records)
+        self.failures: tuple[InternalSourceFailure, ...] = tuple(failures)
 
 
 class InternalDebtorProvider(ABC):
@@ -20,6 +58,10 @@ class InternalDebtorProvider(ABC):
     are the same person is the :class:`~app.services.identity.IdentityMatcher`'s
     job, not the storage layer's.
     """
+
+    # Shown to the operator when this source is the one that failed. "1С —
+    # недоступно" is actionable; "источник недоступен" is not.
+    source_label: str = "внутренний источник"
 
     @abstractmethod
     async def find_by_fio(
@@ -54,3 +96,10 @@ class InternalDebtorProvider(ABC):
     async def find_by_address(self, address: str) -> list[InternalDebtorRecord]:
         """Find by address substring. Optional — defaults to no results."""
         return []
+
+
+__all__ = [
+    "InternalDebtorProvider",
+    "InternalRecords",
+    "InternalSourceFailure",
+]

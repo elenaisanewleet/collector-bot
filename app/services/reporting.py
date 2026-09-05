@@ -45,6 +45,7 @@ MAX_LISTED_BUSINESSES = 5
 MAX_LISTED_PLEDGES = 5
 MAX_LISTED_CASES = 5
 DISCLAIMER = "Оценка является аналитической и не заменяет юридическую проверку."
+INTERNAL_PARTIAL = "Внутренняя база проверена не полностью."
 DEMO_BANNER = "⚠️ ДЕМО-РЕЖИМ: данные вымышленные, внешние источники не опрашивались."
 
 
@@ -104,9 +105,20 @@ def render_internal_card(record: InternalDebtorRecord) -> str:
 
 
 def _internal_block(report: DebtorReport) -> str:
+    """Наши данные — и, если какой-то внутренний источник не ответил, об этом.
+
+    Пустой внутренний контур означает одно из двух: «мы посмотрели, там никого»
+    и «посмотреть не удалось». Первое — вывод о должнике, второе — о нас, и
+    печатать их одинаково нельзя.
+    """
     record = report.internal_record
+    result = report.result_for(ProviderName.INTERNAL)
+    unanswered = _unanswered_line(result) if result is not None else None
+
     if record is None:
-        return "НАШИ ДАННЫЕ\nСовпадений во внутренней базе не найдено."
+        if unanswered is None:
+            return "НАШИ ДАННЫЕ\nСовпадений во внутренней базе не найдено."
+        return "\n".join(["НАШИ ДАННЫЕ", INTERNAL_PARTIAL, unanswered, *_failure_detail(result)])
 
     lines = ["НАШИ ДАННЫЕ"]
     lines.extend(_internal_lines(record))
@@ -114,7 +126,17 @@ def _internal_block(report: DebtorReport) -> str:
     if extra > 0:
         noun = pluralize_ru(extra, "запись", "записи", "записей")
         lines.append(f"Ещё {extra} похожих {noun} во внутренней базе.")
+    if unanswered is not None:
+        # Нашли — но не везде: найденное не отменяет непроверенного.
+        lines.extend([INTERNAL_PARTIAL, unanswered, *_failure_detail(result)])
     return "\n".join(lines)
+
+
+def _failure_detail(result: ProviderResult | None) -> list[str]:
+    """Какой именно внутренний источник отказал. «1С» полезнее, чем «источник»."""
+    if result is None or not result.error_message:
+        return []
+    return [result.error_message]
 
 
 def _internal_lines(record: InternalDebtorRecord) -> list[str]:
@@ -353,13 +375,33 @@ def _score_block(score: RecoveryScore | None) -> str:
 
 def _sources_block(report: DebtorReport) -> str:
     lines = ["ИСТОЧНИКИ"]
-    if report.internal_records:
+    internal = report.result_for(ProviderName.INTERNAL)
+    if internal is not None:
+        lines.append(_internal_source_line(internal, count=len(report.internal_records)))
+    elif report.internal_records:
         lines.append("✓ Наши данные")
     else:
         lines.append("○ Наши данные — совпадений нет")
-    for result in report.provider_results:
-        lines.append(_source_line(result))
+    lines.extend(
+        _source_line(result)
+        for result in report.provider_results
+        # Внутренний контур уже напечатан строкой выше; в общем цикле он бы
+        # задвоился.
+        if result.provider is not ProviderName.INTERNAL
+    )
     return "\n".join(lines)
+
+
+def _internal_source_line(result: ProviderResult, *, count: int) -> str:
+    """То же, что и у прочих источников, но число записей берётся из отчёта.
+
+    ``ProviderResult`` внутреннего контура несёт ``records=[]`` намеренно —
+    иначе карточка «Наши данные» попадёт в отчёт дважды.
+    """
+    if result.status is ProviderStatus.SUCCESS:
+        title = PROVIDER_TITLES.get(result.provider, result.provider.value)
+        return f"✓ {title} — {count} зап."
+    return _source_line(result)
 
 
 def _source_line(result: ProviderResult) -> str:

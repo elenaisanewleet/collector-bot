@@ -56,7 +56,15 @@ from app.domain.identity import INN_INDIVIDUAL_LENGTH, SearchSubject
 from app.logging_setup import get_logger
 from app.providers.base import BaseProvider, ProviderError, ProviderUnavailableError
 from app.providers.http import RetryPolicy, build_client, request_json
-from app.providers.mapping import FieldMap, FieldMapError, RecordDict, as_text, dig
+from app.providers.mapping import (
+    FieldMap,
+    FieldMapError,
+    MappedRows,
+    RecordDict,
+    as_text,
+    dig,
+    has_any_value,
+)
 
 logger = get_logger(__name__)
 
@@ -253,19 +261,6 @@ def _extract_rows(envelope: Any, method: str) -> list[Any]:
 
 
 @dataclass(frozen=True, slots=True)
-class MappedRows:
-    """Rows the map could read, plus a count of the ones it could not.
-
-    Keeping the two apart is the whole point: "the source answered with
-    nothing" and "the map read nothing in the answer" both come out as zero
-    records, and they mean opposite things.
-    """
-
-    records: list[RecordDict]
-    unreadable: int
-
-
-@dataclass(frozen=True, slots=True)
 class MethodMap:
     """How to read one method's rows, and what to add to its request."""
 
@@ -291,7 +286,9 @@ class MethodMap:
                 continue
             nested = self.field_map.extract_records(row)
             mapped = [
-                record for record in (self.field_map.apply(item) for item in nested) if _any(record)
+                record
+                for record in (self.field_map.apply(item) for item in nested)
+                if has_any_value(record)
             ]
             if mapped:
                 records.extend(mapped)
@@ -311,16 +308,6 @@ class MethodMap:
         """
         path = self.field_map.records_path
         return bool(path) and dig(row, path) is None
-
-
-def _any(record: Mapping[str, Any]) -> bool:
-    """Did the map fill in anything at all?
-
-    An all-``None`` record is not a finding, it is a set of paths that missed.
-    Passing it on would turn a wrong map into a bankruptcy with no case number
-    and a pledge with no subject — findings about people nobody parsed.
-    """
-    return any(value is not None for value in record.values())
 
 
 class NewDBFieldMaps:

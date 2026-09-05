@@ -366,10 +366,9 @@ def _confidence(report: DebtorReport) -> tuple[float, list[str]]:
         total_weight += weight
         provider = ProviderName(provider_key)
         if provider is ProviderName.INTERNAL:
-            if report.internal_records:
+            notes.extend(_internal_coverage(report))
+            if _internal_answered(report):
                 answered_weight += weight
-            else:
-                notes.append("нет данных во внутренней базе")
             continue
         result = report.result_for(provider)
         if result is not None and result.is_answered:
@@ -389,6 +388,31 @@ def _confidence(report: DebtorReport) -> tuple[float, list[str]]:
         notes.append("часть записей сопоставлена как возможные совпадения")
 
     return max(MIN_CONFIDENCE, round(confidence, 2)), notes
+
+
+def _internal_answered(report: DebtorReport) -> bool:
+    """Ответил ли внутренний контур — а не «нашлось ли в нём что-нибудь».
+
+    ``NO_RESULTS`` — это ответ, и он засчитывается в покрытие так же, как у
+    внешних источников. Недоступная 1С — не ответ, и вес за неё не начисляется.
+    """
+    result = report.result_for(ProviderName.INTERNAL)
+    if result is None:
+        # Старый путь: статуса внутреннего контура в отчёте нет вовсе.
+        return bool(report.internal_records)
+    return result.is_answered
+
+
+def _internal_coverage(report: DebtorReport) -> list[str]:
+    result = report.result_for(ProviderName.INTERNAL)
+    if result is not None and not result.is_answered:
+        # Раньше здесь стояла та же заметка, что и у честно пустой базы:
+        # оператор читал «нет данных во внутренней базе» и понимал это как
+        # проверенный факт, а не как несостоявшуюся проверку.
+        return [_unanswered_note(ProviderName.INTERNAL, result)]
+    if not report.internal_records:
+        return ["нет данных во внутренней базе"]
+    return []
 
 
 def _unanswered_note(provider: ProviderName, result: ProviderResult | None) -> str:

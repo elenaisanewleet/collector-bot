@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +82,29 @@ class FieldMap:
 
     def map_all(self, payload: Any) -> list[RecordDict]:
         return [self.apply(record) for record in self.extract_records(payload)]
+
+
+@dataclass(frozen=True, slots=True)
+class MappedRows:
+    """Rows the map could read, plus a count of the ones it could not.
+
+    Keeping the two apart is the whole point: "the source answered with
+    nothing" and "the map read nothing in the answer" both come out as zero
+    records, and they mean opposite things.
+    """
+
+    records: list[RecordDict]
+    unreadable: int
+
+
+def has_any_value(record: Mapping[str, Any]) -> bool:
+    """Did the map fill in anything at all?
+
+    An all-``None`` record is not a finding, it is a set of paths that missed.
+    Passing it on would turn a wrong map into a bankruptcy with no case number
+    and a pledge with no subject — findings about people nobody parsed.
+    """
+    return any(value is not None for value in record.values())
 
 
 def dig(payload: Any, path: str) -> Any:
