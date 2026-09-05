@@ -149,7 +149,7 @@ def report_keyboard(
     """
     rows: list[list[InlineKeyboardButton]] = []
     if url:
-        rows.append([InlineKeyboardButton(text="📄 Открыть отчёт", url=url)])
+        rows.append([InlineKeyboardButton(text="📄 Полный отчёт по человеку", url=url)])
     export: list[InlineKeyboardButton] = []
     if print_url:
         export.append(InlineKeyboardButton(text="🖨 PDF / печать", url=print_url))
