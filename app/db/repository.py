@@ -26,12 +26,47 @@ from app.db.models import (
     SearchRequest,
     SearchResult,
     ShareLink,
+    VendorCacheEntry,
 )
 from app.domain.models import InternalDebtorRecord, ProviderResult, RecoveryScore
 from app.utils.dates import utcnow
 from app.utils.hashing import normalize_token, stable_hash
 
 HISTORY_PAGE_SIZE = 10
+
+
+class VendorCacheRepository:
+    """Ответы платных методов, ключ которых — не субъект поиска.
+
+    Нужен цепочке по юрлицам: там вызов идёт по ИНН компании, а не по человеку,
+    и без отдельного ключа два должника из одного ООО платят за один ответ
+    дважды.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get(self, cache_key: str, *, ttl_hours: int) -> str | None:
+        if ttl_hours <= 0:
+            return None
+        cutoff = utcnow() - timedelta(hours=ttl_hours)
+        stmt = select(VendorCacheEntry).where(
+            VendorCacheEntry.cache_key == cache_key,
+            VendorCacheEntry.created_at >= cutoff,
+        )
+        entry = await self._session.scalar(stmt)
+        return entry.payload_json if entry is not None else None
+
+    async def put(self, cache_key: str, payload_json: str) -> None:
+        existing = await self._session.scalar(
+            select(VendorCacheEntry).where(VendorCacheEntry.cache_key == cache_key)
+        )
+        if existing is None:
+            self._session.add(VendorCacheEntry(cache_key=cache_key, payload_json=payload_json))
+        else:
+            existing.payload_json = payload_json
+            existing.created_at = utcnow()
+        await self._session.flush()
 
 
 class DebtorRepository:
@@ -61,6 +96,7 @@ class DebtorRepository:
             "contract_number",
             "claim_number",
             "debt_amount",
+            "inn",
             "address",
             "vehicle_plate",
             "vin",
@@ -267,6 +303,7 @@ class SearchRepository:
                         [record.model_dump(mode="json") for record in result.records],
                         ensure_ascii=False,
                     ),
+                    notes_json=json.dumps(list(result.notes), ensure_ascii=False),
                     raw_response=result.raw_response if store_raw else None,
                     error_code=result.error_code,
                     error_message=result.error_message,
@@ -276,7 +313,6 @@ class SearchRepository:
                     # чего в ответе не хватало. Потеряв это, кэш пересоберёт
                     # неполный ответ как исчерпывающий.
                     is_partial=result.is_partial,
-                    notes_json=json.dumps(list(result.notes), ensure_ascii=False),
                 )
             )
         await self._session.flush()

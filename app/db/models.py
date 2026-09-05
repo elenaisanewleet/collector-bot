@@ -106,6 +106,10 @@ class SearchResult(Base):
     provider_status: Mapped[str] = mapped_column(String(32))
     fetched_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
     normalized_json: Mapped[str] = mapped_column(Text, default="[]")
+    # Оговорки источника о полноте ответа («разобрано 10 из 47», «проверено 3
+    # компании из 7»). Хранятся вместе с результатом: предел, о котором отчёт
+    # умолчал на повторе из кэша, — та же инверсия, только отложенная.
+    notes_json: Mapped[str] = mapped_column(Text, default="[]")
     # Populated only when STORE_RAW_RESPONSES is enabled.
     raw_response: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(64))
@@ -119,7 +123,6 @@ class SearchResult(Base):
     # найдено» там, где сутки назад честно писал «найдено 13, сопоставлено 0».
     # Кэш не имеет права быть добрее исходного ответа.
     is_partial: Mapped[bool] = mapped_column(Boolean, default=False)
-    notes_json: Mapped[str] = mapped_column(Text, default="[]")
 
     request: Mapped[SearchRequest] = relationship(back_populates="results")
 
@@ -339,6 +342,23 @@ class QueryCard(Base):
     __table_args__ = (
         UniqueConstraint("telegram_user_id", "chat_id", name="uq_query_cards_user_chat"),
     )
+
+
+class VendorCacheEntry(Base):
+    """Ответ платного метода, ключ которого — не субъект поиска.
+
+    Кэш отчёта строится по человеку, и для цепочки по юрлицам этого мало: два
+    должника из одного ООО оплатили бы один и тот же ответ дважды, а на выгрузке
+    из одного холдинга — кратно. Здесь ключ — то, по чему реально шёл вызов
+    (``newdb:arbitr_legal:<ИНН компании>``), с тем же окном, что и у отчётов.
+    """
+
+    __tablename__ = "vendor_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cache_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
 
 
 class AuditEvent(Base):

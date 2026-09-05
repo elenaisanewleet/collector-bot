@@ -18,6 +18,7 @@ from app.domain.models import (
     DebtorReport,
     EnforcementProceeding,
     InternalDebtorRecord,
+    LegalEntityCase,
     PledgeRecord,
     PropertyRecord,
     ProviderResult,
@@ -64,6 +65,8 @@ def _dispatch(report: DebtorReport, record: SourcedFact) -> None:
         report.business_relations.append(record)
     elif isinstance(record, CourtCase):
         report.court_cases.append(record)
+    elif isinstance(record, LegalEntityCase):
+        report.legal_entity_cases.append(record)
     elif isinstance(record, PledgeRecord):
         report.pledges.append(record)
     elif isinstance(record, VehicleRecord):
@@ -89,6 +92,15 @@ def _sort_report(report: DebtorReport) -> None:
     report.court_cases.sort(
         key=lambda item: (
             -item.match_confidence,
+            not item.is_active,
+            -(item.amount or 0),
+        )
+    )
+    # Дела юрлиц сортируются не по совпадению — его у них нет и быть не может, —
+    # а по тому, что важно взыскателю: сначала иски к компании, потом крупные.
+    report.legal_entity_cases.sort(
+        key=lambda item: (
+            not item.is_claim_against_company,
             not item.is_active,
             -(item.amount or 0),
         )

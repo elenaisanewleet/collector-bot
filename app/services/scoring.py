@@ -439,10 +439,20 @@ def _court_factors(report: DebtorReport) -> list[ScoreFactor]:
 
 
 def _asset_factors(report: DebtorReport) -> list[ScoreFactor]:
-    """Only confirmed assets count. A probable match on a flat is not a flat."""
+    """Only confirmed assets count. A probable match on a flat is not a flat.
+
+    For real estate that means two conditions, not one. The ЕГРН source answers
+    about an *object at an address* and does not name a rightholder, so a record
+    from it can be a perfect match on the address and still say nothing about
+    who owns the thing. ``owner_confirmed`` is what carries that, and this
+    source never sets it: an object nobody attributed to the debtor must not add
+    fifteen points to how collectable their debt looks.
+    """
     factors: list[ScoreFactor] = []
 
-    confirmed_property = [item for item in report.properties if item.is_confirmed]
+    confirmed_property = [
+        item for item in report.properties if item.is_confirmed and item.owner_confirmed
+    ]
     if confirmed_property:
         factors.append(
             ScoreFactor(

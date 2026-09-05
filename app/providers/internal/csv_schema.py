@@ -39,6 +39,7 @@ CANONICAL_COLUMNS = (
     "contract_number",
     "claim_number",
     "debt_amount",
+    "inn",
     "address",
     "vehicle_plate",
     "vin",
@@ -221,6 +222,7 @@ def _build_row(mapping: dict[int, str | None], raw_row: list[str]) -> DebtorRow:
     row.phone = _parse_optional_phone(values.get("phone"), row)
     row.inn = _parse_optional_inn(values.get("inn"), row)
     row.debt_amount = _parse_optional_amount(values.get("debt_amount"), row)
+    row.inn = _parse_optional_inn(values.get("inn"), row)
     row.address = normalize_address(values.get("address"))
     row.vehicle_plate = _parse_optional_plate(values.get("vehicle_plate"), row)
     row.vin = _parse_optional_vin(values.get("vin"), row)

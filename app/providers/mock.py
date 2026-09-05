@@ -366,6 +366,9 @@ class DemoFNSProvider(BaseProvider):
                 termination_date=(
                     date(2024, 9, 30) if status is BusinessStatus.TERMINATED else None
                 ),
+                # Демо-профиль заведён на конкретного человека: связь с ним —
+                # часть выдумки, а не результат сопоставления имён.
+                linked_by_identifier=True,
             )
             for inn, name, role, status in profile.businesses
         ]

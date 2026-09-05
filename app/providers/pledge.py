@@ -45,6 +45,7 @@ from typing import Any
 from app.domain.enums import MissingInput, PledgeStatus, ProviderName, ProviderStatus
 from app.domain.identity import SearchSubject, normalize_vin
 from app.domain.models import PledgeRecord, ProviderResult
+from app.providers.base import NO_CONTEXT, FetchContext
 from app.providers.mapping import as_text
 from app.providers.newdb import (
     COUNTRY_RU,
@@ -115,6 +116,12 @@ class NewDBPledgeProvider(NewDBMethodProvider):
             notes=_unmatched_note(unmatched, parsed=len(unique)),
             raw_response=self.raw_for("\n".join(raw_bodies)),
         )
+
+    def planned_calls(self, subject: SearchSubject, context: FetchContext = NO_CONTEXT) -> int:
+        """One call per method this subject can actually be looked up by."""
+        if not self.is_configured:
+            return 0
+        return len(self._plans(subject))
 
     def _plans(self, subject: SearchSubject) -> list[tuple[str, dict[str, Any]]]:
         """Which of the two methods this subject can actually be looked up by.

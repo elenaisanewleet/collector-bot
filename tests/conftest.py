@@ -177,13 +177,17 @@ def make_business(
     sole_proprietor: bool = True,
     confidence: float = 1.0,
 ) -> BusinessRelation:
-    from app.domain.enums import BusinessRole, BusinessStatus
+    from app.domain.enums import BusinessRole, BusinessStatus, EntityType
 
     record = BusinessRelation(
-        inn="770912345601",
-        name="ИП Тестов Андрей Сергеевич",
+        inn="770912345601" if sole_proprietor else "5038123456",
+        name="ИП Тестов Андрей Сергеевич" if sole_proprietor else 'ООО "Демонстрационные решения"',
+        # Тип сущности здесь не украшение: от него зависит, сопоставляется ли
+        # запись с человеком по ФИО и ИНН. ИП — это сам должник, юрлицо — нет.
+        entity_type=EntityType.SOLE_PROPRIETOR if sole_proprietor else EntityType.LEGAL_ENTITY,
         role=BusinessRole.SOLE_PROPRIETOR if sole_proprietor else BusinessRole.DIRECTOR,
         status=BusinessStatus.ACTIVE if active else BusinessStatus.TERMINATED,
+        linked_by_identifier=not sole_proprietor,
     )
     record.match_confidence = confidence
     return record

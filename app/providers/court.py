@@ -14,6 +14,15 @@ proceeding that competes with ours.
 The method identifies a person by ИНН. Without one this provider reports
 "недостаточно данных" instead of searching by name — an arbitration case
 attached to the wrong person is a wrong reason to drop a debtor.
+
+The answer is a wrapper per subject, not a row per case: ``data[0]`` carries
+``total_count``, ``message``, ``pagination`` and two arrays — ``cases`` (the
+short list) and ``detailed_cases`` (the same cases with their card parsed). The
+map reads the second. The wrapper itself is read here, because two things in it
+decide whether an empty result may be reported as one: a non-empty ``cases``
+beside an empty ``detailed_cases`` means the vendor found cases and parsed none,
+and ``pagination.limit`` is 10, so a debtor with forty cases has thirty nobody
+looked at.
 """
 
 from __future__ import annotations
@@ -24,6 +33,7 @@ from typing import Any
 from app.domain.enums import CourtCaseRole, MissingInput, ProviderName, ProviderStatus
 from app.domain.identity import PersonName, SearchSubject, compare_names, is_name_evidence
 from app.domain.models import CourtCase, ProviderResult
+from app.providers.base import NO_CONTEXT, FetchContext
 from app.providers.mapping import as_text, dig
 from app.providers.newdb import (
     MappedRows,
@@ -113,6 +123,33 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
             notes=tuple(notes),
             raw_response=self.raw_for(raw),
         )
+
+    def planned_calls(self, subject: SearchSubject, context: FetchContext = NO_CONTEXT) -> int:
+        if not self.is_configured or individual_inn(subject) is None:
+            return 0
+        return 1
+
+
+def _coverage_notes(containers: Sequence[Any], *, parsed: int) -> tuple[str, ...]:
+    """«Разобрано N из M» — из полей самой обёртки.
+
+    Без этой строки усечённая страница выглядит как полный ответ: источник
+    отдаёт по десять дел за раз, и «дел больше нет» после десятого — это не то,
+    что он сказал.
+    """
+    notes: list[str] = []
+    for container in containers:
+        if not isinstance(container, Mapping):
+            continue
+        total = container.get("total_count")
+        has_more = dig(container, "pagination.has_more")
+        if isinstance(total, int) and total > parsed:
+            notes.append(
+                f"Источник нашёл дел: {total}, разобрано {parsed}. По остальным сведений нет."
+            )
+        elif has_more is True:
+            notes.append("Источник отдал не все дела: следующая страница не запрашивалась.")
+    return tuple(dict.fromkeys(notes))
 
 
 def _completeness_notes(mapped: MappedRows, *, shown: int) -> list[str]:

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 from app.domain.enums import MissingInput, ProviderName, ProviderStatus
 from app.domain.identity import SearchSubject
@@ -17,6 +19,30 @@ from app.domain.models import ProviderResult
 from app.logging_setup import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class FetchContext:
+    """Everything about *this* lookup that is not the subject.
+
+    Two things live here, and both exist because they change what a source is
+    allowed to cost:
+
+    ``batch``     this is one debtor out of a run of eight hundred. Sources
+                  priced per debtor are switched off here unless the deployment
+                  turned them on knowingly.
+    ``upstream``  results the first phase already produced, for the one source
+                  whose input is another source's answer.
+    """
+
+    batch: bool = False
+    upstream: tuple[ProviderResult, ...] = field(default_factory=tuple)
+
+    def result_for(self, provider: ProviderName) -> ProviderResult | None:
+        return next((item for item in self.upstream if item.provider is provider), None)
+
+
+NO_CONTEXT = FetchContext()
 
 
 class ProviderError(Exception):
@@ -55,11 +81,34 @@ class BaseProvider(ABC):
 
     name: ProviderName
     title: str = ""
+    # A chained source is fed by another source's answer rather than by the
+    # subject, so it runs in a second phase. See ``SearchService._run_chained``.
+    is_chained: bool = False
 
     @property
     @abstractmethod
     def is_configured(self) -> bool:
         """Whether this provider has everything it needs to make a real call."""
+
+    @property
+    def supports_subject(self) -> bool:
+        """Overridden by providers that only handle certain search types."""
+        return True
+
+    def planned_calls(self, subject: SearchSubject, context: FetchContext = NO_CONTEXT) -> int:
+        """How many paid calls this subject will cost, at minimum.
+
+        The batch estimate is what the operator confirms before money moves, so
+        it has to count *calls*, not providers: ФССП searches once per region,
+        pledges search by person and by VIN, and a source with nothing to search
+        by costs nothing at all.
+        """
+        return 1 if self.is_configured and self.supports_subject else 0
+
+    def max_planned_calls(self, subject: SearchSubject, context: FetchContext = NO_CONTEXT) -> int:
+        """The ceiling. Differs from :meth:`planned_calls` only for a chain,
+        whose length is not known until the first source has answered."""
+        return self.planned_calls(subject, context)
 
     @abstractmethod
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
@@ -84,7 +133,13 @@ class BaseProvider(ABC):
         """
         return ()
 
-    async def fetch(self, subject: SearchSubject) -> ProviderResult:
+    async def _dispatch(self, subject: SearchSubject, context: FetchContext) -> ProviderResult:
+        """Route one fetch. Providers that read the context override this."""
+        return await self._fetch(subject)
+
+    async def fetch(
+        self, subject: SearchSubject, context: FetchContext = NO_CONTEXT
+    ) -> ProviderResult:
         started = time.perf_counter()
         if not self.is_configured:
             return self._result(
@@ -94,7 +149,7 @@ class BaseProvider(ABC):
                 error_message="Источник не подключён",
             )
         try:
-            result = await self._fetch(subject)
+            result = await self._dispatch(subject, context)
         except ProviderError as exc:
             logger.warning(
                 "provider.failed",
@@ -136,12 +191,15 @@ class BaseProvider(ABC):
             duration_ms=_elapsed_ms(started),
         )
 
-    def not_configured(self, message: str = "Источник не подключён") -> ProviderResult:
+    def not_configured(
+        self, message: str = "Источник не подключён", *, notes: Sequence[str] = ()
+    ) -> ProviderResult:
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.NOT_CONFIGURED,
             error_code="not_configured",
             error_message=message,
+            notes=tuple(notes),
         )
 
     def insufficient_query(

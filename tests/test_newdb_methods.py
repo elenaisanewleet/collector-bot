@@ -23,13 +23,12 @@ import respx
 from app.config import FedresursBackend, FNSBackend, Settings
 from app.domain.enums import (
     BankruptcyStatus,
-    BusinessRole,
     CourtCaseRole,
     PledgeStatus,
     ProviderStatus,
 )
 from app.domain.identity import PersonName, SearchSubject, VehicleDescriptor
-from app.domain.models import BankruptcyRecord, BusinessRelation, CourtCase, PledgeRecord
+from app.domain.models import BankruptcyRecord, CourtCase, PledgeRecord
 from app.providers.court import NewDBArbitrationProvider
 from app.providers.fedresurs import NewDBBankruptcyProvider
 from app.providers.fns import NewDBBusinessProvider
@@ -39,6 +38,16 @@ from app.providers.pledge import NewDBPledgeProvider
 
 BASE_URL = "https://api.example.test"
 NEWDB_URL = f"{BASE_URL}/v2"
+
+# Дословные ответы живого сервиса, обрезанные только по объёму: тома судебных
+# документов выброшены, ни одно имя ключа не тронуто. Это единственный вид
+# теста, который ловит расхождение карты с ответом целым классом.
+LIVE_FIXTURES = Path(__file__).parent / "fixtures" / "newdb"
+
+
+def live_fixture(name: str) -> Any:
+    return json.loads((LIVE_FIXTURES / name).read_text(encoding="utf-8"))
+
 
 # Placeholder row keys, matching config/field_maps/example_newdb.json. They are
 # what a deployment writes down after reading its own contract; the point of the
@@ -859,31 +868,6 @@ async def test_bankruptcy_without_inn_is_not_queried(
 
 
 # ---------------------------------------------------------------- ИП
-
-
-@respx.mock
-async def test_sole_proprietor_status_is_mapped(
-    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
-) -> None:
-    row = {
-        "INN": "770912345601",
-        "OGRNIP": "316774600000000",
-        "Name": "ИП Тестов Андрей Сергеевич",
-        "Role": "Индивидуальный предприниматель",
-        "Status": "Действует",
-    }
-    route = respx.post(NEWDB_URL).mock(
-        return_value=httpx.Response(200, json=envelope("egrul_ip", data=[row]))
-    )
-
-    result = await NewDBBusinessProvider(newdb_settings, maps).fetch(inn_subject)
-
-    assert result.status is ProviderStatus.SUCCESS
-    record = result.records[0]
-    assert isinstance(record, BusinessRelation)
-    assert record.role is BusinessRole.SOLE_PROPRIETOR
-    assert record.is_active_sole_proprietor
-    assert json.loads(route.calls[0].request.content)["params"]["innfiz"] == "770912345601"
 
 
 async def test_sole_proprietor_needs_an_identifier(

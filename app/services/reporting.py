@@ -36,6 +36,7 @@ from app.domain.models import (
     EnforcementProceeding,
     InternalDebtorRecord,
     PledgeRecord,
+    PropertyRecord,
     ProviderResult,
     RecoveryScore,
 )
@@ -60,6 +61,26 @@ PLEDGE_SCOPE_NOTE = (
 # нет: «арбитражных дел не найдено» без оговорки читается как «на него никто не
 # подавал», а иски к физлицу идут в суд общей юрисдикции.
 COURT_SCOPE_NOTE = "Суды общей юрисдикции этот источник не покрывает."
+MAX_LISTED_PROPERTIES = 3
+
+# Обязательная строка блока ЕГРН. Источник не называет правообладателя, и любой
+# текст рядом с найденным объектом читается как «нашли имущество должника», если
+# прямо не сказано обратное.
+OWNERSHIP_DISCLAIMER = (
+    "ЕГРН не раскрывает правообладателя. Принадлежность объекта должнику\n"
+    "НЕ подтверждена: по этому адресу он может быть только зарегистрирован."
+)
+NO_PROPERTY_FOUND = (
+    "По указанному адресу объект в ЕГРН не найден. Это не значит, что у должника "
+    "нет недвижимости: по ФИО Росреестр сведения о правах не выдаёт."
+)
+# Имущество ООО не является имуществом участника: взыскание обращается на долю
+# в уставном капитале, а обороты компании — лишь оценка её стоимости.
+COMPANY_ASSETS_DISCLAIMER = (
+    "  Имущество ООО не является имуществом участника. Взыскание обращается\n"
+    "  на долю в уставном капитале (ст. 74 ФЗ-229, ст. 25 ФЗ-14); обороты\n"
+    "  компании — лишь оценка стоимости доли."
+)
 DISCLAIMER = "Оценка является аналитической и не заменяет юридическую проверку."
 # Подписи состояния «источник подключён / не подключён» и строка, которой это
 # состояние печатается в отчёте. Живут здесь по той же причине, что и
@@ -208,6 +229,7 @@ def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
     blocks.append(_bankruptcy_block(report))
     blocks.append(_business_block(report))
     blocks.append(_pledge_block(report))
+    blocks.append(_property_block(report))
     blocks.append(_court_block(report))
     blocks.append(_score_block(report.recovery_score))
     blocks.append(_sources_block(report))
@@ -374,7 +396,12 @@ def _business_block(report: DebtorReport) -> str:
     if unanswered:
         return f"{header}\n{unanswered}"
 
-    usable = [item for item in report.business_relations if item.is_usable]
+    # ИП — это сам должник под другим именем, и слабое совпадение по нему
+    # означает чужого человека: такие записи отсеиваются. Юрлицо совпадением по
+    # ФИО не проверяется вовсе (название ООО не является именем), поэтому
+    # отсеять его было бы не осторожностью, а потерей находки; вместо этого
+    # рядом с ним печатается, чем именно связь подтверждена.
+    usable = [item for item in report.business_relations if item.is_usable or item.is_legal_entity]
     if not usable:
         return _empty_block(
             header,
@@ -386,7 +413,7 @@ def _business_block(report: DebtorReport) -> str:
 
     lines = [header]
     for item in usable[:MAX_LISTED_BUSINESSES]:
-        lines.append(_business_line(item))
+        lines.extend(_business_line(item, report))
     hidden = len(usable) - MAX_LISTED_BUSINESSES
     if hidden > 0:
         lines.append(f"…и ещё {hidden}")
@@ -395,7 +422,7 @@ def _business_block(report: DebtorReport) -> str:
     return "\n".join(lines)
 
 
-def _business_line(item: BusinessRelation) -> str:
+def _business_line(item: BusinessRelation, report: DebtorReport) -> list[str]:
     # Через словарь, а не через ``is_active``: состояний три, а у булева флага
     # два. ``egrul_ip`` не отдаёт статус у строк физлица вовсе — во всех живых
     # записях ``status: null``, — и печатать это как «прекращено» значит
@@ -406,7 +433,50 @@ def _business_line(item: BusinessRelation) -> str:
     # лежит в нём, и без него найденное ИП покажется строкой «— ИНН».
     name = item.person_name or item.name or item.inn or "—"
     role = BUSINESS_ROLE_TITLES.get(item.role, "связь")
-    return f"• {role}: {name} — {state} ({_match_note(item.match_level)})"
+    lines = [f"• {role}: {name} — {state} ({_match_note(item.match_level)})"]
+    lines.extend(_company_cases_lines(item, report))
+    return lines
+
+
+def _company_cases_lines(item: BusinessRelation, report: DebtorReport) -> list[str]:
+    """Арбитраж компании — подразделом внутри БИЗНЕСа, а не своим разделом.
+
+    Это факт о компании, а компания уже здесь. Отдельный верхнеуровневый раздел
+    «СУДЫ КОМПАНИЙ» рядом с «СУДЫ» читался бы как продолжение дел самого
+    должника, чем он не является.
+
+    Молчать здесь нельзя ни в одном из трёх случаев: цепочка оплачивается
+    отдельными вызовами, и источник, который опрошен и ничего не печатает,
+    стоит денег и не даёт ничего взамен.
+    """
+    result = report.result_for(ProviderName.COURT_LEGAL)
+    if result is None or not item.inn:
+        return []
+    cases = [case for case in report.legal_entity_cases if case.company_inn == item.inn]
+    if not result.status.is_answered:
+        return ["  Арбитраж компании: не проверено"]
+    if not cases:
+        return ["  Арбитраж компании: дел не найдено"]
+
+    total = next((case.total_count for case in cases if case.total_count is not None), None)
+    analyzed = next(
+        (case.analyzed_count for case in cases if case.analyzed_count is not None), None
+    )
+    coverage = f"дел {total}, разобрано {analyzed} из {total}" if total is not None else ""
+    lines = [f"  Арбитраж компании: {coverage or f'{len(cases)} дел'}"]
+
+    against = [case for case in cases if case.is_claim_against_company]
+    by_company = [case for case in cases if not case.is_claim_against_company]
+    if by_company:
+        amount = sum((case.amount or 0) for case in by_company)
+        suffix = f" на {format_amount(amount)}" if amount else ""
+        lines.append(f"    — компания истец: {len(by_company)} дел{suffix} (дебиторка)")
+    lines.append(f"    — исков к компании: {len(against)}")
+    for case in cases[:MAX_LISTED_CASES]:
+        if case.enforcement_signal:
+            lines.append(f"    — сигнал принудительного взыскания по делу {case.case_number}")
+    lines.append(COMPANY_ASSETS_DISCLAIMER)
+    return lines
 
 
 def _pledge_block(report: DebtorReport) -> str:
@@ -452,6 +522,76 @@ def _pledge_lines(item: PledgeRecord) -> list[str]:
         lines.append(f"  Зарегистрирован: {format_date(item.registered_at)}")
     lines.append(f"  {_match_note(item.match_level)}")
     return lines
+
+
+def _property_block(report: DebtorReport) -> str:
+    """ЕГРН — про объект по известному нам адресу, а не про имущество должника.
+
+    Раздел называется так и звучит так намеренно. Источник возвращает
+    кадастровый номер, стоимость, обременения и число долей — и не возвращает ни
+    одного ФИО, потому что сведения о правах конкретного лица ЕГРН выдаёт самому
+    лицу, суду и приставу. Всё, что здесь напечатано, поэтому сопровождается
+    оговоркой о непринадлежности; убрать её значит превратить справку об
+    объекте в утверждение об имуществе.
+    """
+    result = report.result_for(ProviderName.PROPERTY)
+    header = "ОБЪЕКТ ПО АДРЕСУ (ЕГРН)"
+    if not report.properties:
+        return _empty_block(
+            header,
+            result,
+            NO_PROPERTY_FOUND,
+            found=0,
+            noun="объект",
+            tail=OWNERSHIP_DISCLAIMER,
+        )
+
+    lines = [header]
+    queried = report.subject.address
+    if queried:
+        lines.append(f"Проверен адрес из нашей карточки: {truncate(queried, 160)}")
+    for item in report.properties[:MAX_LISTED_PROPERTIES]:
+        lines.extend(_property_lines(item))
+    hidden = len(report.properties) - MAX_LISTED_PROPERTIES
+    if hidden > 0:
+        lines.append(f"…и ещё {hidden}")
+    lines.extend(_source_notes(result))
+    lines.append(OWNERSHIP_DISCLAIMER)
+    lines.append(_checked_at(result))
+    return "\n".join(lines)
+
+
+def _property_lines(item: PropertyRecord) -> list[str]:
+    title = item.property_type or "объект недвижимости"
+    area = f" — {item.area} м²" if item.area else ""
+    lines = [f"• {title}{area}"]
+    if item.cadastral_number:
+        lines.append(f"  Кадастровый номер: {item.cadastral_number}")
+    if item.cancelled_at:
+        # Снятый с учёта объект — не актив, и печатать его стоимость рядом с
+        # «взыскание» значило бы предлагать обратить взыскание на несуществующее.
+        lines.append(f"  Объект снят с кадастрового учёта {format_date(item.cancelled_at)}")
+    if item.encumbrances:
+        # Впереди стоимости: ипотека означает, что перед нами уже стоит банк.
+        lines.append(f"  Обременения в ЕГРН: {len(item.encumbrances)}")
+        lines.extend(f"    — {truncate(text, 100)}" for text in item.encumbrances)
+    elif item.encumbrances_checked:
+        lines.append("  Обременений в ЕГРН не зарегистрировано")
+    if item.cadastral_cost is not None and not item.cancelled_at:
+        date_note = f" (на {format_date(item.cost_date)})" if item.cost_date else ""
+        lines.append(f"  Кадастровая стоимость: {format_amount(item.cadastral_cost)}{date_note}")
+    lines.append(f"  {_rights_line(item)}")
+    return lines
+
+
+def _rights_line(item: PropertyRecord) -> str:
+    if not item.rights_count:
+        # Не «объект ничей»: сведений о правах в ответе просто нет.
+        return "Сведения о правах в ответе отсутствуют"
+    kinds = ", ".join(text.lower() for text in item.right_types) or "право собственности"
+    noun = pluralize_ru(item.rights_count, "запись", "записи", "записей")
+    shares = f" (доли {', '.join(item.shares)})" if item.shares else ""
+    return f"Права: {kinds}, {item.rights_count} {noun}{shares}"
 
 
 def _court_block(report: DebtorReport) -> str:
@@ -703,6 +843,15 @@ def _bridge_note(bridge: ProviderResult | None) -> str:
                 f" Получить ИНН по паспорту не удалось ({bridge.error_code or 'unknown'}) — "
                 "это не значит, что записей нет."
             )
+
+
+def _notes(result: ProviderResult | None) -> list[str]:
+    """Оговорки самого источника о полноте ответа.
+
+    Печатаются и когда записей нет: «дел не найдено» после усечённой страницы —
+    это не то, что источник сказал.
+    """
+    return list(result.notes) if result is not None else []
 
 
 def _checked_at(result: ProviderResult | None) -> str:
