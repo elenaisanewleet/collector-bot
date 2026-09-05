@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -41,7 +41,11 @@ from app.domain.models import (
 from app.logging_setup import get_logger
 from app.providers.base import NO_CONTEXT, BaseProvider, FetchContext
 from app.providers.identity_bridge import InnBridgeResult
-from app.providers.internal.base import InternalDebtorProvider
+from app.providers.internal.base import (
+    InternalDebtorProvider,
+    InternalRecords,
+    InternalSourceFailure,
+)
 from app.providers.registry import ProviderRegistry
 from app.services.aggregation import Aggregator
 from app.services.identity import IdentityMatcher
@@ -70,6 +74,15 @@ class SearchOutcome:
 
     report: DebtorReport
     request_id: int | None
+
+
+# Which failure gets reported when several internal sources fall over at once.
+# The worst one wins, because it is the one the operator has to act on.
+_FAILURE_SEVERITY: dict[ProviderStatus, int] = {
+    ProviderStatus.NOT_CONFIGURED: 1,
+    ProviderStatus.UNAVAILABLE: 2,
+    ProviderStatus.ERROR: 3,
+}
 
 
 class SearchService:
@@ -163,7 +176,9 @@ class SearchService:
             provider_results = [bridge_result, *provider_results]
 
         report = self._aggregator.build(
-            enriched, provider_results, internal_records=internal_records
+            enriched,
+            [*provider_results, internal_status_result(internal_records)],
+            internal_records=internal_records,
         )
         report.recovery_score = self._score_engine.evaluate(report)
 
@@ -174,23 +189,25 @@ class SearchService:
         )
         return SearchOutcome(report, request_id)
 
-    async def lookup_internal(self, subject: SearchSubject) -> list[InternalDebtorRecord]:
+    async def lookup_internal(self, subject: SearchSubject) -> InternalRecords:
         """Query our own records using whichever identifiers we have.
 
         Exact-identifier hits get a confidence floor; a name-based hit goes
-        through the ordinary matcher like any external record.
+        through the ordinary matcher like any external record. The returned
+        list also carries whichever internal sources failed to answer — it is a
+        ``list`` subclass, so every existing caller keeps working unchanged.
         """
         provider = self._registry.internal
-        records, exact = await self._internal_candidates(provider, subject)
+        records, exact, failures = await self._internal_candidates(provider, subject)
         if not records:
-            return []
+            return InternalRecords((), failures=failures)
         unique = _dedupe_internal(records)
         self._matcher.annotate(
             subject,
             list(unique),
             confidence_floor=IDENTIFIER_MATCH_FLOOR if exact else None,
         )
-        return unique
+        return InternalRecords(unique, failures=failures)
 
     # ------------------------------------------------------------- internals
 
@@ -223,41 +240,43 @@ class SearchService:
 
     async def _internal_candidates(
         self, provider: InternalDebtorProvider, subject: SearchSubject
-    ) -> tuple[list[InternalDebtorRecord], bool]:
-        """Returns candidates plus whether they came from an exact identifier."""
-        if subject.debtor_id:
-            found = await provider.find_by_debtor_id(subject.debtor_id)
+    ) -> tuple[list[InternalDebtorRecord], bool, tuple[InternalSourceFailure, ...]]:
+        """Candidates, whether they came from an exact identifier, and refusals.
+
+        Failures accumulate across the *whole* cascade. The short circuit on the
+        first hit is what makes this necessary: a 1С that failed on
+        ``by_debtor_id`` and a database that answered on ``by_fio`` otherwise
+        produce a report claiming the internal contour was fully checked.
+        """
+        failures: list[InternalSourceFailure] = []
+        vehicle = subject.vehicle
+
+        exact_lookups: list[tuple[str | None, _Lookup]] = [
+            (subject.debtor_id, provider.find_by_debtor_id),
+            (subject.contract_number, provider.find_by_contract),
+            (subject.claim_number, provider.find_by_claim),
+            (vehicle.vin if vehicle else None, provider.find_by_vin),
+            (vehicle.plate if vehicle else None, provider.find_by_plate),
+            (subject.phone, provider.find_by_phone),
+        ]
+        for value, lookup in exact_lookups:
+            if not value:
+                continue
+            found = await lookup(value)
+            failures.extend(_failures_of(found))
             if found:
-                return found, True
-        if subject.contract_number:
-            found = await provider.find_by_contract(subject.contract_number)
-            if found:
-                return found, True
-        if subject.claim_number:
-            found = await provider.find_by_claim(subject.claim_number)
-            if found:
-                return found, True
-        if subject.vehicle and subject.vehicle.vin:
-            found = await provider.find_by_vin(subject.vehicle.vin)
-            if found:
-                return found, True
-        if subject.vehicle and subject.vehicle.plate:
-            found = await provider.find_by_plate(subject.vehicle.plate)
-            if found:
-                return found, True
-        if subject.phone:
-            found = await provider.find_by_phone(subject.phone)
-            if found:
-                return found, True
+                return list(found), True, _dedupe_failures(failures)
 
         candidates: list[InternalDebtorRecord] = []
         if subject.name:
-            candidates.extend(
-                await provider.find_by_fio(subject.name.full, birth_date=subject.birth_date)
-            )
+            found = await provider.find_by_fio(subject.name.full, birth_date=subject.birth_date)
+            failures.extend(_failures_of(found))
+            candidates.extend(found)
         if not candidates and subject.address:
-            candidates.extend(await provider.find_by_address(subject.address))
-        return candidates, False
+            found = await provider.find_by_address(subject.address)
+            failures.extend(_failures_of(found))
+            candidates.extend(found)
+        return candidates, False, _dedupe_failures(failures)
 
     async def _run_external(
         self, subject: SearchSubject, context: FetchContext
@@ -429,6 +448,11 @@ class SearchService:
         """Собрать отчёт из сохранённых ответов провайдеров."""
         results: list[ProviderResult] = []
         for row in stored_results:
+            if ProviderName(row.provider) is ProviderName.INTERNAL:
+                # The internal contour is re-queried on every cache hit, so the
+                # stored status describes a different run than the records
+                # about to be attached. Replaced below, never restored.
+                continue
             records = _deserialize_records(row.normalized_json)
             results.append(
                 ProviderResult(
@@ -445,6 +469,7 @@ class SearchService:
             )
 
         internal_records = await self.lookup_internal(subject)
+        results.append(internal_status_result(internal_records))
         report = self._aggregator.build(subject, results, internal_records=internal_records)
         # The score is recomputed rather than read back: the rules may have
         # changed since the cached run, and recomputation is free.
@@ -452,6 +477,57 @@ class SearchService:
         report.from_cache = True
         report.cached_at = created_at
         return report
+
+
+_Lookup = Callable[[str], Awaitable[list[InternalDebtorRecord]]]
+
+
+def _failures_of(records: Sequence[InternalDebtorRecord]) -> tuple[InternalSourceFailure, ...]:
+    failures = getattr(records, "failures", ())
+    return tuple(failures)
+
+
+def _dedupe_failures(
+    failures: Iterable[InternalSourceFailure],
+) -> tuple[InternalSourceFailure, ...]:
+    """One line per source and reason, however many cascade steps hit it."""
+    seen: set[tuple[str, str]] = set()
+    unique: list[InternalSourceFailure] = []
+    for failure in failures:
+        key = (failure.source, failure.error_code)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(failure)
+    return tuple(unique)
+
+
+def internal_status_result(records: InternalRecords) -> ProviderResult:
+    """One ``ProviderResult`` describing the internal contour as a whole.
+
+    ``records=[]`` on purpose: the records are handed to the aggregator
+    separately, and :func:`Aggregator._dispatch` would append them to
+    ``report.internal_records`` a second time, doubling the card.
+
+    This is what makes "не проверено" visible at all. Without it an unreachable
+    1С renders identically to a clean internal base — which is the one thing
+    this project exists not to do.
+    """
+    failures = records.failures
+    if failures:
+        worst = max(failures, key=lambda item: _FAILURE_SEVERITY.get(item.status, 0))
+        return ProviderResult(
+            provider=ProviderName.INTERNAL,
+            status=worst.status,
+            records=[],
+            error_code=worst.error_code,
+            error_message=f"{worst.source}: {worst.error_message}",
+        )
+    return ProviderResult(
+        provider=ProviderName.INTERNAL,
+        status=ProviderStatus.SUCCESS if records else ProviderStatus.NO_RESULTS,
+        records=[],
+    )
 
 
 def _deserialize_records(payload: str) -> list[FactRecord]:
@@ -623,6 +699,7 @@ __all__ = [
     "SearchService",
     "build_query_hash",
     "describe_subject",
+    "internal_status_result",
     "redact_subject",
     "subject_from_json",
 ]

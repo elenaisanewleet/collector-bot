@@ -57,7 +57,14 @@ from app.domain.identity import INN_INDIVIDUAL_LENGTH, SearchSubject
 from app.logging_setup import get_logger
 from app.providers.base import BaseProvider, ProviderError, ProviderUnavailableError
 from app.providers.http import RetryPolicy, build_client, request_json
-from app.providers.mapping import FieldMap, FieldMapError, RecordDict, as_text, dig
+from app.providers.mapping import (
+    FieldMap,
+    FieldMapError,
+    MappedRows,
+    RecordDict,
+    as_text,
+    dig,
+)
 
 logger = get_logger(__name__)
 
@@ -375,19 +382,6 @@ def _extract_rows(envelope: Any, section: str) -> list[Any]:
 
 
 # ---------------------------------------------------------------- field maps
-
-
-@dataclass(frozen=True, slots=True)
-class MappedRows:
-    """Rows the map could read, plus a count of the ones it could not.
-
-    Keeping the two apart is the whole point: "the source answered with
-    nothing" and "the map read nothing in the answer" both come out as zero
-    records, and they mean opposite things.
-    """
-
-    records: list[RecordDict]
-    unreadable: int
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,13 +6,16 @@ runs without credentials.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from app.config import AppMode, Settings
+from app.db.session import Database
 from app.demo import run_demo_flow
-from app.providers.internal.onec_future import OneCODataProvider
+from app.providers.internal.onec import OneCODataProvider
 
 
 @pytest.fixture
@@ -45,21 +48,64 @@ async def test_demo_refuses_to_run_against_live_providers(
     assert "ДЕМО-РЕЖИМ" in capsys.readouterr().out
 
 
-def test_onec_provider_is_a_placeholder_and_cannot_be_used() -> None:
-    """1С is an extension point, not an implementation: constructing it fails
-    loudly rather than pretending to connect."""
-    with pytest.raises(NotImplementedError) as exc_info:
-        OneCODataProvider()
-    assert "not currently available" in str(exc_info.value).lower() or "placeholder" in str(
-        exc_info.value
+def _onec_ready(settings: Settings, tmp_path: Path) -> Settings:
+    """Настройки, при которых 1С подключилась бы: адрес, доступ и карта."""
+    field_map = tmp_path / "onec.json"
+    field_map.write_text(
+        json.dumps(
+            {
+                "by_contract": {
+                    "collection": "Catalog_ПРИМЕР_Должники",
+                    "filter_template": "ПРИМЕР_НомерДоговора eq {value}",
+                    "fields": {"full_name": "ПРИМЕР_ФИО"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return settings.model_copy(
+        update={
+            "app_mode": AppMode.LIVE,
+            "onec_base_url": "https://1c.example.test/base",
+            "onec_username": "reader",
+            "onec_password": SecretStr("secret"),
+            "onec_field_map": field_map,
+        }
     )
 
 
-def test_onec_provider_is_not_wired_into_the_registry(settings: Settings) -> None:
-    from app.providers.registry import build_external_providers
+def _has_onec(settings: Settings, database: Database) -> bool:
+    from app.providers.registry import build_internal_provider
 
-    for provider in build_external_providers(settings):
-        assert not isinstance(provider, OneCODataProvider)
+    provider = build_internal_provider(settings, database)
+    return any(isinstance(source, OneCODataProvider) for source in provider.sources)
+
+
+def test_onec_is_not_wired_without_credentials(settings: Settings, database: Database) -> None:
+    """Нет адреса, доступа или карты — источника нет вовсе.
+
+    Полумера здесь опаснее отсутствия: провайдер, который не может ни построить
+    ``$filter``, ни прочитать ответ, отвечал бы «совпадений нет» — то есть
+    выдавал бы неподключённую базу за проверенную и пустую.
+    """
+    live = settings.model_copy(update={"app_mode": AppMode.LIVE})
+    assert not _has_onec(live, database)
+
+
+def test_onec_is_not_queried_in_demo_mode(
+    settings: Settings, database: Database, tmp_path: Path
+) -> None:
+    """Демо-режим не ходит в боевую базу заказчика, даже когда может.
+
+    Гейт по режиму — не украшение. Внешние источники его смотрят, а сборка
+    внутренних не смотрела: ``make demo`` на машине с заполненным ``.env``
+    отправил бы живые запросы в 1С заказчика, печатая при этом «данные
+    вымышленные». Ошибка тихая — в выводе она никак не видна.
+    """
+    ready = _onec_ready(settings, tmp_path)
+    assert _has_onec(ready, database), "выборка теряет смысл: 1С и так не подключилась бы"
+
+    assert not _has_onec(ready.model_copy(update={"app_mode": AppMode.DEMO}), database)
 
 
 def test_registry_reports_which_providers_are_live(settings: Settings) -> None:

@@ -45,6 +45,19 @@ BAD_NEWDB_FIELD_MAP = (
     "Пока он не исправлен, методы NewDB кроме fssp_person остались бы "
     "неподключёнными молча — поэтому запуск остановлен."
 )
+BAD_ONEC_FIELD_MAP = (
+    "ONEC_FIELD_MAP указывает на файл, который не читается. "
+    "Пока он не исправлен, 1С осталась бы неподключённой молча, а отчёт "
+    "писал бы «совпадений во внутренней базе не найдено» — поэтому запуск "
+    "остановлен."
+)
+INSECURE_ONEC_URL = (
+    "ONEC_BASE_URL указывает на http://. Пароль от рабочей базы 1С уйдёт "
+    "по сети открытым текстом: заголовок Basic отправляется до редиректа, "
+    "поэтому переезд на https силами сервера не спасает. Укажите https:// "
+    "или, если это осознанно (изолированный контур, стенд), включите "
+    "ONEC_ALLOW_INSECURE_HTTP=true."
+)
 
 
 async def start_bot(settings: Settings | None = None) -> None:
@@ -101,6 +114,30 @@ def _validate(settings: Settings) -> None:
     if not settings.allowed_user_ids:
         raise SystemExit(EMPTY_ALLOWLIST)
     _validate_newdb_field_map(settings)
+    _validate_onec(settings)
+
+
+def _validate_onec(settings: Settings) -> None:
+    """Check the 1С wiring before anyone can read a report built without it.
+
+    Both failures here are quiet ones. A broken map leaves the source
+    unconnected while the report says the internal base is clean, and an
+    ``http://`` endpoint leaks the customer's database password to anyone on the
+    wire without anything looking wrong.
+    """
+    from app.providers.mapping import FieldMapError
+    from app.providers.onec.lookup_map import OneCLookupMaps
+
+    if settings.onec_base_url.lower().startswith("http://") and (
+        not settings.onec_allow_insecure_http
+    ):
+        raise SystemExit(INSECURE_ONEC_URL)
+    if settings.onec_field_map is None:
+        return
+    try:
+        OneCLookupMaps.load(settings.onec_field_map)
+    except FieldMapError as exc:
+        raise SystemExit(f"{BAD_ONEC_FIELD_MAP}\n{exc.message}") from exc
 
 
 def _validate_newdb_field_map(settings: Settings) -> None:

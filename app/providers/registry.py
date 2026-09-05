@@ -102,18 +102,45 @@ def _reject_duplicates(providers: Sequence[BaseProvider]) -> None:
         seen.add(provider.name)
 
 
-def build_internal_provider(settings: Settings, database: Database) -> InternalDebtorProvider:
-    """CSV bootstrap export + everything imported into the database.
-
-    A future ``OneCODataProvider`` joins this list; nothing else changes.
-    """
+def build_internal_provider(
+    settings: Settings, database: Database
+) -> CompositeInternalDebtorProvider:
+    """CSV bootstrap export + everything imported + the customer's 1С."""
     sources: list[InternalDebtorProvider] = [DatabaseInternalDebtorProvider(database)]
     csv_path = Path(settings.internal_csv_path)
     if csv_path.is_file():
         sources.append(CSVInternalDebtorProvider(csv_path))
     else:
         logger.info("internal_csv.absent", path=str(csv_path))
+    sources.extend(_onec_sources(settings))
     return CompositeInternalDebtorProvider(sources)
+
+
+def _onec_sources(settings: Settings) -> list[InternalDebtorProvider]:
+    """The 1С adapter, if and only if it has an address, credentials and a map.
+
+    The mode gate is not decoration. Unlike ``build_external_providers``, this
+    function did not look at ``app_mode`` at all, so ``make demo`` on a machine
+    with a filled-in ``.env`` would have sent live queries into the customer's
+    production database while printing "данные вымышленные".
+    """
+    if settings.app_mode is AppMode.DEMO:
+        if settings.onec_configured:
+            logger.info("onec.skipped_in_demo")
+        return []
+    if not settings.onec_configured:
+        logger.info("onec.not_configured", missing=settings.onec_missing)
+        return []
+
+    from app.providers.internal.onec import OneCODataProvider
+    from app.providers.onec.lookup_map import OneCLookupMaps
+
+    maps = OneCLookupMaps.load(settings.onec_field_map)
+    logger.info("onec.lookups_mapped", lookups=sorted(maps.lookups))
+    if not maps.lookups:
+        # A map file that describes nothing is a map file that enables nothing.
+        return []
+    return [OneCODataProvider(settings, maps)]
 
 
 def build_external_providers(

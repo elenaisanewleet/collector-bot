@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -86,6 +86,27 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------- storage
     database_url: str = "sqlite+aiosqlite:///./collector_bot.db"
     internal_csv_path: Path = Path("./data/demo_debtors.csv")
+
+    # ---------------------------------------------------------------- 1С (OData)
+    # Учётная база заказчика как внутренний источник. Протокол реализован и
+    # покрыт тестами; имена справочников и реквизитов — в ONEC_FIELD_MAP,
+    # потому что в УТ, ERP, УНФ и самописных конфигурациях они разные, а базы
+    # заказчика у нас нет. Кредов или карты нет — источник не подключается и
+    # говорит об этом, а не выдаёт «должник не найден».
+    onec_base_url: str = ""
+    onec_username: str = ""
+    onec_password: SecretStr = SecretStr("")
+    onec_field_map: Path | None = None
+    # True | False | путь к CA-бандлу. Типовая локальная публикация 1С идёт с
+    # корпоративным или самоподписанным сертификатом.
+    onec_verify: bool | str = True
+    # Basic-пароль от рабочей базы по http:// уходит открытым текстом.
+    onec_allow_insecure_http: bool = False
+    onec_page_size: Annotated[int, Field(ge=1, le=1000)] = 100
+    onec_max_pages: Annotated[int, Field(ge=1, le=100)] = 5
+    # Отдельно от PROVIDER_CONCURRENCY и уже её: сеансы 1С — ресурс заказчика.
+    onec_concurrency: Annotated[int, Field(ge=1, le=16)] = 2
+    onec_cache_ttl_seconds: Annotated[int, Field(ge=0, le=3600)] = 60
 
     # ---------------------------------------------------------------- ФССП (NewDB)
     # The direct ФССП service (api-ip.fssp.gov.ru) is retired and answers
@@ -207,10 +228,23 @@ class Settings(BaseSettings):
         "web_public_url",
         "fedresurs_base_url",
         "fns_base_url",
+        "onec_base_url",
     )
     @classmethod
     def _strip_trailing_slash(cls, value: str) -> str:
         return value.strip().rstrip("/")
+
+    @field_validator("onec_verify", mode="before")
+    @classmethod
+    def _parse_verify(cls, value: object) -> object:
+        """``true``/``false`` are flags; anything else is a path to a CA bundle."""
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return value
 
     @property
     def allowed_user_ids(self) -> frozenset[int]:
@@ -275,6 +309,31 @@ class Settings(BaseSettings):
     @property
     def arbitr_legal_configured(self) -> bool:
         return self.newdb_configured and self.arbitr_legal_enabled
+
+    @property
+    def onec_configured(self) -> bool:
+        """Whether the customer's 1С can be queried *and* understood.
+
+        The credentials alone are not enough, exactly as with NewDB: without a
+        lookup map there is nothing to build a ``$filter`` from and nothing to
+        read the answer with, and a source we cannot parse is a source we have
+        not checked.
+        """
+        return not self.onec_missing
+
+    @property
+    def onec_missing(self) -> list[str]:
+        """Which ``ONEC_*`` values are still absent — printed by ``/status``."""
+        missing: list[str] = []
+        if not self.onec_base_url:
+            missing.append("ONEC_BASE_URL")
+        if not self.onec_username:
+            missing.append("ONEC_USERNAME")
+        if not self.onec_password.get_secret_value():
+            missing.append("ONEC_PASSWORD")
+        if self.onec_field_map is None:
+            missing.append("ONEC_FIELD_MAP")
+        return missing
 
     @property
     def fssp_configured(self) -> bool:

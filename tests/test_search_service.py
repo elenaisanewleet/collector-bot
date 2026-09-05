@@ -136,7 +136,15 @@ async def test_second_identical_search_uses_the_cache(container: Container) -> N
 
     assert second.from_cache
     assert second.cached_at is not None
-    assert all(result.cache_hit for result in second.provider_results)
+    # Внутренний контур из кэша не поднимается: он опрашивается заново на каждом
+    # открытии отчёта, потому что 1С могла ответить в первый раз и не ответить во
+    # второй, и «не проверено» обязано появиться сразу. Кэшируются внешние
+    # источники — платные, и ровно за них кэш и заведён.
+    external = [
+        result for result in second.provider_results if result.provider is not ProviderName.INTERNAL
+    ]
+    assert external, "выборка теряет смысл без внешних источников"
+    assert all(result.cache_hit for result in external)
 
 
 async def test_force_refresh_bypasses_the_cache(container: Container) -> None:

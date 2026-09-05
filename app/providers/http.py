@@ -21,6 +21,7 @@ from app.providers.base import ProviderError, ProviderUnavailableError
 
 logger = get_logger(__name__)
 
+HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 HTTP_PAYMENT_REQUIRED = 402
@@ -71,12 +72,28 @@ def build_client(
     base_url: str,
     timeout_seconds: float,
     headers: Mapping[str, str] | None = None,
+    verify: bool | str = True,
+    max_connections: int | None = None,
 ) -> httpx.AsyncClient:
+    """An async client with the project's timeout and redirect policy.
+
+    ``verify`` exists for on-premise publications: a 1С server inside the
+    customer's network usually presents a corporate or self-signed certificate,
+    and ``httpx`` ships its own ``certifi`` bundle that ``SSL_CERT_FILE`` does
+    not override. Pass a path to the CA bundle — or, knowingly, ``False``.
+    """
+    # Ограничение пула задаётся только когда его попросили: httpx имеет свои
+    # умолчания, и подставить вместо них ``None`` значит их же и сломать.
+    extra: dict[str, Any] = {}
+    if max_connections is not None:
+        extra["limits"] = httpx.Limits(max_connections=max_connections)
     return httpx.AsyncClient(
         base_url=base_url,
         timeout=httpx.Timeout(timeout_seconds),
         headers=dict(headers or {}),
         follow_redirects=True,
+        verify=verify,
+        **extra,
     )
 
 
@@ -130,7 +147,13 @@ async def request_json(
 
 def _classify(response: httpx.Response, *, provider: str) -> ProviderError | None:
     status = response.status_code
-    if status < HTTP_UNAUTHORIZED:
+    # Порог — 400, а не 401. С 401 всякий ответ 4xx ниже него считался успехом и
+    # уходил в разбор тела: при пустом теле источник докладывался как приславший
+    # мусор, а при теле вида ``{"data": []}`` — как ответивший пусто. Второе и
+    # есть запрещённая подмена: отвергнутый запрос, показанный как «ничего не
+    # найдено». Для 1С это отвергнутый ``$filter``, для NewDB — невалидные
+    # параметры, и оба случая обязаны быть видимой ошибкой.
+    if status < HTTP_BAD_REQUEST:
         return None
     if status in {HTTP_UNAUTHORIZED, HTTP_FORBIDDEN}:
         return ProviderAuthError(f"{provider} rejected the credentials (HTTP {status})")

@@ -10,6 +10,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from app.config import AppMode, Settings
 from app.container import Container
 from app.db.repository import AuditRepository, DebtorRepository
 from app.domain.enums import PROVIDER_TITLES
@@ -19,6 +20,16 @@ from app.utils.masking import mask_secret
 
 def _flag(value: bool) -> str:
     return "включено" if value else "выключено"
+
+
+def _onec_line(settings: Settings) -> str:
+    """Состояние 1С одной строкой, с названной причиной, если не подключена."""
+    if not settings.onec_configured:
+        missing = ", ".join(settings.onec_missing)
+        return f"○ Наши данные (1С): не подключена — не заданы {missing}"
+    if settings.app_mode is AppMode.DEMO:
+        return "○ Наши данные (1С): настроена, но в демо-режиме не опрашивается"
+    return "✓ Наши данные (1С): подключена"
 
 
 def build_router() -> Router:
@@ -58,6 +69,9 @@ def build_router() -> Router:
             f"{PROVIDER_TITLES.get(provider.name, provider.name.value)}"
             for provider in container.registry.external
         )
+        # Внутренний контур в этом списке не значился вовсе, поэтому
+        # неподключённая 1С была не видна нигде.
+        lines.append(_onec_line(settings))
         lines.append("")
         # Token presence is confirmed without ever printing the value.
         lines.append(f"Токен бота: {mask_secret(settings.telegram_bot_token)}")
