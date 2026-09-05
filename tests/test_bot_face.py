@@ -164,7 +164,7 @@ def test_sources_screen_shows_live_state(container: Container) -> None:
         expected = "подключено" if provider.is_configured else "не подключено"
         assert expected in screen, title
     # Заглушки в демо остаются заглушками.
-    assert "○ Недвижимость — не подключено" in screen
+    assert "○ Объект по адресу (ЕГРН) — не подключено" in screen
     assert "○ Наследственные дела — не подключено" in screen
 
 

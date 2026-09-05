@@ -100,7 +100,9 @@ class Settings(BaseSettings):
     newdb_api_key: str = ""
     newdb_base_url: str = "https://api.newdb.net"
     newdb_method_path: str = "/v2"
-    newdb_poll_attempts: Annotated[int, Field(ge=1, le=60)] = 10
+    # Живые тайминги: rosreestr — 49 с, arbitr_legal — 59 с. Прежние десять
+    # попыток по две секунды бросали оба вызова оплаченными и «недоступными».
+    newdb_poll_attempts: Annotated[int, Field(ge=1, le=60)] = 30
     newdb_poll_interval_seconds: Annotated[float, Field(ge=0.1, le=30)] = 2.0
     # Row schemas for every NewDB method except fssp_person, keyed by method
     # name. Only fssp_person has been read against a real response; the rest are
@@ -130,8 +132,30 @@ class Settings(BaseSettings):
     fns_auth_name: str = "key"
     fns_field_map: Path | None = None
 
+    # ---------------------------------------------------------------- ЕГРН (rosreestr)
+    # Отвечает про объект по адресу, а не про имущество должника: ЕГРН сведения
+    # о правах конкретного лица выдаёт только самому лицу, суду и приставу.
+    # Выключен по умолчанию — каждый вызов платный.
+    rosreestr_enabled: bool = False
+    # В массовом прогоне (поиск по человеку или договору) не вызывается даже при
+    # включённом методе. При поиске по адресу оператор выбрал источник сам.
+    rosreestr_in_batch: bool = False
+
+    # ---------------------------------------------------------------- арбитраж ЮЛ
+    # Цепочка egrul_ip -> ИНН компаний -> arbitr_legal. Умножается на число
+    # компаний, поэтому выключена по умолчанию и ограничена сверху колпаком.
+    arbitr_legal_enabled: bool = False
+    arbitr_legal_max_companies: Annotated[int, Field(ge=1, le=20)] = 3
+    arbitr_legal_in_batch: bool = False
+    arbitr_legal_concurrency: Annotated[int, Field(ge=1, le=8)] = 2
+
     # ---------------------------------------------------------------- http
     request_timeout_seconds: Annotated[float, Field(ge=1, le=120)] = 15.0
+    # Жёсткий потолок на один источник целиком, поверх таймаута одного HTTP-
+    # запроса. Асинхронные методы NewDB опрашиваются по кругу, и потолок,
+    # выведенный из таймаута одного запроса, обрывал их раньше, чем агрегатор
+    # успевал ответить: вызов оплачен, результат выброшен.
+    provider_budget_seconds: Annotated[float, Field(ge=1, le=600)] = 90.0
     provider_concurrency: Annotated[int, Field(ge=1, le=32)] = 5
     provider_max_retries: Annotated[int, Field(ge=0, le=5)] = 2
     provider_retry_backoff_seconds: Annotated[float, Field(ge=0.0, le=10)] = 0.5
@@ -299,6 +323,20 @@ class Settings(BaseSettings):
         return self.newdb_configured and self.newdb_field_map is not None
 
     @property
+    def rosreestr_configured(self) -> bool:
+        """Ключ есть и источник включён настройкой.
+
+        Карта полей здесь ни при чём: живой ответ ``rosreestr`` прочитан, права
+        и обременения в нём — массивы объектов, а плоская карта достаёт только
+        скаляры. Разбор поэтому в коде, а гейтом служит настройка.
+        """
+        return self.newdb_configured and self.rosreestr_enabled
+
+    @property
+    def arbitr_legal_configured(self) -> bool:
+        return self.newdb_configured and self.arbitr_legal_enabled
+
+    @property
     def fssp_configured(self) -> bool:
         """Whether the ФССП provider can make a real call.
 
@@ -332,7 +370,10 @@ class Settings(BaseSettings):
         if self.fns_provider is FNSBackend.DEMO:
             return True
         if self.fns_provider is FNSBackend.NEWDB:
-            return self.newdb_methods_configured
+            # Карта не нужна: ``egrul_ip`` разбирается кодом по живому ответу.
+            # Две ветки одного объекта — ИП в ``matches`` и компании в
+            # ``affiliations`` — одна плоская запись карты не соберёт.
+            return self.newdb_configured
         return bool(
             self.fns_base_url
             and self.fns_search_path

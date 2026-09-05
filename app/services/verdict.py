@@ -19,7 +19,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.config import Settings
-from app.domain.enums import PROVIDER_TITLES, ProviderName, ScoreCategory
+from app.domain.enums import PROVIDER_TITLES, BusinessRole, ProviderName, ScoreCategory
 from app.domain.fees import claim_fee, court_order_fee
 from app.domain.models import DebtorReport
 from app.domain.verdict import FeeBasis, Verdict, VerdictDecision, VerdictReason
@@ -45,6 +45,7 @@ class VerdictEngine:
             self._silent_sources,
             self._no_debt_amount,
             self._fee_outweighs_debt,
+            self._company_exposure,
             self._low_prospects,
         ):
             decision = rule(report, debt, confidence)
@@ -190,6 +191,35 @@ class VerdictEngine:
             confidence=confidence,
         )
 
+    def _company_exposure(
+        self, report: DebtorReport, debt: Decimal | None, confidence: float
+    ) -> VerdictDecision | None:
+        """Две ясные конфигурации, при которых решать должен человек.
+
+        Балл они не двигают — арбитраж юрлиц в скоринг сознательно не заведён,
+        потому что обороты ООО это не активы участника. Но и молчать о них
+        нельзя: банкротство компании при должнике-руководителе — это разговор о
+        субсидиарной ответственности, а живая дебиторка компании при
+        должнике-участнике — про стоимость доли, на которую обращается
+        взыскание (ст. 74 ФЗ-229, ст. 25 ФЗ-14).
+        """
+        reasons = tuple(_company_exposure_reasons(report))
+        if not reasons:
+            return None
+        return VerdictDecision(
+            verdict=Verdict.REVIEW,
+            headline=(
+                "Проверить долю в уставном капитале / риск субсидиарной "
+                "ответственности — вручную. Имущество ООО не является имуществом "
+                "участника."
+            ),
+            reasons=reasons,
+            debt_amount=debt,
+            state_fee=self._fee_for(debt) if debt and debt > 0 else None,
+            fee_basis=self._basis_for(debt) if debt and debt > 0 else FeeBasis.NONE,
+            confidence=confidence,
+        )
+
     def _low_prospects(
         self, report: DebtorReport, debt: Decimal | None, confidence: float
     ) -> VerdictDecision | None:
@@ -273,6 +303,27 @@ def _silence_reason(report: DebtorReport, provider: ProviderName) -> str:
     if result.error_code == "insufficient_query":
         return f"{title}: {result.error_message or 'недостаточно данных'}"
     return f"{title}: {result.error_message or result.status.value}"
+
+
+def _company_exposure_reasons(report: DebtorReport) -> list[VerdictReason]:
+    reasons: list[VerdictReason] = []
+    seen: set[str] = set()
+    for case in report.legal_entity_cases:
+        company = case.company_name or case.company_inn
+        if (
+            case.is_active
+            and not case.is_claim_against_company
+            and case.company_role is BusinessRole.FOUNDER
+        ):
+            code = f"company_receivables:{case.company_inn}"
+            text = f"{company} взыскивает дебиторку, должник — участник"
+        else:
+            continue
+        if code in seen:
+            continue
+        seen.add(code)
+        reasons.append(VerdictReason(code=code, text=text, source=ProviderName.COURT_LEGAL))
+    return reasons
 
 
 def _positive_reasons(report: DebtorReport) -> tuple[VerdictReason, ...]:

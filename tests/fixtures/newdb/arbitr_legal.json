@@ -1,0 +1,298 @@
+{
+ "params": {
+  "method": "arbitr_legal",
+  "country": "ru"
+ },
+ "requestId": "00000000-0000-4000-8000-000000000001",
+ "method": "",
+ "cost": 1,
+ "state": "complete",
+ "balance": 1,
+ "results": {
+  "arbitr_legal": {
+   "result": {
+    "status": 200,
+    "data": [
+     {
+      "query": "9728012826",
+      "query_inn": "9728012826",
+      "search_mode": "inn",
+      "found": true,
+      "total_count": 3,
+      "pagination": {
+       "offset": 0,
+       "limit": 10,
+       "returned": 3,
+       "has_more": false,
+       "next_offset": null,
+       "previous_offset": null,
+       "page_size": 10,
+       "pages_count": 1,
+       "current_page": 1,
+       "current_page_index": 0,
+       "source_page_size": 25,
+       "source_pages": [
+        1
+       ]
+      },
+      "message": "Найдено 3 дел. Подробно разобрано 3 из текущих 3.",
+      "cases": [
+       {
+        "date": "11.02.2026",
+        "case_number": "А40-34554/2026",
+        "case_url": "https://kad.arbitr.ru/Card/d5a9a4e0-8a04-4cc9-a380-b34a875d7f93",
+        "plaintiff": "ООО \"СТАЛЬНОЕ СЕРДЦЕ\"",
+        "respondent": "ООО \"КОСМОС ЛОДЖИСТИК\""
+       },
+       {
+        "date": "10.02.2023",
+        "case_number": "А51-2348/2023",
+        "case_url": "https://kad.arbitr.ru/Card/93c1ea85-df5c-4de2-9daa-b693aa4c702c",
+        "plaintiff": "ООО \"СТАЛЬНОЕ СЕРДЦЕ\"",
+        "respondent": "ИП Червов Дмитрий Александрович"
+       },
+       {
+        "date": "17.10.2022",
+        "case_number": "А40-225605/2022",
+        "case_url": "https://kad.arbitr.ru/Card/87605c96-2517-4470-9447-5c0b3fa5c69b",
+        "plaintiff": "ООО \"СТАЛЬНОЕ СЕРДЦЕ\"",
+        "respondent": "ООО \"ТРАНСКОМ\""
+       }
+      ],
+      "detailed_cases": [
+       {
+        "case_number": "А40-34554/2026",
+        "status": "Рассмотрение дела завершено",
+        "participants": {
+         "plaintiffs": [
+          {
+           "name": "ООО \"СТАЛЬНОЕ СЕРДЦЕ\"",
+           "address": "115191, Россия, г Москва, г вн тер Муниципальный Округ Даниловский, г. Москва, проезд 5-й Рощинский, д. 1, кв. Помещ 6н"
+          }
+         ],
+         "defendants": [
+          {
+           "name": "ООО \"КОСМОС ЛОДЖИСТИК\"",
+           "address": "129346, Россия, г Москва, г. Москва, ул. Коминтерна, д. 20/2, комната 4"
+          }
+         ],
+         "third_parties": [],
+         "others": [
+          {
+           "name": "ВИРЮКИН ЕВГЕНИЙ ГЕОРГИЕВИЧ",
+           "address": "Данные скрыты"
+          }
+         ]
+        },
+        "judges": [
+         {
+          "court": "АС города Москвы",
+          "name": "Козлов В. Ф."
+         }
+        ],
+        "card_pdf_analysis": {
+         "pdf_link": "https://kad.arbitr.ru/Kad/PdfDocument/d5a9a4e0-8a04-4cc9-a380-b34a875d7f93/4ad8dcfa-801c-4b94-9f27-dff7a59d9add/A40-34554-2026_20260831_Opredelenie.pdf",
+         "detail_info": {
+          "case_info": {
+           "case_number": "А40-34554/26-53-349",
+           "court": "Арбитражный суд города Москвы",
+           "decision_date": "2026-08-31",
+           "judge": "Ксалов А.Ф.",
+           "document_type": "Определение об оставлении заявления без движения"
+          },
+          "classification": {
+           "case_type": "CONTRACT_DISPUTE",
+           "case_subtype": "процессуальное правопреемство",
+           "confidence": 0.9,
+           "classification_rationale": "Рассмотрение заявления о процессуальном правопреемстве в рамках дела о взыскании задолженности по иску."
+          },
+          "parties": {
+           "claimant": {
+            "name": "ПАО «СТАЛЬНОЕ СЕРДЦЕ»",
+            "inn": "9728012826",
+            "ogrn": "1207700337327",
+            "address": "115191, Г.МОСКВА, ВН.ТЕР.Г. МУНИЦИПАЛЬНЫЙ ОКРУГ ДАНИЛОВСКИЙ, ПРОЕЗД 5-Й РОЩИНСКИЙ, Д. 1, ПОМЕЩ. 6Н"
+           },
+           "debtor": {
+            "name": "ООО «КОСМОС ЛОДЖИСТИК»",
+            "inn": "7716863554",
+            "ogrn": "1177746672872",
+            "address": "129346, Г.МОСКВА, УЛ. КОМИНТЕРНА, Д. 20/2, ПОМЕЩ. 8, КОМНАТА 4"
+           }
+          },
+          "financials": {
+           "main_debt": 2105643.84,
+           "state_fee": null,
+           "total_amount": 2105643.84,
+           "currency": "RUB"
+          },
+          "risk": {
+           "personal_asset_risk": "low",
+           "enforcement_signal": false,
+           "total_claims_amount": 2105643.84,
+           "risk_factors": [
+            "Заявление оставлено без движения из-за неуплаты государственной пошлины"
+           ]
+          }
+         }
+        },
+        "source_url": "https://kad.arbitr.ru/Card/d5a9a4e0-8a04-4cc9-a380-b34a875d7f93",
+        "index": 0
+       },
+       {
+        "case_number": "А51-2348/2023",
+        "status": "Рассмотрение дела завершено",
+        "participants": {
+         "plaintiffs": [
+          {
+           "name": "ООО \"СТАЛЬНОЕ СЕРДЦЕ\"",
+           "address": "117246, Россия, г. Москва, г. Москва. вн.тер.г.Муниципальный округ Якименка , Донская, д.8 кв 127"
+          }
+         ],
+         "defendants": [
+          {
+           "name": "ИП Червов Дмитрий Александрович",
+           "address": "Данные скрыты"
+          }
+         ],
+         "third_parties": [],
+         "others": []
+        },
+        "judges": [
+         {
+          "court": "АС Приморского края",
+          "name": "Зайцева Л. В."
+         }
+        ],
+        "card_pdf_analysis": {
+         "pdf_link": "https://kad.arbitr.ru/Kad/PdfDocument/93c1ea85-df5c-4de2-9daa-b693aa4c702c/c3ef9269-438a-454e-b3a9-58e8566d35da/A51-2348-2023_20230424_Reshenie_v_vide_rezoljutivnoj_chasti_(st._229_APK).pdf",
+         "detail_info": {
+          "case_info": {
+           "case_number": "А51-2348/2023",
+           "court": "Арбитражный суд Приморского края",
+           "decision_date": "2023-04-24",
+           "judge": "Зайцева Л.В.",
+           "document_type": "Резолютивная часть решения"
+          },
+          "classification": {
+           "case_type": "CONTRACT_DISPUTE",
+           "case_subtype": "взыскание задолженности и процентов",
+           "confidence": 0.95,
+           "classification_rationale": "Спор между юридическим лицом и индивидуальным предпринимателем о взыскании долга и процентов за пользование чужими денежными средствами из договорных или гражданских правоотношений."
+          },
+          "parties": {
+           "claimant": {
+            "name": "ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ «СТАЛЬНОЕ СЕРДЦЕ»",
+            "inn": "9728012826",
+            "ogrn": "1207700337327",
+            "address": null
+           },
+           "debtor": {
+            "name": "ИНДИВИДУАЛЬНЫЙ ПРЕДПРИНИМАТЕЛЬ ЧЕРВОВ ДМИТРИЙ АЛЕКСАНДРОВИЧ",
+            "inn": "253814582470",
+            "ogrn": "322253600055889",
+            "address": null
+           }
+          },
+          "financials": {
+           "main_debt": 34500.0,
+           "state_fee": 2000.0,
+           "total_amount": 35485.38,
+           "currency": "RUB"
+          },
+          "risk": {
+           "personal_asset_risk": "low",
+           "enforcement_signal": true,
+           "total_claims_amount": 37485.38,
+           "risk_factors": [
+            "Наличие судебного решения о взыскании денежных средств",
+            "Возможность выдачи исполнительного листа",
+            "Требование к индивидуальному предпринимателю"
+           ]
+          }
+         }
+        },
+        "source_url": "https://kad.arbitr.ru/Card/93c1ea85-df5c-4de2-9daa-b693aa4c702c",
+        "index": 1
+       },
+       {
+        "case_number": "А40-225605/2022",
+        "status": "Рассмотрение дела завершено",
+        "participants": {
+         "plaintiffs": [
+          {
+           "name": "ООО \"СТАЛЬНОЕ СЕРДЦЕ\"",
+           "address": "115191, Россия, г Москва, г вн тер Муниципальный Округ Даниловский, г. Москва, проезд 5-й Рощинский, д. 1, кв. Помещ 6н"
+          }
+         ],
+         "defendants": [
+          {
+           "name": "ООО \"ТРАНСКОМ\"",
+           "address": "117624, Россия, г Москва, г вн тер Муниципальный Округ Южное Бутово, г. Москва, ул. Старокрымская, д. 17, кв. Помещ 9"
+          }
+         ],
+         "third_parties": [],
+         "others": []
+        },
+        "judges": [
+         {
+          "court": "АС города Москвы",
+          "name": "Васильева И. А."
+         }
+        ],
+        "card_pdf_analysis": {
+         "pdf_link": "https://kad.arbitr.ru/Kad/PdfDocument/87605c96-2517-4470-9447-5c0b3fa5c69b/dca5cb3b-56a9-42c5-89bc-057de18f9b7e/A40-225605-2022_20230111_Opredelenie.pdf",
+         "detail_info": {
+          "case_info": {
+           "case_number": "А40-225605/22-50-1700",
+           "court": "Арбитражный суд города Москвы",
+           "decision_date": "2023-01-11",
+           "judge": "И.А. Васильева",
+           "document_type": "Определение"
+          },
+          "classification": {
+           "case_type": "CONTRACT_DISPUTE",
+           "case_subtype": "поставка оборудования",
+           "confidence": 0.95,
+           "classification_rationale": "Иск о взыскании долга и процентов по обязательству поставки оборудования."
+          },
+          "parties": {
+           "claimant": {
+            "name": "Общество с ограниченной ответственностью \"СТАЛЬНОЕ СЕРДЦЕ\"",
+            "inn": "9728012826",
+            "ogrn": "1207700337327",
+            "address": "117246, г. Москва, Научный пр-д, д. 19, эт. 2, ком. 6Д, оф. 359"
+           },
+           "debtor": {
+            "name": "Общество с ограниченной ответственностью \"ТРАНСКОМ\"",
+            "inn": "7716901930",
+            "ogrn": "1187746263352",
+            "address": "109652, г. Москва, вн.тер.г. муниципальный округ Марьино, Луговой пр-д, д. 13, пом. 1, ком. 1"
+           }
+          },
+          "financials": {
+           "main_debt": 1538100.0,
+           "state_fee": 20060.6,
+           "total_amount": 1565866.87,
+           "currency": "RUB"
+          },
+          "risk": {
+           "personal_asset_risk": "low",
+           "enforcement_signal": false,
+           "total_claims_amount": 1565866.87,
+           "risk_factors": [
+            "Истец отказался от иска, производство по делу прекращено"
+           ]
+          }
+         }
+        },
+        "source_url": "https://kad.arbitr.ru/Card/87605c96-2517-4470-9447-5c0b3fa5c69b",
+        "index": 2
+       }
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

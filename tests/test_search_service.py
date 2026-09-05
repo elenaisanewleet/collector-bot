@@ -287,7 +287,7 @@ async def test_a_hanging_provider_does_not_block_the_report(
         external=[*_without(container, ProviderName.COURT), SlowProvider()],
     )
     service = SearchService(
-        settings=container.settings.model_copy(update={"request_timeout_seconds": 1.0}),
+        settings=container.settings.model_copy(update={"provider_budget_seconds": 1.0}),
         database=container.database,
         registry=registry,
     )

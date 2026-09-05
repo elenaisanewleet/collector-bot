@@ -320,7 +320,7 @@ class BatchService:
     # ------------------------------------------------------------- estimate
 
     async def estimate(self) -> BatchEstimate:
-        """Сколько должников и сколько запросов будет стоить прогон."""
+        """Сколько должников и сколько вызовов будет стоить прогон."""
         cap = self._settings.batch_max_debtors
         async with self._database.session() as session:
             total = await DebtorRepository(session).count()
@@ -584,7 +584,9 @@ class BatchService:
         if item.subject is None:
             return _Checked(error="в карточке нет ни ФИО, ни номера договора")
         try:
-            report = await self._search.search(item.subject, telegram_user_id=item.telegram_user_id)
+            report = await self._search.search(
+                item.subject, telegram_user_id=item.telegram_user_id, batch=True
+            )
         except Exception as exc:
             logger.warning(
                 "batch.debtor_failed", debtor_id=item.debtor_id, error=type(exc).__name__
@@ -710,6 +712,7 @@ def _subject_for(row: Debtor) -> SearchSubject | None:
         name=name,
         birth_date=row.birth_date,
         phone=row.phone,
+        inn=row.inn,
         contract_number=row.contract_number,
         claim_number=row.claim_number,
         debtor_id=row.external_debtor_id,

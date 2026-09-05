@@ -1,0 +1,21 @@
+{
+ "params": {
+  "method": "rosreestr",
+  "country": "ru"
+ },
+ "requestId": "00000000-0000-4000-8000-000000000001",
+ "method": "",
+ "cost": 1,
+ "state": "restart",
+ "balance": 1,
+ "results": {
+  "rosreestr": {
+   "result": {
+    "status": 500,
+    "data": [],
+    "error": "timeout"
+   },
+   "dateupdated": "2026-09-05 02:41:48"
+  }
+ }
+}

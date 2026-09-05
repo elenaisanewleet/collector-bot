@@ -1,0 +1,318 @@
+{
+ "params": {
+  "method": "egrul_ip",
+  "country": "ru"
+ },
+ "requestId": "00000000-0000-4000-8000-000000000001",
+ "method": "",
+ "cost": 1,
+ "state": "complete",
+ "balance": 1,
+ "results": {
+  "egrul_ip": {
+   "result": {
+    "status": 200,
+    "data": [
+     {
+      "total_items": 3,
+      "matches": [
+       {
+        "section": "upr",
+        "inn": "770600089967",
+        "ogrn": "",
+        "name_short": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+        "name_full": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+        "status": null,
+        "address": null,
+        "region": null,
+        "registration_date": null,
+        "ogrn_date": null,
+        "okved_code": "",
+        "okved_name": null,
+        "bankruptcy_flag": false,
+        "liquidation_flag": false,
+        "invalid_flag": false,
+        "links": {
+         "business_card": null,
+         "founding_docs": null,
+         "gosreg": null,
+         "egrul": null
+        }
+       },
+       {
+        "section": "ip",
+        "inn": "770600089967",
+        "ogrn": "320774600370587",
+        "name_short": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+        "name_full": null,
+        "status": null,
+        "address": null,
+        "region": null,
+        "registration_date": null,
+        "ogrn_date": "15.09.2020",
+        "okved_code": "45.11",
+        "okved_name": "Торговля легковыми автомобилями и грузовыми автомобилями малой грузоподъемности",
+        "bankruptcy_flag": true,
+        "liquidation_flag": false,
+        "invalid_flag": false,
+        "links": {
+         "business_card": null,
+         "founding_docs": null,
+         "gosreg": "https://service.nalog.ru/gosreg/lk-excerpt.html",
+         "egrul": "token=C46AF780DF0432944907C891D0166078EC686AFB2DE0742CF74AE8935D230A2773BE9AC65F5D0924BC54D3440739DFB8C519644DA3F82C2EEB50280D92BCEE58153B09F78379E8D01822BD2A465CFD34&inn=770600089967&pdf=vyp"
+        }
+       },
+       {
+        "section": "uchr",
+        "inn": "770600089967",
+        "ogrn": "",
+        "name_short": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+        "name_full": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+        "status": null,
+        "address": null,
+        "region": null,
+        "registration_date": null,
+        "ogrn_date": null,
+        "okved_code": "",
+        "okved_name": null,
+        "bankruptcy_flag": false,
+        "liquidation_flag": false,
+        "invalid_flag": false,
+        "links": {
+         "business_card": null,
+         "founding_docs": null,
+         "gosreg": null,
+         "egrul": null
+        }
+       }
+      ],
+      "affiliations": {
+       "registry_sections": {
+        "upr": {
+         "label": "Руководители юридических лиц",
+         "items_count": 1,
+         "row_count": 1,
+         "has_more": false,
+         "records": [
+          {
+           "section": "upr",
+           "inn": "770600089967",
+           "ogrn": "",
+           "name_short": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+           "name_full": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+           "status": null,
+           "address": null,
+           "region": null,
+           "registration_date": null,
+           "ogrn_date": null,
+           "okved_code": "",
+           "okved_name": null,
+           "bankruptcy_flag": false,
+           "liquidation_flag": false,
+           "invalid_flag": false,
+           "links": {
+            "business_card": null,
+            "founding_docs": null,
+            "gosreg": null,
+            "egrul": null
+           }
+          }
+         ]
+        },
+        "uchr": {
+         "label": "Учредители (участники, акционеры) юридических лиц",
+         "items_count": 1,
+         "row_count": 1,
+         "has_more": false,
+         "records": [
+          {
+           "section": "uchr",
+           "inn": "770600089967",
+           "ogrn": "",
+           "name_short": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+           "name_full": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+           "status": null,
+           "address": null,
+           "region": null,
+           "registration_date": null,
+           "ogrn_date": null,
+           "okved_code": "",
+           "okved_name": null,
+           "bankruptcy_flag": false,
+           "liquidation_flag": false,
+           "invalid_flag": false,
+           "links": {
+            "business_card": null,
+            "founding_docs": null,
+            "gosreg": null,
+            "egrul": null
+           }
+          }
+         ]
+        },
+        "rdl": {
+         "label": "Реестр дисквалифицированных лиц",
+         "items_count": 0,
+         "row_count": 0,
+         "has_more": false,
+         "records": []
+        },
+        "addr": {
+         "label": "Адреса юридических лиц",
+         "items_count": 0,
+         "row_count": 0,
+         "has_more": false,
+         "records": []
+        },
+        "ogrfl": {
+         "label": "Ограничения участия физических лиц в юридических лицах",
+         "items_count": 0,
+         "row_count": 0,
+         "has_more": false,
+         "records": []
+        },
+        "ogrul": {
+         "label": "Ограничения участия юридических лиц в юридических лицах",
+         "items_count": 0,
+         "row_count": 0,
+         "has_more": false,
+         "records": []
+        },
+        "docul": {
+         "label": "Документы на государственную регистрацию юридических лиц",
+         "items_count": 0,
+         "row_count": 0,
+         "has_more": false,
+         "records": []
+        },
+        "docip": {
+         "label": "Документы на государственную регистрацию ИП",
+         "items_count": 0,
+         "row_count": 0,
+         "has_more": false,
+         "records": []
+        }
+       },
+       "persons": [
+        {
+         "role": "director",
+         "section": "upr",
+         "name": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+         "inn": "770600089967",
+         "companies_count": 1,
+         "token": "4EBE8E3DEA02E28922517E30FF6E0B965DF6C192A93277FCE62AE45F57C96E8A6E10853A30BD764809B5BEE2B6686F3004FC5BAD82CDD8710DAD288A33E974E6",
+         "query": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ"
+        },
+        {
+         "role": "founder",
+         "section": "uchr",
+         "name": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+         "inn": "770600089967",
+         "companies_count": 1,
+         "token": "C3AD9A8949033451AC2D3F45152644830F51FE36BEFBD92D8BA38479D0F4D62E16222642EF8B1810672774E824EA75B7",
+         "query": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ"
+        }
+       ],
+       "lookups": [
+        {
+         "person": {
+          "role": "director",
+          "section": "upr",
+          "name": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+          "inn": "770600089967",
+          "companies_count": 1,
+          "token": "4EBE8E3DEA02E28922517E30FF6E0B965DF6C192A93277FCE62AE45F57C96E8A6E10853A30BD764809B5BEE2B6686F3004FC5BAD82CDD8710DAD288A33E974E6",
+          "query": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ"
+         },
+         "companies_total": 1,
+         "has_more": false,
+         "companies": [
+          {
+           "section": "ul",
+           "inn": "9728012826",
+           "ogrn": "1207700337327",
+           "name_short": "ООО \"СТАЛЬНОЕ СЕРДЦЕ\"",
+           "name_full": "ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ \"СТАЛЬНОЕ СЕРДЦЕ\"",
+           "status": "Действующая организация",
+           "address": null,
+           "region": "МОСКВА Г.",
+           "registration_date": "15.09.2020",
+           "ogrn_date": "15.09.2020",
+           "okved_code": "45.11",
+           "okved_name": "Торговля легковыми автомобилями и грузовыми автомобилями малой грузоподъемности",
+           "bankruptcy_flag": true,
+           "liquidation_flag": false,
+           "invalid_flag": false,
+           "links": {
+            "business_card": "https://bo.nalog.gov.ru/organizations-card/11400816",
+            "founding_docs": "https://service.nalog.ru/puchdoc/?o=35263648D9AE04B15DFC57592D808E38763F7C9BEC0509E9E9DC39FEFFCD594D",
+            "gosreg": "https://service.nalog.ru/gosreg/lk-excerpt.html",
+            "egrul": "token=21CB44E06B1FE162DCF4CBDFC244C1DAEEAE3B94128239EF24BEA0D489E73B1587FF3F5EAC8B2705951A9A0A64B4726B264B685046B706B58822376653126770&inn=9728012826&pdf=vyp"
+           },
+           "roles": [
+            "director"
+           ],
+           "persons": [
+            {
+             "name": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+             "inn": "770600089967"
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "person": {
+          "role": "founder",
+          "section": "uchr",
+          "name": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+          "inn": "770600089967",
+          "companies_count": 1,
+          "token": "C3AD9A8949033451AC2D3F45152644830F51FE36BEFBD92D8BA38479D0F4D62E16222642EF8B1810672774E824EA75B7",
+          "query": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ"
+         },
+         "error": "Locator.wait_for: Timeout 10000ms exceeded.\nCall log:\n  - waiting for locator(\"#resultuchr div.pb-card.pb-card--clickable[data-token='C3AD9A8949033451AC2D3F45152644830F51FE36BEFBD92D8BA38479D0F4D62E16222642EF8B1810672774E824EA75B7']\").first to be visible\n",
+         "companies": []
+        }
+       ],
+       "companies": [
+        {
+         "section": "ul",
+         "inn": "9728012826",
+         "ogrn": "1207700337327",
+         "name_short": "ООО \"СТАЛЬНОЕ СЕРДЦЕ\"",
+         "name_full": "ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ \"СТАЛЬНОЕ СЕРДЦЕ\"",
+         "status": "Действующая организация",
+         "address": null,
+         "region": "МОСКВА Г.",
+         "registration_date": "15.09.2020",
+         "ogrn_date": "15.09.2020",
+         "okved_code": "45.11",
+         "okved_name": "Торговля легковыми автомобилями и грузовыми автомобилями малой грузоподъемности",
+         "bankruptcy_flag": true,
+         "liquidation_flag": false,
+         "invalid_flag": false,
+         "links": {
+          "business_card": "https://bo.nalog.gov.ru/organizations-card/11400816",
+          "founding_docs": "https://service.nalog.ru/puchdoc/?o=35263648D9AE04B15DFC57592D808E38763F7C9BEC0509E9E9DC39FEFFCD594D",
+          "gosreg": "https://service.nalog.ru/gosreg/lk-excerpt.html",
+          "egrul": "token=21CB44E06B1FE162DCF4CBDFC244C1DAEEAE3B94128239EF24BEA0D489E73B1587FF3F5EAC8B2705951A9A0A64B4726B264B685046B706B58822376653126770&inn=9728012826&pdf=vyp"
+         },
+         "roles": [
+          "director"
+         ],
+         "persons": [
+          {
+           "name": "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ",
+           "inn": "770600089967"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}
