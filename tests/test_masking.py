@@ -139,9 +139,9 @@ def test_redaction_survives_a_round_trip(person_subject) -> None:  # type: ignor
 
 def test_snils_masking_keeps_only_the_check_digits() -> None:
     masked = mask_snils("111-222-333 44")
-    assert masked == "***-***-*** 42"
-    assert "106" not in masked
-    assert "556" not in masked
+    assert masked == "***-***-*** 44"
+    assert "111" not in masked
+    assert "222" not in masked
 
 
 @pytest.mark.parametrize("raw", [None, "", "   "])
