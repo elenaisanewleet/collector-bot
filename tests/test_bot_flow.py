@@ -312,6 +312,80 @@ async def test_passport_search_masks_the_number(
     assert sent.contains("45** ******")
 
 
+async def test_person_flow_asks_for_a_passport_only_when_the_bridge_is_on(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Флаг выключен — паспорт в этом флоу не спрашивают вовсе."""
+    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
+    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(dispatcher, bot, message=make_message("12.03.1985"))
+    await feed(dispatcher, bot, callback_query=make_callback("skip"))
+    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+
+    assert not sent.contains("Серия и номер паспорта")
+    assert sent.contains("RECOVERY SCORE")
+
+
+async def test_the_passport_step_masks_the_number_and_feeds_the_bridge(
+    bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Флаг включён — паспорт спрашивается последним и в чат не возвращается.
+
+    Он же доезжает до моста: в демо тот детерминированно выдаёт ИНН профиля, и
+    строка моста появляется в блоке ИСТОЧНИКИ.
+    """
+    from app.db.repository import SearchRepository
+
+    enabled = _with_bridge(container)
+    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+
+    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
+    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(dispatcher, bot, message=make_message("12.03.1985"))
+    await feed(dispatcher, bot, callback_query=make_callback("skip"))
+    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+
+    assert sent.contains("Серия и номер паспорта")
+    assert sent.contains("не сохраняются в базе")
+
+    await feed(dispatcher, bot, message=make_message("4509123456"))
+
+    assert not sent.contains("4509123456")
+    assert sent.contains("45** ******")
+    assert sent.contains("✓ ИНН по паспорту (ФНС) — ИНН получен")
+    assert sent.contains("RECOVERY SCORE")
+
+    async with enabled.database.session() as session:
+        request = (await SearchRepository(session).recent_for_user(OPERATOR_ID))[0]
+    # Паспорт не сохраняется: STORE_SENSITIVE_IDENTIFIERS по умолчанию выключен.
+    assert "4509123456" not in request.subject_json
+
+
+async def test_the_passport_step_can_be_skipped(
+    bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    enabled = _with_bridge(container)
+    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+
+    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
+    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(dispatcher, bot, message=make_message("12.03.1985"))
+    await feed(dispatcher, bot, callback_query=make_callback("skip"))
+    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+    await feed(dispatcher, bot, callback_query=make_callback("skip"))
+
+    assert sent.contains("RECOVERY SCORE")
+
+
+def _with_bridge(container: Container) -> Container:
+    """Тот же контейнер, но с включённым INN_BRIDGE_ENABLED."""
+    from dataclasses import replace
+
+    return replace(
+        container, settings=container.settings.model_copy(update={"inn_bridge_enabled": True})
+    )
+
+
 async def test_help_lists_connected_sources(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:

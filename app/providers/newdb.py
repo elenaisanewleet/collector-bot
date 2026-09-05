@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -83,8 +84,40 @@ ERROR_CODE_PAYMENT_REQUIRED = 402
 ERROR_CODE_BAD_REQUEST = 400
 
 
-def result_data_path(method: str) -> str:
-    return f"results.{method}.result.data"
+def result_data_path(section: str) -> str:
+    return f"results.{section}.result.data"
+
+
+# Серия и номер паспорта: 4 и 6 цифр. Всё, что попадает в этот диапазон, из
+# текста вычищается — ИНН (10 и 12 цифр) в него не попадает.
+_SHORT_DIGIT_RUN = re.compile(r"(?<!\d)\d{4,6}(?!\d)")
+_PASSPORT_MASK = "*"
+
+
+def scrub_passport(text: str, *, seria: str, number: str) -> str:
+    """Вычистить серию и номер паспорта из произвольного текста.
+
+    Нужна для сообщений об ошибках вендора: ``error_message`` пишется в БД
+    ``repository.save_provider_results`` **безусловно**, мимо обоих флагов
+    приватности, а NewDB охотно цитирует присланные параметры в тексте отказа
+    (``seria 4015350278 is not valid``).
+
+    Работает по строке и не разбирает JSON: текст отказа приходит в
+    произвольной форме, и разбор, который не удался, вернул бы паспорт наружу
+    целиком. Сначала убираются сами значения и их склейка, затем — любой
+    отдельно стоящий прогон из 4–6 цифр. ИНН не портится: у него 10 или 12
+    цифр, то есть вне диапазона.
+    """
+    if not text:
+        return text
+    scrubbed = text
+    if seria and number:
+        for glued in (f"{seria}{number}", f"{seria} {number}", f"{seria}-{number}"):
+            scrubbed = scrubbed.replace(glued, _PASSPORT_MASK * len(glued))
+    for value in (seria, number):
+        if value:
+            scrubbed = scrubbed.replace(value, _PASSPORT_MASK * len(value))
+    return _SHORT_DIGIT_RUN.sub(lambda match: _PASSPORT_MASK * len(match.group()), scrubbed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,13 +138,24 @@ class NewDBClient:
     def is_configured(self) -> bool:
         return bool(self._settings.newdb_api_key and self._settings.newdb_base_url)
 
-    async def call(self, method: str, *param_sets: Mapping[str, Any]) -> NewDBResponse:
+    async def call(
+        self,
+        method: str,
+        *param_sets: Mapping[str, Any],
+        result_section: str | None = None,
+    ) -> NewDBResponse:
         """Run ``method`` once per parameter set, on one shared connection.
 
         Several parameter sets exist for the one case that genuinely needs them:
         ФССП searches Moscow and the region separately. Rows are concatenated;
         deduplication is the caller's business, because only the caller knows
         what makes two rows the same record.
+
+        ``result_section`` names the section of ``results`` to read when it is
+        not the method's own name. ``passport_fns`` answers in
+        ``results.company`` — the single known method whose section and name
+        disagree, so inferring the section from the name is not something to
+        rely on.
         """
         retry = RetryPolicy(
             max_retries=self._settings.provider_max_retries,
@@ -128,7 +172,7 @@ class NewDBClient:
             for params in param_sets:
                 envelope, raw = await self._run(client, method, params, retry)
                 raw_bodies.append(raw)
-                rows.extend(_extract_rows(envelope, method))
+                rows.extend(_extract_rows(envelope, result_section or method))
 
         return NewDBResponse(rows=rows, raw="\n".join(raw_bodies))
 
@@ -250,13 +294,13 @@ def _failure_code(errors: list[Mapping[str, Any]], message: str) -> str:
     return "request_failed"
 
 
-def _extract_rows(envelope: Any, method: str) -> list[Any]:
+def _extract_rows(envelope: Any, section: str) -> list[Any]:
     """Read the rows of a completed envelope.
 
     A missing result path on a ``complete`` envelope is a schema problem, not an
     empty result, and is reported as such.
     """
-    path = result_data_path(method)
+    path = result_data_path(section)
     rows = dig(envelope, path)
     if rows is None:
         raise ProviderUnavailableError("unexpected_schema", f"В ответе NewDB нет раздела {path}")
@@ -790,4 +834,5 @@ __all__ = [
     "person_params",
     "person_params_for",
     "result_data_path",
+    "scrub_passport",
 ]

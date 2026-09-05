@@ -40,6 +40,10 @@ class ProviderName(StrEnum):
     PROPERTY = "property"
     PLEDGE = "pledge"
     INHERITANCE = "inheritance"
+    # Не реестр фактов, а мост: получает ИНН физлица по паспорту, чтобы три
+    # источника, ищущие только по ИНН, вообще могли быть опрошены. Записей не
+    # приносит и покрытие отчёта не увеличивает.
+    INN_BRIDGE = "inn_bridge"
 
 
 PROVIDER_TITLES: dict[ProviderName, str] = {
@@ -52,6 +56,7 @@ PROVIDER_TITLES: dict[ProviderName, str] = {
     ProviderName.PROPERTY: "Недвижимость",
     ProviderName.PLEDGE: "Залоги",
     ProviderName.INHERITANCE: "Наследственные дела",
+    ProviderName.INN_BRIDGE: "ИНН по паспорту (ФНС)",
 }
 
 

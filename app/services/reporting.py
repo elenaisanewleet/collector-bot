@@ -198,7 +198,7 @@ def _proceeding_lines(item: EnforcementProceeding) -> list[str]:
 def _bankruptcy_block(report: DebtorReport) -> str:
     result = report.result_for(ProviderName.FEDRESURS)
     header = "БАНКРОТСТВО"
-    unanswered = _unanswered_line(result)
+    unanswered = _unanswered_line(result, bridge=report.result_for(ProviderName.INN_BRIDGE))
     if unanswered:
         return f"{header}\n{unanswered}"
 
@@ -236,7 +236,7 @@ def _bankruptcy_lines(item: BankruptcyRecord) -> list[str]:
 def _business_block(report: DebtorReport) -> str:
     result = report.result_for(ProviderName.FNS)
     header = "БИЗНЕС"
-    unanswered = _unanswered_line(result)
+    unanswered = _unanswered_line(result, bridge=report.result_for(ProviderName.INN_BRIDGE))
     if unanswered:
         return f"{header}\n{unanswered}"
 
@@ -326,7 +326,7 @@ def _court_block(report: DebtorReport) -> str:
     """
     result = report.result_for(ProviderName.COURT)
     header = "СУДЫ (АРБИТРАЖ)"
-    unanswered = _unanswered_line(result)
+    unanswered = _unanswered_line(result, bridge=report.result_for(ProviderName.INN_BRIDGE))
     if unanswered:
         return f"{header}\n{unanswered}"
 
@@ -420,6 +420,8 @@ def _sources_block(report: DebtorReport) -> str:
 
 def _source_line(result: ProviderResult) -> str:
     title = PROVIDER_TITLES.get(result.provider, result.provider.value)
+    if result.provider is ProviderName.INN_BRIDGE:
+        return _bridge_source_line(result, title)
     if result.is_partial and result.is_answered:
         # «Проверено, записей нет» про источник, который сам сообщил, что
         # прислал не всё, — это подпись под неправдой в списке источников.
@@ -436,6 +438,36 @@ def _source_line(result: ProviderResult) -> str:
         case _:
             if result.error_code == "insufficient_query":
                 return f"○ {title} — недостаточно данных для запроса"
+            return f"✗ {title} — ошибка ({result.error_code or 'unknown'})"
+
+
+def _bridge_source_line(result: ProviderResult, title: str) -> str:
+    """Строка моста «паспорт → ИНН» в блоке ИСТОЧНИКИ.
+
+    Своя ветка нужна прежде всего потому, что общая напечатала бы «✓ … — 0 зап.»
+    для успешно полученного ИНН: мост записей не приносит, он их делает
+    возможными.
+
+    Сам ИНН здесь не печатается ни в каком виде, включая маскированный. Причина
+    не приватность — для ИНН есть ``mask_inn`` — а согласованность двух показов:
+    восстановленный из кэша ``ProviderResult`` значения не несёт, и «получен
+    77********03» на первом показе против «получен» на втором было бы ровно тем
+    расхождением, которое чинит обогащение субъекта в ``_load_cached``.
+    Оператору нужен исход моста, а не значение.
+    """
+    match result.status:
+        case ProviderStatus.SUCCESS:
+            return f"✓ {title} — ИНН получен, банкротство, ИП и арбитраж проверены по нему"
+        case ProviderStatus.NO_RESULTS:
+            note = f"; {result.error_message}" if result.error_message else ""
+            return f"✓ {title} — проверено, ИНН по этим данным не найден{note}"
+        case ProviderStatus.NOT_CONFIGURED:
+            return f"○ {title} — не подключено"
+        case ProviderStatus.UNAVAILABLE:
+            return f"✗ {title} — недоступно ({result.error_code or 'ошибка'})"
+        case _:
+            if result.error_code == "insufficient_query":
+                return f"○ {title} — {result.error_message or 'недостаточно данных'}"
             return f"✗ {title} — ошибка ({result.error_code or 'unknown'})"
 
 
@@ -506,10 +538,20 @@ def _source_notes(result: ProviderResult | None) -> list[str]:
     return list(result.notes) if result is not None else []
 
 
-def _unanswered_line(result: ProviderResult | None) -> str | None:
+def _unanswered_line(
+    result: ProviderResult | None, *, bridge: ProviderResult | None = None
+) -> str | None:
     """The line used when a source did not actually answer.
 
     This is the guard that keeps "not checked" from reading as "nothing found".
+
+    ``bridge`` уточняет ровно один случай — «нужен ИНН физлица» у трёх
+    источников, которые ищут только по нему. Без уточнения одна и та же строка
+    означала бы четыре разных вещи: паспорта не дали, мост выключен, **ФНС
+    ответила и ИНН нет**, **мост не отработал**. Последние две — это ``NO_RESULTS``
+    против ``UNAVAILABLE``, тот самый инвариант в миниатюре, ради которого мост и
+    строился; потерять его здесь значило бы заплатить за различение и выбросить
+    его.
     """
     if result is None:
         return "Источник не опрашивался."
@@ -518,10 +560,32 @@ def _unanswered_line(result: ProviderResult | None) -> str | None:
     if result.status is ProviderStatus.NOT_CONFIGURED:
         return "Не проверено: источник не подключён."
     if result.error_code == "insufficient_query":
-        return f"Не проверено: {result.error_message or 'недостаточно данных'}."
+        reason = result.error_message or "недостаточно данных"
+        return f"Не проверено: {reason}.{_bridge_note(bridge)}"
     if result.status is ProviderStatus.UNAVAILABLE:
         return "Не проверено: источник временно недоступен."
     return f"Не проверено: ошибка обращения к источнику ({result.error_code or 'unknown'})."
+
+
+def _bridge_note(bridge: ProviderResult | None) -> str:
+    """Почему ИНН, которого не хватило источнику, не был получен по паспорту."""
+    if bridge is None:
+        return ""
+    match bridge.status:
+        case ProviderStatus.SUCCESS:
+            # Источнику хватило бы ИНН — такого сочетания быть не должно.
+            return ""
+        case ProviderStatus.NO_RESULTS:
+            return " ФНС не нашла ИНН по паспорту."
+        case ProviderStatus.NOT_CONFIGURED:
+            return " Получение ИНН по паспорту не подключено."
+        case _:
+            if bridge.error_code == "insufficient_query":
+                return f" {bridge.error_message}." if bridge.error_message else ""
+            return (
+                f" Получить ИНН по паспорту не удалось ({bridge.error_code or 'unknown'}) — "
+                "это не значит, что записей нет."
+            )
 
 
 def _checked_at(result: ProviderResult | None) -> str:

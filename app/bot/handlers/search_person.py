@@ -3,9 +3,18 @@
 Collects a name, then optionally a date of birth and a phone, then a region.
 Each optional step can be skipped; skipping costs match confidence rather than
 blocking the search, and the report says so.
+
+Последним шагом — серия и номер паспорта, и только когда включён
+``INN_BRIDGE_ENABLED``. Без него мост «паспорт → ИНН» в одиночном поиске
+недостижим: этот флоу паспорт не спрашивал, а флоу поиска по паспорту не
+спрашивает ни ФИО, ни даты рождения, без которых ФНС не отвечает. Шаг стоит
+последним намеренно: к нему все прочие данные уже собраны, поэтому паспорт не
+попадает в ``state.update_data`` — он живёт ровно до ``SearchSubject``.
 """
 
 from __future__ import annotations
+
+from contextlib import suppress
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -28,10 +37,12 @@ from app.domain.identity import (
     NameParseError,
     PersonName,
     SearchSubject,
+    normalize_passport,
     normalize_phone,
     parse_fio,
 )
 from app.utils.dates import parse_date
+from app.utils.masking import mask_passport
 
 ASK_FIO = "Введите ФИО должника.\n\nПример: Иванов Иван Иванович\nОтчество можно не указывать."
 ASK_BIRTH_DATE = (
@@ -42,6 +53,23 @@ ASK_PHONE = "Телефон должника (для сопоставления 
 ASK_REGION = "Выберите регион проверки:"
 BAD_DATE = "Не удалось разобрать дату. Формат: ДД.ММ.ГГГГ. Попробуйте ещё раз или пропустите."
 BAD_PHONE = "Не похоже на российский номер. Попробуйте ещё раз или пропустите."
+
+# Свой текст, не ASK_PASSPORT из search_misc: там паспорт действительно никуда
+# не уходит, здесь — уходит, и обещать обратное нельзя.
+ASK_PASSPORT_FOR_INN = (
+    "Серия и номер паспорта (10 цифр). Можно пропустить.\n\n"
+    "По паспорту ФНС выдаёт ИНН, а без ИНН три источника — банкротство,\n"
+    "статус ИП и арбитраж — не проверяются вовсе.\n"
+    "Серия и номер уходят в ФНС через агрегатор и не сохраняются в базе."
+)
+ASK_PASSPORT_FOR_INN_STORED = (
+    "Серия и номер паспорта (10 цифр). Можно пропустить.\n\n"
+    "По паспорту ФНС выдаёт ИНН, а без ИНН три источника — банкротство,\n"
+    "статус ИП и арбитраж — не проверяются вовсе.\n"
+    "Серия и номер уходят в ФНС через агрегатор и сохраняются в базе,\n"
+    "потому что включён STORE_SENSITIVE_IDENTIFIERS."
+)
+BAD_PASSPORT_FOR_INN = "Нужно ровно 10 цифр (серия и номер). Попробуйте ещё раз или пропустите."
 
 
 def _regions_for(choice: str) -> tuple[str, ...]:
@@ -54,7 +82,9 @@ def _regions_for(choice: str) -> tuple[str, ...]:
         return (Region.OTHER.value,)
 
 
-def _build_subject(data: dict[str, object], regions: tuple[str, ...]) -> SearchSubject:
+def _build_subject(
+    data: dict[str, object], regions: tuple[str, ...], *, passport: str | None = None
+) -> SearchSubject:
     name = PersonName(
         last_name=str(data["last_name"]),
         first_name=str(data["first_name"]),
@@ -66,12 +96,25 @@ def _build_subject(data: dict[str, object], regions: tuple[str, ...]) -> SearchS
         name=name,
         birth_date=parse_date(birth_date_raw) if birth_date_raw else None,
         phone=_optional_str(data.get("phone")),
+        passport=passport,
         regions=regions,
     )
 
 
 def _optional_str(value: object) -> str | None:
     return str(value) if value not in (None, "") else None
+
+
+def _stored_regions(data: dict[str, object]) -> tuple[str, ...]:
+    value = data.get("regions")
+    return tuple(str(item) for item in value) if isinstance(value, (list, tuple)) else ()
+
+
+def _ask_passport_text(container: Container) -> str:
+    """Последняя фраза текста зависит от того, правдива ли она."""
+    if container.settings.store_sensitive_identifiers:
+        return ASK_PASSPORT_FOR_INN_STORED
+    return ASK_PASSPORT_FOR_INN
 
 
 def build_router() -> Router:
@@ -150,16 +193,56 @@ def build_router() -> Router:
     ) -> None:
         choice = (callback.data or "").split(":", maxsplit=1)[-1]
         regions = _regions_for(choice)
-
-        data = await state.get_data()
-        await state.clear()
         await answer_callback(callback)
 
         message = callback_message(callback)
         if message is None:
             return
 
+        if container.settings.inn_bridge_enabled:
+            # Регион — последнее, что хранится в состоянии. Паспорт спрашивается
+            # после него и в состояние не кладётся.
+            await state.update_data(regions=list(regions))
+            await state.set_state(PersonSearch.waiting_passport)
+            await message.answer(_ask_passport_text(container), reply_markup=skip_keyboard())
+            return
+
+        data = await state.get_data()
+        await state.clear()
         subject = _build_subject(data, regions)
+        await run_and_send_report(message, container, subject, user_id=user_id)
+
+    @router.message(PersonSearch.waiting_passport)
+    async def receive_passport(
+        message: Message, state: FSMContext, container: Container, user_id: int
+    ) -> None:
+        passport = normalize_passport(message.text or "")
+        if passport is None:
+            await message.answer(BAD_PASSPORT_FOR_INN, reply_markup=skip_keyboard())
+            return
+        data = await state.get_data()
+        await state.clear()
+
+        # Убираем сообщение оператора, чтобы номер не остался в истории чата.
+        # Best-effort: в группе на это нужны права администратора.
+        with suppress(Exception):
+            await message.delete()
+        await message.answer(f"Проверяю с паспортом {mask_passport(passport)}…")
+
+        subject = _build_subject(data, _stored_regions(data), passport=passport)
+        await run_and_send_report(message, container, subject, user_id=user_id)
+
+    @router.callback_query(PersonSearch.waiting_passport, F.data == SKIP_CALLBACK)
+    async def skip_passport(
+        callback: CallbackQuery, state: FSMContext, container: Container, user_id: int
+    ) -> None:
+        data = await state.get_data()
+        await state.clear()
+        await answer_callback(callback)
+        message = callback_message(callback)
+        if message is None:
+            return
+        subject = _build_subject(data, _stored_regions(data))
         await run_and_send_report(message, container, subject, user_id=user_id)
 
     return router
