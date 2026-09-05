@@ -41,6 +41,11 @@ from app.domain.models import (
     ProviderResult,
 )
 from app.providers.base import BaseProvider
+from app.providers.identity_bridge import (
+    InnBridgeProvider,
+    InnBridgeResult,
+    missing_bridge_input,
+)
 from app.utils.hashing import normalize_token
 
 DEMO_SOURCE_NOTE = "demo"
@@ -397,6 +402,46 @@ class DemoPledgeProvider(BaseProvider):
             provider=self.name,
             status=ProviderStatus.SUCCESS if records else ProviderStatus.NO_RESULTS,
             records=list(records),
+        )
+
+
+class DemoInnBridgeProvider(InnBridgeProvider):
+    """ИНН по паспорту, демо-издание.
+
+    Существует ради одного свойства: ``make demo`` не должен зависеть от ключа
+    NewDB. Ни одного сетевого обращения не делает и ничего не стоит, поэтому
+    ``is_configured`` здесь True даже при выключенном ``INN_BRIDGE_ENABLED`` —
+    флаг сторожит деньги и уход паспорта наружу, а в демо нет ни того, ни
+    другого.
+
+    :meth:`is_needed` сужен: без паспорта моста для демо-субъекта не существует
+    вовсе. Демо-источники ищут по ФИО и в ИНН не нуждаются, так что строка
+    «паспорт не указан» в каждом демо-отчёте объясняла бы то, чего не
+    происходит. Введённый паспорт мост честно превращает в ИНН профиля.
+    """
+
+    title = "ИНН по паспорту (демо)"
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    def is_needed(self, subject: SearchSubject) -> bool:
+        return bool(subject.passport) and super().is_needed(subject)
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        missing = missing_bridge_input(subject)
+        if missing is not None:
+            return self.insufficient_query(missing)
+
+        profile = _profile_for(subject)
+        if profile is None or profile.inn is None:
+            # Демо-источник действительно «ответил»: такого ИНН у него нет.
+            return ProviderResult(provider=self.name, status=ProviderStatus.NO_RESULTS)
+        return InnBridgeResult(
+            provider=self.name,
+            status=ProviderStatus.SUCCESS,
+            inn=profile.inn,
         )
 
 

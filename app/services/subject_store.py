@@ -6,6 +6,12 @@ button carries an opaque token instead and the subject stays in memory here.
 Deliberately in-process and time-limited: this is UI state, not data. Losing it
 on restart costs the operator one re-entry, and keeping personal data out of a
 persistent store is worth that.
+
+С появлением паспортного шага в поиске физлица здесь до часа держится и паспорт
+— в памяти процесса, на диск он отсюда не попадает ни при каком флаге. Два
+следствия, о которых стоит знать: кнопка «повторить» отправит серию и номер в
+ФНС ещё раз и оплатит ещё один вызов моста, а до истечения TTL они остаются в
+адресном пространстве бота.
 """
 
 from __future__ import annotations

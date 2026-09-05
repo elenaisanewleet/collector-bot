@@ -46,6 +46,17 @@ def _sources_section(container: Container) -> str:
         state = "подключено" if provider.is_configured else "не подключено"
         lines.append(f"{mark} {title} — {state}")
     lines.append(f"✓ {PROVIDER_TITLES[ProviderName.INTERNAL]} — CSV + внутренняя база")
+    bridge = container.registry.inn_bridge
+    if bridge is not None:
+        # Мост не источник фактов, поэтому идёт отдельной строкой и со своим
+        # объяснением: без него три источника выше не проверяются вовсе.
+        mark = "✓" if bridge.is_configured else "○"
+        state = (
+            "подключено — один платный вызов на должника"
+            if bridge.is_configured
+            else "не подключено: без ИНН банкротство, статус ИП и арбитраж не проверяются"
+        )
+        lines.append(f"{mark} {PROVIDER_TITLES[ProviderName.INN_BRIDGE]} — {state}")
     return "\n".join(lines)
 
 

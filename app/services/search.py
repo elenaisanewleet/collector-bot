@@ -37,6 +37,7 @@ from app.domain.models import (
 )
 from app.logging_setup import get_logger
 from app.providers.base import BaseProvider
+from app.providers.identity_bridge import InnBridgeResult
 from app.providers.internal.base import InternalDebtorProvider
 from app.providers.registry import ProviderRegistry
 from app.services.aggregation import Aggregator
@@ -108,8 +109,11 @@ class SearchService:
                 )
                 return cached
 
+        subject, bridge_result = await self._resolve_inn(subject)
         internal_records = await self.lookup_internal(subject)
         provider_results = await self._run_external(subject)
+        if bridge_result is not None:
+            provider_results = [bridge_result, *provider_results]
 
         report = self._aggregator.build(
             subject, provider_results, internal_records=internal_records
@@ -142,6 +146,33 @@ class SearchService:
         return unique
 
     # ------------------------------------------------------------- internals
+
+    async def _resolve_inn(
+        self, subject: SearchSubject
+    ) -> tuple[SearchSubject, ProviderResult | None]:
+        """Обогатить субъект ИНН, полученным по паспорту, до внешней волны.
+
+        Три источника — банкротство, статус ИП и арбитраж — ищут только по ИНН
+        физлица, поэтому мост обязан отработать раньше них. Это единственная
+        последовательная фаза в поиске: ФССП и залоги, которым ИНН не нужен,
+        ждут её вместе со всеми. Цена в худшем случае — плюс
+        ``request_timeout_seconds * 2`` (тридцать секунд на умолчаниях), и она
+        записана здесь, а не спрятана.
+
+        ``_guarded_fetch`` переиспользуется намеренно: мост получает тот же
+        потолок и попадает в тот же семафор, что и остальные источники.
+
+        Когда моста нет или он этому субъекту не нужен (ИНН уже есть), строки в
+        отчёте не появляется вовсе: объяснять нечего.
+        """
+        bridge = self._registry.inn_bridge
+        if bridge is None or not bridge.is_needed(subject):
+            return subject, None
+        result = await self._guarded_fetch(bridge, subject)
+        inn = result.inn if isinstance(result, InnBridgeResult) else None
+        if inn:
+            subject = subject.model_copy(update={"inn": inn})
+        return subject, result
 
     async def _internal_candidates(
         self, provider: InternalDebtorProvider, subject: SearchSubject
@@ -269,6 +300,19 @@ class SearchService:
             if stored_report is None:
                 return None
             created_at = request.created_at
+            stored_subject = subject_from_json(request.subject_json)
+
+        if stored_subject is not None and subject.inn is None and stored_subject.inn:
+            # ИНН, добытый мостом, сохранён в subject_json, но входящий субъект
+            # его не несёт: оператор снова ввёл ФИО, дату рождения и паспорт.
+            # Восстановленные из БД записи ИНН при этом несут — его туда кладут
+            # ``_searched_by_inn`` и ``_to_case``. Без обогащения матчер не
+            # начислит INN_MATCH_BONUS, сработает NO_DISCRIMINATOR_PENALTY, и
+            # банкротство, показанное в первый раз как подтверждённое, во второй
+            # станет WEAK и выпадет из is_usable. Найденное исчезло бы при
+            # повторном открытии того же отчёта — запрещённая инверсия, и
+            # создавал бы её мост.
+            subject = subject.model_copy(update={"inn": stored_subject.inn})
 
         results: list[ProviderResult] = []
         for row in stored_results:
@@ -332,6 +376,14 @@ def build_query_hash(subject: SearchSubject) -> str:
     """Stable identity of a query, used as the cache key.
 
     One-way: the stored hash cannot be turned back into the query.
+
+    Считается **по вопросу оператора**, до обогащения: тот же вопрос через час
+    должен попасть в кэш, а не оплатить мост заново.
+
+    ``passport`` входит в ключ. Без него у ``SearchType.PASSPORT`` все прочие
+    поля ``None``, и **любые** два поиска по паспорту делят одну запись кэша:
+    при ``CACHE_TTL_HOURS=24`` второй оператор получил бы чужой отчёт с пометкой
+    «из кэша». Хэш односторонний, так что паспорт в него можно класть.
     """
     vehicle = subject.vehicle
     return stable_hash(
@@ -339,6 +391,7 @@ def build_query_hash(subject: SearchSubject) -> str:
         subject.name.normalized if subject.name else None,
         iso_or_none(subject.birth_date),
         subject.phone,
+        subject.passport,
         subject.inn,
         subject.address,
         subject.contract_number,
@@ -356,6 +409,13 @@ def redact_subject(subject: SearchSubject, *, store_sensitive: bool) -> dict[str
     With ``STORE_SENSITIVE_IDENTIFIERS`` off — the default — the passport and the
     full phone number are removed before the query is written. A re-run of such a
     search therefore proceeds without them, which is the intended trade.
+
+    ``inn`` is kept in both modes, and since the passport bridge it may be
+    *derived*: obtained from ФНС by passport rather than typed by the operator.
+    It stays because the correctness of the *second* showing depends on it — see
+    :meth:`SearchService._load_cached`, where a report rebuilt without it demotes
+    a confirmed bankruptcy to a weak match and drops it. The passport itself is
+    still stripped; what survives is the twelve digits it was exchanged for.
     """
     payload = subject.model_dump(mode="json")
     if not store_sensitive:

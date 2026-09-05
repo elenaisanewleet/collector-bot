@@ -31,6 +31,7 @@ from app.domain.models import (
 from app.providers.registry import (
     ProviderRegistry,
     build_external_providers,
+    build_inn_bridge,
     build_internal_provider,
 )
 from app.services.batch import BatchService
@@ -83,6 +84,7 @@ async def container(settings: Settings, database: Database) -> AsyncIterator[Con
     registry = ProviderRegistry(
         internal=build_internal_provider(settings, database),
         external=build_external_providers(settings),
+        inn_bridge=build_inn_bridge(settings),
     )
     search_service = SearchService(settings=settings, database=database, registry=registry)
     instance = Container(

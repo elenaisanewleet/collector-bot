@@ -20,11 +20,12 @@ from app.providers.fedresurs import FedresursProvider, NewDBBankruptcyProvider
 from app.providers.fns import FNSProvider, NewDBBusinessProvider
 from app.providers.fssp import FSSPProvider
 from app.providers.future import build_future_providers
+from app.providers.identity_bridge import InnBridgeProvider, PassportInnProvider
 from app.providers.internal.base import InternalDebtorProvider
 from app.providers.internal.composite import CompositeInternalDebtorProvider
 from app.providers.internal.csv_provider import CSVInternalDebtorProvider
 from app.providers.internal.db_provider import DatabaseInternalDebtorProvider
-from app.providers.mock import build_demo_providers
+from app.providers.mock import DemoInnBridgeProvider, build_demo_providers
 from app.providers.newdb import NewDBFieldMaps
 from app.providers.pledge import NewDBPledgeProvider
 from app.providers.vehicle import UnconfiguredVehicleProvider
@@ -41,17 +42,29 @@ class DuplicateProviderError(ValueError):
 
 
 class ProviderRegistry:
-    """Holds the internal provider plus every external source."""
+    """Holds the internal provider plus every external source.
+
+    ``inn_bridge`` is a named optional slot rather than a member of ``external``,
+    and the difference matters twice over. It runs *before* the external wave,
+    because three of those sources cannot be addressed until it answers — put it
+    in ``external`` and ``asyncio.gather`` would start it in parallel with the
+    very providers it exists to feed. And it must stay out of
+    ``configured_names``, which is both the report's source list multiplier and
+    the batch estimate's ``providers_per_debtor``: the bridge adds one call per
+    debtor, not one per provider.
+    """
 
     def __init__(
         self,
         *,
         internal: InternalDebtorProvider,
         external: Sequence[BaseProvider],
+        inn_bridge: InnBridgeProvider | None = None,
     ) -> None:
         self._internal = internal
         self._external = list(external)
-        _reject_duplicates(self._external)
+        self._inn_bridge = inn_bridge
+        _reject_duplicates([*self._external, *([inn_bridge] if inn_bridge else [])])
 
     @property
     def internal(self) -> InternalDebtorProvider:
@@ -60,6 +73,11 @@ class ProviderRegistry:
     @property
     def external(self) -> list[BaseProvider]:
         return list(self._external)
+
+    @property
+    def inn_bridge(self) -> InnBridgeProvider | None:
+        """Мост «паспорт → ИНН», если он собран для этой конфигурации."""
+        return self._inn_bridge
 
     def __iter__(self) -> Iterator[BaseProvider]:
         return iter(self._external)
@@ -140,14 +158,30 @@ def _fns_provider(settings: Settings, field_maps: NewDBFieldMaps) -> BaseProvide
     return FNSProvider(settings)
 
 
+def build_inn_bridge(settings: Settings) -> InnBridgeProvider:
+    """Мост «паспорт → ИНН» под текущий режим.
+
+    В демо — детерминированный провайдер без единого сетевого обращения: демо
+    обязано работать без ключа. В live — настоящий метод NewDB, который без
+    ключа или без ``INN_BRIDGE_ENABLED`` отвечает ``NOT_CONFIGURED`` и не тратит
+    ничего.
+    """
+    if settings.app_mode is AppMode.DEMO:
+        return DemoInnBridgeProvider()
+    return PassportInnProvider(settings)
+
+
 def build_registry(settings: Settings, database: Database) -> ProviderRegistry:
     registry = ProviderRegistry(
         internal=build_internal_provider(settings, database),
         external=build_external_providers(settings),
+        inn_bridge=build_inn_bridge(settings),
     )
+    bridge = registry.inn_bridge
     logger.info(
         "providers.ready",
         mode=settings.app_mode.value,
         configured=[name.value for name in registry.configured_names],
+        inn_bridge=bool(bridge and bridge.is_configured),
     )
     return registry
