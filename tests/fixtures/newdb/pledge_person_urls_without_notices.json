@@ -1,0 +1,39 @@
+{
+ "params": {
+  "method": "pledge_person",
+  "country": "ru"
+ },
+ "requestId": "00000000-0000-4000-8000-000000000001",
+ "method": "",
+ "cost": 1,
+ "state": "complete",
+ "balance": 1,
+ "results": {
+  "pledge_person": {
+   "result": {
+    "status": 200,
+    "data": [
+     {
+      "fnp": [],
+      "fedresurs": [],
+      "fnp_urls": [
+       "https://www.reestr-zalogov.ru/search/notification/e1e8ce6b-cf75-3046-a1eb-cd1ce247e7b8",
+       "https://www.reestr-zalogov.ru/search/notification/29008870-d5ec-3325-89b3-130d378743ce",
+       "https://www.reestr-zalogov.ru/search/notification/838a2e4e-62d0-31db-98b6-acd44079cbb2",
+       "https://www.reestr-zalogov.ru/search/notification/6aa47d3b-defc-3ab3-a171-7348e7e6cb72",
+       "https://www.reestr-zalogov.ru/search/notification/780eae04-f760-3b03-baaf-4da8407117e2",
+       "https://www.reestr-zalogov.ru/search/notification/943b43da-b865-3db9-af94-74d3780f2c0f",
+       "https://www.reestr-zalogov.ru/search/notification/91623fe8-3ffc-3a78-8c55-d8c65bec636c",
+       "https://www.reestr-zalogov.ru/search/notification/9d48916f-ef21-38dd-b335-7633fa8b2c84",
+       "https://www.reestr-zalogov.ru/search/notification/5a4e86b6-affd-3020-ae64-59f0a8e9c567",
+       "https://www.reestr-zalogov.ru/search/notification/e88e1312-98b6-3106-867b-c6dfd59704f7",
+       "https://www.reestr-zalogov.ru/search/notification/0890abfc-0941-346a-87d3-ae84457199bb",
+       "https://www.reestr-zalogov.ru/search/notification/8acee683-e465-3471-8d70-51922458b474",
+       "https://www.reestr-zalogov.ru/search/notification/e5a55597-d5d0-3217-becc-b50efce23eec"
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

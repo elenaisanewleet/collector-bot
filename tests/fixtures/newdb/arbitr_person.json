@@ -1,0 +1,139 @@
+{
+ "params": {
+  "method": "arbitr_person",
+  "country": "ru"
+ },
+ "requestId": "00000000-0000-4000-8000-000000000001",
+ "method": "",
+ "cost": 1,
+ "state": "complete",
+ "balance": 1,
+ "results": {
+  "arbitr_person": {
+   "result": {
+    "status": 200,
+    "data": [
+     {
+      "query": "770600089967",
+      "query_inn": "770600089967",
+      "search_mode": "inn",
+      "found": true,
+      "total_count": 1,
+      "pagination": {
+       "offset": 0,
+       "limit": 10,
+       "returned": 1,
+       "has_more": false,
+       "next_offset": null,
+       "previous_offset": null,
+       "page_size": 10,
+       "pages_count": 1,
+       "current_page": 1,
+       "current_page_index": 0,
+       "source_page_size": 25,
+       "source_pages": [
+        1
+       ]
+      },
+      "message": "Найдено 1 дел. Подробно разобрано 1 из текущих 1.",
+      "cases": [
+       {
+        "date": "31.05.2023",
+        "case_number": "А40-122352/2023",
+        "case_url": "https://kad.arbitr.ru/Card/ccee749e-df2e-4e9f-989d-3a239605b8ec",
+        "plaintiff": "ДЕПАРТАМЕНТ ГОРОДСКОГО ИМУЩЕСТВА ГОРОДА МОСКВЫ",
+        "respondent": "Парфененко Антон Орестович"
+       }
+      ],
+      "detailed_cases": [
+       {
+        "case_number": "Ф05-35733/2023",
+        "status": "Рассмотрение дела завершено",
+        "participants": {
+         "plaintiffs": [
+          {
+           "name": "ДЕПАРТАМЕНТ ГОРОДСКОГО ИМУЩЕСТВА ГОРОДА МОСКВЫ",
+           "address": "123290, Россия, г. Москва, г. Москва, ул. Ермакова Роща, д. 1 строение 1"
+          }
+         ],
+         "defendants": [
+          {
+           "name": "Парфененко Антон Орестович",
+           "address": "Данные скрыты"
+          }
+         ],
+         "third_parties": [],
+         "others": []
+        },
+        "judges": [
+         {
+          "court": "АС города Москвы",
+          "name": "Коновалова Е. В."
+         }
+        ],
+        "card_pdf_analysis": {
+         "pdf_link": "https://kad.arbitr.ru/Kad/PdfDocument/ccee749e-df2e-4e9f-989d-3a239605b8ec/44e8de04-7354-4c14-9047-ee7624ed4c44/A40-122352-2023_20240220_Reshenija_i_postanovlenija.pdf",
+         "detail_info": {
+          "case_info": {
+           "case_number": "А40-122352/2023",
+           "court": "Арбитражный суд Московского округа",
+           "decision_date": "2024-02-20",
+           "judge": "Филина Е.Ю.",
+           "document_type": "Постановление"
+          },
+          "classification": {
+           "case_type": "PROPERTY",
+           "case_subtype": "аренда земельного участка",
+           "confidence": 0.95,
+           "classification_rationale": "Иск о взыскании задолженности по арендной плате и пени за земельный участок."
+          },
+          "parties": {
+           "claimant": {
+            "name": "Департамент городского имущества города Москвы",
+            "inn": null,
+            "ogrn": null,
+            "address": "г. Москва"
+           },
+           "debtor": {
+            "name": "Парфененко Антон Орестович",
+            "inn": null,
+            "ogrn": null,
+            "address": null
+           }
+          },
+          "financials": {
+           "main_debt": 966.65,
+           "state_fee": null,
+           "total_amount": 1099.89,
+           "currency": "RUB"
+          },
+          "case_subject": {
+           "essence": "Взыскание задолженности по арендной плате и пени по договору аренды земельного участка",
+           "period": "с 15.06.2020 по 31.12.2022",
+           "legal_basis": [
+            "статьи 309, 310, 330, 606, 614 Гражданского кодекса Российской Федерации",
+            "постановление Правительства РФ от 28.03.2022 № 497"
+           ]
+          },
+          "risk": {
+           "personal_asset_risk": "low",
+           "enforcement_signal": true,
+           "total_claims_amount": 1099.89,
+           "risk_factors": [
+            "Наличие неисполненных денежных обязательств перед государственным органом",
+            "Взыскание задолженности в судебном порядке"
+           ]
+          },
+          "summary": "Арбитражный суд Московского округа оставил без изменения судебные акты первой и апелляционной инстанций о частичном удовлетворении иска Департамента городского имущества города Москвы к ИП Парфененко А.О. о взыскании арендной платы и пени. Суды снизили размер пени с учетом моратория на банкротство (постановление Правительства РФ № 497)."
+         }
+        },
+        "source_url": "https://kad.arbitr.ru/Card/ccee749e-df2e-4e9f-989d-3a239605b8ec",
+        "index": 0
+       }
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

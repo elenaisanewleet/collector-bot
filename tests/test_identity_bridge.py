@@ -578,7 +578,9 @@ async def test_a_hanging_bridge_does_not_take_the_search_with_it(
             await asyncio.sleep(30)
             raise AssertionError("должен был быть отменён")  # pragma: no cover
 
-    settings = live_settings.model_copy(update={"request_timeout_seconds": 1.0})
+    # Потолок источника — своя настройка, а не производная от таймаута одного
+    # запроса: асинхронные методы иначе обрывались посреди опроса, уже оплаченные.
+    settings = live_settings.model_copy(update={"provider_budget_seconds": 1.0})
     registry = ProviderRegistry(
         internal=build_internal_provider(settings, database),
         external=[_StubBankruptcy()],

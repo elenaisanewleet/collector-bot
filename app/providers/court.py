@@ -14,6 +14,15 @@ proceeding that competes with ours.
 The method identifies a person by ИНН. Without one this provider reports
 "недостаточно данных" instead of searching by name — an arbitration case
 attached to the wrong person is a wrong reason to drop a debtor.
+
+The answer is a wrapper per subject, not a row per case: ``data[0]`` carries
+``total_count``, ``message``, ``pagination`` and two arrays — ``cases`` (the
+short list) and ``detailed_cases`` (the same cases with their card parsed). The
+map reads the second. The wrapper itself is read here, because two things in it
+decide whether an empty result may be reported as one: a non-empty ``cases``
+beside an empty ``detailed_cases`` means the vendor found cases and parsed none,
+and ``pagination.limit`` is 10, so a debtor with forty cases has thirty nobody
+looked at.
 """
 
 from __future__ import annotations
@@ -24,6 +33,7 @@ from typing import Any
 from app.domain.enums import CourtCaseRole, ProviderName, ProviderStatus
 from app.domain.identity import NameMatch, PersonName, SearchSubject, compare_names
 from app.domain.models import CourtCase, ProviderResult
+from app.providers.base import NO_CONTEXT, FetchContext, ProviderUnavailableError
 from app.providers.mapping import as_text, dig
 from app.providers.newdb import NewDBMethodProvider, individual_inn, inn_params
 from app.utils.dates import parse_date, utcnow
@@ -38,6 +48,10 @@ MAX_RECORDS = 50
 # Здесь — только значение по умолчанию, то самое, что стоит в документации.
 PARTICIPANT_NAME_KEY_OPTION = "participant_name_key"
 DEFAULT_PARTICIPANT_NAME_KEY = "name"
+
+# Ветки обёртки, проверенные на живом ответе.
+CASES_KEY = "cases"
+DETAILED_CASES_KEY = "detailed_cases"
 
 _DEFENDANT_TOKENS = frozenset({"ответчик", "defendant", "должник"})
 _PLAINTIFF_TOKENS = frozenset({"истец", "plaintiff", "заявитель", "взыскатель"})
@@ -78,9 +92,11 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
                 "поиск по одному ФИО дал бы чужие дела"
             )
 
-        rows, raw = await self.rows_for(NEWDB_METHOD, inn_params(inn))
+        rows, containers, raw = await self.rows_and_containers(NEWDB_METHOD, inn_params(inn))
         name_key = self.option(
-            NEWDB_METHOD, PARTICIPANT_NAME_KEY_OPTION, DEFAULT_PARTICIPANT_NAME_KEY
+            NEWDB_METHOD,
+            PARTICIPANT_NAME_KEY_OPTION,
+            DEFAULT_PARTICIPANT_NAME_KEY,
         )
         parsed = [
             case
@@ -88,16 +104,66 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
             if (case := _to_case(row, subject=subject, searched_inn=inn, name_key=name_key))
             is not None
         ]
+        if not parsed and _found_but_unparsed(containers):
+            raise ProviderUnavailableError(
+                "unexpected_schema",
+                "КАД вернул дела, но ни одно из них не разобрано — "
+                "пустой результат здесь означал бы «дел нет»",
+            )
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.SUCCESS if parsed else ProviderStatus.NO_RESULTS,
             records=list(parsed),
+            notes=_coverage_notes(containers, parsed=len(parsed)),
             raw_response=self.raw_for(raw),
         )
 
+    def planned_calls(self, subject: SearchSubject, context: FetchContext = NO_CONTEXT) -> int:
+        if not self.is_configured or individual_inn(subject) is None:
+            return 0
+        return 1
+
+
+def _found_but_unparsed(containers: Sequence[Any]) -> bool:
+    """The wrapper lists cases and the detailed array is empty."""
+    for container in containers:
+        if not isinstance(container, Mapping):
+            continue
+        listed = container.get(CASES_KEY)
+        detailed = container.get(DETAILED_CASES_KEY)
+        if isinstance(listed, list) and listed and not (detailed or []):
+            return True
+    return False
+
+
+def _coverage_notes(containers: Sequence[Any], *, parsed: int) -> tuple[str, ...]:
+    """«Разобрано N из M» — из полей самой обёртки.
+
+    Без этой строки усечённая страница выглядит как полный ответ: источник
+    отдаёт по десять дел за раз, и «дел больше нет» после десятого — это не то,
+    что он сказал.
+    """
+    notes: list[str] = []
+    for container in containers:
+        if not isinstance(container, Mapping):
+            continue
+        total = container.get("total_count")
+        has_more = dig(container, "pagination.has_more")
+        if isinstance(total, int) and total > parsed:
+            notes.append(
+                f"Источник нашёл дел: {total}, разобрано {parsed}. По остальным сведений нет."
+            )
+        elif has_more is True:
+            notes.append("Источник отдал не все дела: следующая страница не запрашивалась.")
+    return tuple(dict.fromkeys(notes))
+
 
 def _to_case(
-    record: Mapping[str, Any], *, subject: SearchSubject, searched_inn: str, name_key: str
+    record: Mapping[str, Any],
+    *,
+    subject: SearchSubject,
+    searched_inn: str,
+    name_key: str = DEFAULT_PARTICIPANT_NAME_KEY,
 ) -> CourtCase | None:
     """A row with no case number is not a case we can show or verify.
 
@@ -105,12 +171,6 @@ def _to_case(
     was returned for that ИНН, so the ИНН belongs on the record. Without it every
     case comes back with no identifiers, the matcher rates it weak, and the
     report drops a live claim as somebody else's business.
-
-    Safe here in a way it would not be everywhere: a row of this method is a
-    *case*, not a person, and every case in the answer came back for the ИНН
-    that was asked about. Methods whose rows are per-subject containers — the
-    bankruptcy one — read the subject's own identifiers out of the container
-    instead (``row_fields``).
     """
     case_number = as_text(record.get("case_number"))
     if case_number is None:
@@ -131,7 +191,11 @@ def _to_case(
     )
 
 
-def _role_of(record: Mapping[str, Any], subject: SearchSubject, name_key: str) -> CourtCaseRole:
+def _role_of(
+    record: Mapping[str, Any],
+    subject: SearchSubject,
+    name_key: str = DEFAULT_PARTICIPANT_NAME_KEY,
+) -> CourtCaseRole:
     """Роль по делу — из плоского поля, а если его нет, из списков участников.
 
     У КАД плоского поля роли нет: истцы и ответчики приходят отдельными списками
@@ -155,23 +219,19 @@ def _role_of(record: Mapping[str, Any], subject: SearchSubject, name_key: str) -
 
 
 def _names_include(participants: Any, name: PersonName, name_key: str) -> bool:
-    """Стоит ли субъект в этом списке участников.
+    """Есть ли субъект в этом списке участников.
 
-    Сравнение идёт через ``compare_names``, поэтому не зависит ни от порядка
-    слов, ни от того, записано ли имя целиком: КАД печатает участников то
-    «Фамилия Имя Отчество», то наоборот, то «Бычков Д.Ю.», то «ИП Иванов И.И.».
-    Точное равенство строк промахивалось по всем трём поводам, и промах давал
-    роль OTHER — дело выпадало из исков к должнику, а скоринг начислял плюс за
-    то, что исков не найдено, показывая при этом само дело в отчёте.
-
-    Инициалов здесь достаточно, и это не поблажка в отождествлении: дело уже
-    вернулось по ИНН должника, и вопрос стоит не «его ли это дело», а «на какой
-    он в нём стороне». Кем считать однофамильца с теми же инициалами в чужом
-    деле, этот код не решает — такое дело сюда не попадает.
+    Сравнение идёт тем же :func:`compare_names`, что и везде, а не точным
+    равенством строк: КАД печатает половину участников сокращённо — «Бычков
+    Д.Ю.», «ИП Тестов А.С.», — и точному равенству такие имена не равны ничему.
+    Промах стоил дорого: роль вырождалась в OTHER, живой иск к должнику
+    выпадал из конкурентов за его имущество, а скоринг рядом начислял плюс
+    «исков к должнику не найдено» — печатая при этом само дело выше в отчёте.
     """
     if not isinstance(participants, Sequence) or isinstance(participants, (str, bytes)):
         return False
     for item in participants:
+        # Точечный путь: ключ может лежать внутри участника (``party.full_name``).
         raw = dig(item, name_key) if isinstance(item, Mapping) else item
         if compare_names(name, as_text(raw)) is not NameMatch.NONE:
             return True

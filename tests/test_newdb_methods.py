@@ -25,6 +25,7 @@ from app.domain.enums import (
     BankruptcyStatus,
     BusinessRole,
     CourtCaseRole,
+    EntityType,
     PledgeStatus,
     ProviderStatus,
 )
@@ -39,6 +40,16 @@ from app.providers.pledge import NewDBPledgeProvider
 
 BASE_URL = "https://api.example.test"
 NEWDB_URL = f"{BASE_URL}/v2"
+
+# Дословные ответы живого сервиса, обрезанные только по объёму: тома судебных
+# документов выброшены, ни одно имя ключа не тронуто. Это единственный вид
+# теста, который ловит расхождение карты с ответом целым классом.
+LIVE_FIXTURES = Path(__file__).parent / "fixtures" / "newdb"
+
+
+def live_fixture(name: str) -> Any:
+    return json.loads((LIVE_FIXTURES / name).read_text(encoding="utf-8"))
+
 
 # Placeholder row keys, matching config/field_maps/example_newdb.json. They are
 # what a deployment writes down after reading its own contract; the point of the
@@ -653,28 +664,76 @@ async def test_bankruptcy_without_inn_is_not_queried(
 
 
 @respx.mock
-async def test_sole_proprietor_status_is_mapped(
+async def test_sole_proprietor_is_read_from_the_live_response(
     newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
 ) -> None:
-    row = {
-        "INN": "770912345601",
-        "OGRNIP": "316774600000000",
-        "Name": "ИП Тестов Андрей Сергеевич",
-        "Role": "Индивидуальный предприниматель",
-        "Status": "Действует",
-    }
+    """Дословный ответ живого ``egrul_ip``: ИП лежит в matches[section=ip]."""
     route = respx.post(NEWDB_URL).mock(
-        return_value=httpx.Response(200, json=envelope("egrul_ip", data=[row]))
+        return_value=httpx.Response(200, json=live_fixture("egrul_ip.json"))
     )
 
     result = await NewDBBusinessProvider(newdb_settings, maps).fetch(inn_subject)
 
     assert result.status is ProviderStatus.SUCCESS
-    record = result.records[0]
-    assert isinstance(record, BusinessRelation)
-    assert record.role is BusinessRole.SOLE_PROPRIETOR
-    assert record.is_active_sole_proprietor
+    relations = [record for record in result.records if isinstance(record, BusinessRelation)]
+    sole = [item for item in relations if item.role is BusinessRole.SOLE_PROPRIETOR]
+    assert [item.ogrn for item in sole] == ["320774600370587"]
     assert json.loads(route.calls[0].request.content)["params"]["innfiz"] == "770912345601"
+
+
+@respx.mock
+async def test_egrul_matches_upr_rows_are_not_companies(
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
+) -> None:
+    """Строки ``upr``/``uchr`` — это сам должник, а не его юрлицо.
+
+    В живом ответе у них ФИО должника в ``name_short`` и его собственный ИНН.
+    Превращённые в связь, они дают «компанию» с именем человека, которой
+    матчер поставит полное совпадение ФИО, — компанию, которой не существует.
+    """
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=live_fixture("egrul_ip.json")))
+
+    result = await NewDBBusinessProvider(newdb_settings, maps).fetch(inn_subject)
+
+    relations = [record for record in result.records if isinstance(record, BusinessRelation)]
+    companies = [item for item in relations if item.entity_type is EntityType.LEGAL_ENTITY]
+    assert [item.name for item in companies] == ['ООО "СТАЛЬНОЕ СЕРДЦЕ"']
+    assert "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ" not in {item.name for item in companies}
+
+
+@respx.mock
+async def test_company_bankruptcy_flag_is_carried_over(
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
+) -> None:
+    """Признак банкротства компании оплачен тем же вызовом и не выбрасывается."""
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=live_fixture("egrul_ip.json")))
+
+    result = await NewDBBusinessProvider(newdb_settings, maps).fetch(inn_subject)
+
+    companies = [
+        record
+        for record in result.records
+        if isinstance(record, BusinessRelation) and record.entity_type is EntityType.LEGAL_ENTITY
+    ]
+    assert companies[0].bankruptcy_flag is True
+    assert companies[0].role is BusinessRole.DIRECTOR
+    assert companies[0].linked_by_identifier is True
+
+
+@respx.mock
+async def test_a_failed_affiliation_branch_is_reported(
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
+) -> None:
+    """У живого ответа ветка учредителя отвалилась по таймауту.
+
+    Без оговорки список компаний читался бы как полный — то есть «у должника
+    одно ООО», когда на самом деле вторую ветку никто не увидел.
+    """
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=live_fixture("egrul_ip.json")))
+
+    result = await NewDBBusinessProvider(newdb_settings, maps).fetch(inn_subject)
+
+    assert any("неполон" in note for note in result.notes)
 
 
 async def test_sole_proprietor_needs_an_identifier(
@@ -1208,3 +1267,252 @@ def test_shipped_example_map_describes_every_documented_method() -> None:
     # сделала бы источник «подключённым» и заставила его отвечать «ИП не
     # найдено» про должника, которого никто не разбирал.
     assert BUSINESS_METHOD not in example.methods
+
+
+# ------------------------------------------------------- транспорт и статусы
+
+
+@respx.mock
+async def test_non_200_result_status_is_never_no_results(
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
+) -> None:
+    """``status: 500`` рядом с пустой ``data`` — это «источник упал».
+
+    Прочитанное как ``NO_RESULTS``, оно означало бы «проверено, ничего нет», и
+    именно так выглядит живой ответ Росреестра на адрес до дома. Гейт стоит в
+    транспорте, поэтому закрывает все методы разом, включая ещё не написанные.
+    """
+    envelope_500 = envelope("bankrot_person", data=[])
+    envelope_500["results"]["bankrot_person"]["result"]["status"] = 500
+    envelope_500["results"]["bankrot_person"]["result"]["error"] = "timeout"
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=envelope_500))
+
+    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(inn_subject)
+
+    assert result.status is not ProviderStatus.NO_RESULTS
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "upstream_error"
+    assert "500" in (result.error_message or "")
+
+
+@respx.mock
+async def test_state_with_a_space_is_pending(
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
+) -> None:
+    """Сервис пишет «in progress» через пробел, спецификация — ``in_progress``.
+
+    Внутри цикла опроса разница была безвредна; на первом же ответе она уводила
+    исправный запрос в ``unexpected_schema``.
+    """
+    pending = envelope("bankrot_person", state="in progress", include_results=False)
+    ready = envelope(
+        "bankrot_person",
+        data=[{"CaseNumber": "А73-1/2019", "ProcedureStatus": "Введена процедура"}],
+    )
+    respx.post(NEWDB_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=pending),
+            httpx.Response(200, json=ready),
+        ]
+    )
+
+    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(inn_subject)
+
+    assert result.status is ProviderStatus.SUCCESS
+
+
+@respx.mock
+async def test_stalled_restart_with_terminal_error_stops_polling(
+    newdb_settings: Settings, maps: NewDBFieldMaps, inn_subject: SearchSubject
+) -> None:
+    """``restart`` по кругу с неизменной датой и приложенной ошибкой — отказ.
+
+    Живьём задача в этом состоянии не становится ``complete`` никогда. Досидеть
+    до конца бюджета значит потерять диагностику («источник ответил 500») и
+    выдать её за «не успели» — при уже списанном вызове.
+    """
+    stalled = envelope("bankrot_person", state="restart", include_results=False)
+    stalled["results"] = {
+        "bankrot_person": {
+            "dateupdated": "2026-09-05 02:41:48",
+            "result": {"status": 500, "error": "timeout", "data": []},
+        }
+    }
+    route = respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=stalled))
+
+    result = await NewDBBankruptcyProvider(newdb_settings, maps).fetch(inn_subject)
+
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "upstream_error"
+    # Первый запрос и один опрос — дальше ждать нечего.
+    assert route.call_count == 2
+
+
+# ----------------------------------------------------------- залоги: инверсия
+
+
+@respx.mock
+async def test_pledge_urls_without_notices_is_a_schema_error(
+    live_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """Тринадцать ссылок на уведомления и ни одного разобранного уведомления.
+
+    Дословный живой ответ. Карта читает ``fnp``, находит пустой массив — ключ
+    есть, значит путь не пропал, — и отчёт сообщает «записей в реестре залогов
+    не найдено» про должника с тринадцатью зарегистрированными уведомлениями.
+    """
+    settings, shipped = _shipped_deployment(live_settings)
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            200, json=live_fixture("pledge_person_urls_without_notices.json")
+        )
+    )
+
+    result = await NewDBPledgeProvider(settings, shipped).fetch(person_subject)
+
+    assert result.status is not ProviderStatus.NO_RESULTS
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "unexpected_schema"
+    assert "13" in (result.error_message or "")
+
+
+@respx.mock
+async def test_pledge_notice_with_its_link_is_a_normal_answer(
+    live_settings: Settings, tmp_path: Path
+) -> None:
+    """В норме уведомления и ссылки идут один к одному — это не ошибка схемы."""
+    settings, documented = deployment(live_settings, tmp_path, DOCUMENTED_MAP | _PLEDGE_VIN_MAP)
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=live_fixture("pledge_vin.json"))
+    )
+    subject = SearchSubject(search_type="vin", vehicle=VehicleDescriptor(vin="JTEHD21A850036287"))
+
+    result = await NewDBPledgeProvider(settings, documented).fetch(subject)
+
+    assert result.status is ProviderStatus.SUCCESS
+    pledge = result.records[0]
+    assert isinstance(pledge, PledgeRecord)
+    assert pledge.registration_number == "2015-000-291842-833"
+    assert pledge.status is PledgeStatus.ACTIVE
+
+
+# --------------------------------------------------- арбитраж: живая обёртка
+
+
+@respx.mock
+async def test_arbitration_reads_the_live_wrapper(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    """``data[0]`` — обёртка с пагинацией, дела лежат в ``detailed_cases``.
+
+    Поставляемая карта раньше считала строку ``data`` самим делом, и на живом
+    ответе не разбирала ни одной строки: ``unexpected_schema`` на каждом
+    должнике, то есть мёртвый источник.
+    """
+    settings, shipped = _shipped_deployment(live_settings)
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=live_fixture("arbitr_person.json"))
+    )
+
+    result = await NewDBArbitrationProvider(settings, shipped).fetch(inn_subject)
+
+    assert result.status is ProviderStatus.SUCCESS
+    case = result.records[0]
+    assert isinstance(case, CourtCase)
+    assert case.case_number == "Ф05-35733/2023"
+    assert case.court_name == "АС города Москвы"
+
+
+@respx.mock
+async def test_arbitration_listed_but_unparsed_cases_are_a_schema_error(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    """Дела в ``cases`` есть, в ``detailed_cases`` пусто — это «не разобрано»."""
+    settings, shipped = _shipped_deployment(live_settings)
+    payload = live_fixture("arbitr_person.json")
+    payload["results"]["arbitr_person"]["result"]["data"][0]["detailed_cases"] = []
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=payload))
+
+    result = await NewDBArbitrationProvider(settings, shipped).fetch(inn_subject)
+
+    assert result.status is not ProviderStatus.NO_RESULTS
+    assert result.error_code == "unexpected_schema"
+
+
+@respx.mock
+async def test_arbitration_says_how_much_of_the_answer_it_read(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject
+) -> None:
+    """Источник отдаёт по десять дел за раз; «дел больше нет» — не его слова."""
+    settings, shipped = _shipped_deployment(live_settings)
+    payload = live_fixture("arbitr_person.json")
+    payload["results"]["arbitr_person"]["result"]["data"][0]["total_count"] = 47
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=payload))
+
+    result = await NewDBArbitrationProvider(settings, shipped).fetch(inn_subject)
+
+    assert any("47" in note for note in result.notes)
+
+
+def _shipped_deployment(live_settings: Settings) -> tuple[Settings, NewDBFieldMaps]:
+    """Карта из репозитория — та самая, что уедет в прод."""
+    path = Path("config/field_maps/example_newdb.json")
+    settings = live_settings.model_copy(
+        update={
+            "newdb_api_key": "test-key",
+            "newdb_base_url": BASE_URL,
+            "newdb_method_path": "/v2",
+            "newdb_field_map": path,
+            "provider_max_retries": 0,
+            "provider_retry_backoff_seconds": 0.0,
+        }
+    )
+    return settings, NewDBFieldMaps.load(path)
+
+
+_PLEDGE_VIN_MAP: dict[str, Any] = {
+    "pledge_vin": {
+        "records_path": "fnp",
+        "fields": {
+            "registration_number": "reference_number",
+            "registered_at": "json_extra.registrationTime",
+            "pledgor_name": "pledgor",
+            "pledgee_name": "pledgee",
+            "vin": "pledge_subject_ids_raw",
+            "status": "message_type",
+            "source_url": "fnp_url",
+        },
+        "value_maps": {"status": {"возникновение залога": "действует"}},
+    }
+}
+
+
+# ------------------------------------------- поставляемая карта против живых
+
+
+LIVE_EXPECTATIONS: tuple[tuple[str, str, int], ...] = (
+    ("bankrot_person.json", "bankrot_person", 1),
+    ("arbitr_person.json", "arbitr_person", 1),
+    ("pledge_vin.json", "pledge_vin", 1),
+)
+
+
+@pytest.mark.parametrize(("fixture", "method", "expected"), LIVE_EXPECTATIONS)
+def test_shipped_example_map_parses_captured_live_responses(
+    fixture: str, method: str, expected: int
+) -> None:
+    """Единственный тест, ловящий «карта разъехалась с ответом» целым классом.
+
+    Прогоняет карту из репозитория по дословным ответам живого сервиса. Раньше
+    такого теста не было, и ``arbitr_person`` уехал в поставку в состоянии, при
+    котором он не разбирал ни одной строки ни на одном ответе.
+    """
+    shipped = NewDBFieldMaps.load(Path("config/field_maps/example_newdb.json"))
+    mapping = shipped.require(method)
+    payload = live_fixture(fixture)
+    rows = payload["results"][next(iter(payload["results"]))]["result"]["data"]
+
+    mapped = mapping.apply(rows)
+
+    assert len(mapped.records) == expected
+    assert mapped.unreadable == 0

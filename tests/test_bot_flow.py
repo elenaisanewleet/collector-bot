@@ -471,7 +471,7 @@ async def test_batch_shows_an_estimate_before_spending(
     await feed(dispatcher, bot, message=make_message("/batch"))
 
     assert sent.contains("Массовая проверка")
-    assert sent.contains("Обращений к источникам")
+    assert sent.contains("Платных вызовов")
     assert sent.contains("списываются с вашего баланса")
     # Ничего ещё не запущено.
     assert not sent.contains("Проверка завершена")

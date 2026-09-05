@@ -100,12 +100,16 @@ async def test_the_bridge_shows_up_as_its_own_line_when_it_will_fire(
         to_query=800,
         providers_per_debtor=5,
         capped=False,
+        # Поместочный потолок: пять источников на восемьсот должников.
+        calls_min=800 * 5,
+        calls_max=800 * 5,
         bridge_enabled=True,
         bridge_calls=800,
         without_inn=800,
     )
     text = render_estimate(estimate, loaded.settings.app_name)
 
+    # Мост — слагаемое, а не множитель: он стоит вызов на должника, не на источник.
     assert estimate.requests == 800 * 5 + 800
     assert "ИНН по паспорту (ФНС): 800 вызовов — по одному на должника" in text
 

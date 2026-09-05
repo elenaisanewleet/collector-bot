@@ -233,6 +233,11 @@ async def test_a_leasing_only_debtor_is_never_called_unencumbered(
     response = copy.deepcopy(documented_response("pledge_person"))
     rows = response["results"]["pledge_person"]["result"]["data"]
     rows[0]["fnp"] = []
+    # Ссылки убираются вместе со строками: ``fnp_urls`` без разобранных
+    # уведомлений — это отдельный случай («нашли и не разобрали»), у него свой
+    # тест, и он обязан давать UNAVAILABLE, а не NO_RESULTS. Здесь проверяется
+    # непрочитанная ветка Федресурса, а не он.
+    rows[0]["fnp_urls"] = []
     assert rows[0]["fedresurs"], "выборка теряет смысл без непрочитанной ветки"
 
     report = await pledge_report(shipped_settings, shipped_maps, DOCUMENTED_PERSON, response)

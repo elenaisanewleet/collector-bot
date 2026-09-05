@@ -17,8 +17,10 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from app.domain.identity import (
+    INN_INDIVIDUAL_LENGTH,
     NameParseError,
     normalize_address,
+    normalize_inn,
     normalize_phone,
     normalize_plate,
     normalize_vin,
@@ -36,6 +38,7 @@ CANONICAL_COLUMNS = (
     "contract_number",
     "claim_number",
     "debt_amount",
+    "inn",
     "address",
     "vehicle_plate",
     "vin",
@@ -68,6 +71,8 @@ COLUMN_ALIASES: dict[str, str] = {
     "debt": "debt_amount",
     "долг": "debt_amount",
     "sum": "debt_amount",
+    "inn": "inn",
+    "инн": "inn",
     "address": "address",
     "адрес": "address",
     "plate": "vehicle_plate",
@@ -97,6 +102,7 @@ class DebtorRow:
     contract_number: str | None = None
     claim_number: str | None = None
     debt_amount: Decimal | None = None
+    inn: str | None = None
     address: str | None = None
     vehicle_plate: str | None = None
     vin: str | None = None
@@ -210,6 +216,7 @@ def _build_row(mapping: dict[int, str | None], raw_row: list[str]) -> DebtorRow:
     row.birth_date = _parse_optional_date(values.get("birth_date"), "birth_date", row)
     row.phone = _parse_optional_phone(values.get("phone"), row)
     row.debt_amount = _parse_optional_amount(values.get("debt_amount"), row)
+    row.inn = _parse_optional_inn(values.get("inn"), row)
     row.address = normalize_address(values.get("address"))
     row.vehicle_plate = _parse_optional_plate(values.get("vehicle_plate"), row)
     row.vin = _parse_optional_vin(values.get("vin"), row)
@@ -258,6 +265,27 @@ def _parse_optional_amount(raw: str | None, row: DebtorRow) -> Decimal | None:
         row.warnings.append("debt_amount: отрицательная сумма проигнорирована")
         return None
     return amount
+
+
+def _parse_optional_inn(raw: str | None, row: DebtorRow) -> str | None:
+    """ИНН физлица — двенадцать цифр.
+
+    Он разблокирует три источника сразу: ЕГРИП со связями по юрлицам, банкротство
+    и арбитраж физлица ищут только по нему. Десятизначное значение — это ИНН
+    организации, и в карточке человека оно не годится; лучше сказать об этом
+    предупреждением, чем отправить его как ИНН физлица и получить оплаченный
+    отказ.
+    """
+    if not raw:
+        return None
+    normalized = normalize_inn(raw)
+    if normalized is None:
+        row.warnings.append("inn: не распознан ИНН")
+        return None
+    if len(normalized) != INN_INDIVIDUAL_LENGTH:
+        row.warnings.append("inn: ожидается ИНН физлица из 12 цифр")
+        return None
+    return normalized
 
 
 def _parse_optional_plate(raw: str | None, row: DebtorRow) -> str | None:

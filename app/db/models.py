@@ -46,6 +46,10 @@ class Debtor(Base):
     contract_number: Mapped[str | None] = mapped_column(String(64), index=True)
     claim_number: Mapped[str | None] = mapped_column(String(64), index=True)
     debt_amount: Mapped[Decimal | None] = mapped_column(Money)
+    # ИНН физлица из выгрузки. Без него три источника — ЕГРИП со связями по
+    # юрлицам, банкротство и арбитраж физлица — не запрашиваются вовсе: они
+    # ищут только по innfiz.
+    inn: Mapped[str | None] = mapped_column(String(12), index=True)
     address: Mapped[str | None] = mapped_column(String(512))
     vehicle_plate: Mapped[str | None] = mapped_column(String(16), index=True)
     vin: Mapped[str | None] = mapped_column(String(17), index=True)
@@ -103,6 +107,10 @@ class SearchResult(Base):
     provider_status: Mapped[str] = mapped_column(String(32))
     fetched_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
     normalized_json: Mapped[str] = mapped_column(Text, default="[]")
+    # Оговорки источника о полноте ответа («разобрано 10 из 47», «проверено 3
+    # компании из 7»). Хранятся вместе с результатом: предел, о котором отчёт
+    # умолчал на повторе из кэша, — та же инверсия, только отложенная.
+    notes_json: Mapped[str] = mapped_column(Text, default="[]")
     # Populated only when STORE_RAW_RESPONSES is enabled.
     raw_response: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(64))
@@ -211,6 +219,23 @@ class ShareLink(Base):
     expires_at: Mapped[datetime] = mapped_column(UtcDateTime, index=True)
     opened_count: Mapped[int] = mapped_column(Integer, default=0)
     last_opened_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+
+
+class VendorCacheEntry(Base):
+    """Ответ платного метода, ключ которого — не субъект поиска.
+
+    Кэш отчёта строится по человеку, и для цепочки по юрлицам этого мало: два
+    должника из одного ООО оплатили бы один и тот же ответ дважды, а на выгрузке
+    из одного холдинга — кратно. Здесь ключ — то, по чему реально шёл вызов
+    (``newdb:arbitr_legal:<ИНН компании>``), с тем же окном, что и у отчётов.
+    """
+
+    __tablename__ = "vendor_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cache_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
 
 
 class AuditEvent(Base):

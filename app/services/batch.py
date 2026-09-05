@@ -21,6 +21,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime
 from decimal import Decimal
 
@@ -28,10 +29,11 @@ from app.config import Settings
 from app.db.models import BatchItem, BatchRun, Debtor
 from app.db.repository import AuditRepository, BatchRepository, DebtorRepository
 from app.db.session import Database
-from app.domain.enums import SearchType
+from app.domain.enums import ProviderName, SearchType
 from app.domain.identity import NameParseError, SearchSubject, parse_fio
 from app.domain.verdict import VERDICT_ORDER, Verdict, VerdictDecision
 from app.logging_setup import get_logger
+from app.providers.base import FetchContext
 from app.providers.newdb import individual_inn
 from app.services.search import SearchService, build_query_hash
 from app.services.verdict import VerdictEngine
@@ -44,15 +46,28 @@ ProgressCallback = Callable[["BatchProgress"], Awaitable[None]]
 
 @dataclass(frozen=True, slots=True)
 class BatchEstimate:
-    """Смета прогона, которую оператор подтверждает до списания средств."""
+    """Смета прогона, которую оператор подтверждает до списания средств.
+
+    Считаются **вызовы**, а не источники. Прежняя формула «должники × число
+    подключённых источников» была неправдой уже без новых методов: ФССП делает
+    вызов на регион, залоги — до двух, а источник, которому нечем искать, не
+    делает ни одного. С веером по компаниям расхождение стало бы кратным, и
+    оператор подтверждал бы одну сумму, а списывалась бы другая.
+
+    Диапазон нужен из-за цепочки: её длина известна только после ответа ФНС,
+    поэтому минимум — это прогон без неё, максимум — с колпаком.
+    """
 
     debtors: int
     cached: int
     to_query: int
     providers_per_debtor: int
     capped: bool
-    # Мост «паспорт → ИНН» — отдельный терм, а не множитель: он стоит один вызов
-    # на должника, а не один на источник, и включается собственным флагом.
+    calls_min: int = 0
+    calls_max: int = 0
+    per_provider: dict[ProviderName, int] = dataclass_field(default_factory=dict)
+    # Мост «паспорт → ИНН» — отдельный терм, а не строка per_provider: он стоит
+    # один вызов на должника, а не один на источник, и включается своим флагом.
     bridge_enabled: bool = False
     bridge_calls: int = 0
     # Должники, по которым банкротство, статус ИП и арбитраж не будут проверены
@@ -61,16 +76,12 @@ class BatchEstimate:
 
     @property
     def requests(self) -> int:
-        return self.to_query * self.providers_per_debtor + self.bridge_calls
+        """Верхняя граница — то, к чему оператор должен быть готов."""
+        return self.calls_max + self.bridge_calls
 
-
-@dataclass(frozen=True, slots=True)
-class _Scan:
-    """Итоги одного прохода по выгрузке, нужные смете."""
-
-    cached: int
-    without_inn: int
-    bridge_calls: int
+    @property
+    def is_range(self) -> bool:
+        return self.calls_max > self.calls_min
 
 
 @dataclass(slots=True)
@@ -191,7 +202,7 @@ class BatchService:
     # ------------------------------------------------------------- estimate
 
     async def estimate(self) -> BatchEstimate:
-        """Сколько должников и сколько запросов будет стоить прогон."""
+        """Сколько должников и сколько вызовов будет стоить прогон."""
         cap = self._settings.batch_max_debtors
         async with self._database.session() as session:
             total = await DebtorRepository(session).count()
@@ -206,27 +217,34 @@ class BatchService:
             to_query=max(debtors - scan.cached, 0),
             providers_per_debtor=providers,
             capped=total > cap,
+            calls_min=scan.calls_min,
+            calls_max=scan.calls_max,
+            per_provider=dict(scan.per_provider),
             bridge_enabled=bridge is not None and bridge.is_configured,
             bridge_calls=scan.bridge_calls,
             without_inn=scan.without_inn,
         )
 
     async def _scan(self, limit: int) -> _Scan:
-        """Один проход по выгрузке: кэш, отсутствие ИНН и вызовы моста.
+        """Один проход по выгрузке: и кэш, и планируемые вызовы.
+
+        Считается в том же цикле, что уже был написан ради кэша: лишних
+        запросов к БД смета не стоит, а без неё оператор подтверждает цифру,
+        которая с фактическим списанием не совпадает.
 
         ``bridge_calls`` считается честно — по тому, дошло бы дело до платного
-        вызова, — а не подставляется нулём. Сегодня он всё равно выходит нулевым:
-        у ``Debtor`` нет паспортной колонки, ``_subject_for`` паспорт не
-        заполняет, и брать его в массовом прогоне неоткуда. Захардкоженный ноль
-        стал бы враньём в тот день, когда колонка появится; посчитанный —
-        просто изменится.
+        вызова, — а не подставляется нулём. Сегодня он всё равно выходит
+        нулевым: у ``Debtor`` нет паспортной колонки, и брать паспорт в массовом
+        прогоне неоткуда. Захардкоженный ноль стал бы враньём в тот день, когда
+        колонка появится; посчитанный — просто изменится.
         """
         from app.db.repository import SearchRepository
 
+        scan = _Scan()
+        context = FetchContext(batch=True)
+        providers = self._search.registry.external
         bridge = self._search.registry.inn_bridge
-        cached = 0
-        without_inn = 0
-        bridge_calls = 0
+        cache_enabled = self._settings.cache_enabled
         async with self._database.session() as session:
             debtor_repo = DebtorRepository(session)
             search_repo = SearchRepository(session)
@@ -239,19 +257,28 @@ class BatchService:
                     if subject is None:
                         continue
                     if individual_inn(subject) is None:
-                        without_inn += 1
-                    is_cached = False
-                    if self._settings.cache_enabled:
+                        scan.without_inn += 1
+                    if cache_enabled:
                         found = await search_repo.find_cached_request(
                             build_query_hash(subject),
                             ttl_hours=self._settings.cache_ttl_hours,
                         )
-                        is_cached = found is not None
-                    if is_cached:
-                        cached += 1
-                    elif bridge is not None and bridge.will_query(subject):
-                        bridge_calls += 1
-        return _Scan(cached=cached, without_inn=without_inn, bridge_calls=bridge_calls)
+                        if found is not None:
+                            # Кэшированный должник не опрашивается — и не стоит.
+                            scan.cached += 1
+                            continue
+                    if bridge is not None and bridge.will_query(subject):
+                        scan.bridge_calls += 1
+                    for provider in providers:
+                        planned = provider.planned_calls(subject, context)
+                        ceiling = provider.max_planned_calls(subject, context)
+                        scan.calls_min += planned
+                        scan.calls_max += ceiling
+                        if ceiling:
+                            scan.per_provider[provider.name] = (
+                                scan.per_provider.get(provider.name, 0) + ceiling
+                            )
+        return scan
 
     # ------------------------------------------------------------- run
 
@@ -357,7 +384,9 @@ class BatchService:
         if item.subject is None:
             return None, None, "в карточке нет ни ФИО, ни номера договора"
         try:
-            report = await self._search.search(item.subject, telegram_user_id=item.telegram_user_id)
+            report = await self._search.search(
+                item.subject, telegram_user_id=item.telegram_user_id, batch=True
+            )
         except Exception as exc:
             logger.warning(
                 "batch.debtor_failed", debtor_id=item.debtor_id, error=type(exc).__name__
@@ -377,6 +406,18 @@ class DebtorSnapshot:
     debtor_id: int
     telegram_user_id: int
     subject: SearchSubject | None
+
+
+@dataclass(slots=True)
+class _Scan:
+    """Итог одного прохода по выгрузке."""
+
+    cached: int = 0
+    calls_min: int = 0
+    calls_max: int = 0
+    per_provider: dict[ProviderName, int] = dataclass_field(default_factory=dict)
+    without_inn: int = 0
+    bridge_calls: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,6 +457,7 @@ def _subject_for(row: Debtor) -> SearchSubject | None:
         name=name,
         birth_date=row.birth_date,
         phone=row.phone,
+        inn=row.inn,
         contract_number=row.contract_number,
         claim_number=row.claim_number,
         debtor_id=row.external_debtor_id,

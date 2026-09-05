@@ -36,6 +36,11 @@ class ProviderName(StrEnum):
     FEDRESURS = "fedresurs"
     FNS = "fns"
     COURT = "court"
+    # Дела юрлиц, в которых должник — руководитель или участник. Отдельно от
+    # COURT намеренно: там дела самого должника, а иск к его ООО — это не иск к
+    # нему, и сложить их в одну корзину значит либо потерять чужие дела за
+    # порогом матчинга, либо посчитать их требованиями к человеку.
+    COURT_LEGAL = "court_legal"
     VEHICLE = "vehicle"
     PROPERTY = "property"
     PLEDGE = "pledge"
@@ -52,8 +57,12 @@ PROVIDER_TITLES: dict[ProviderName, str] = {
     ProviderName.FEDRESURS: "ЕФРСБ",
     ProviderName.FNS: "ФНС",
     ProviderName.COURT: "Суды",
+    ProviderName.COURT_LEGAL: "Арбитраж компаний должника",
     ProviderName.VEHICLE: "Авто",
-    ProviderName.PROPERTY: "Недвижимость",
+    # Не «Недвижимость»: ЕГРН отвечает про объект по известному нам адресу и не
+    # раскрывает правообладателя. Строка «✓ Недвижимость — 1 зап.» прочиталась
+    # бы как «нашли имущество должника» — ровно то, чего источник не говорит.
+    ProviderName.PROPERTY: "Объект по адресу (ЕГРН)",
     ProviderName.PLEDGE: "Залоги",
     ProviderName.INHERITANCE: "Наследственные дела",
     ProviderName.INN_BRIDGE: "ИНН по паспорту (ФНС)",

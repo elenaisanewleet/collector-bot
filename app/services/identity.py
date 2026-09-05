@@ -32,6 +32,7 @@ from app.domain.models import (
     CourtCase,
     EnforcementProceeding,
     InternalDebtorRecord,
+    LegalEntityCase,
     PledgeRecord,
     SourcedFact,
     VehicleRecord,
@@ -119,6 +120,28 @@ class IdentityMatcher:
     """Scores how strongly a record belongs to the search subject."""
 
     def assess(self, subject: SearchSubject, record: SourcedFact) -> MatchAssessment:
+        if _is_about_a_company(record):
+            # Запись об организации — не факт о человеке. Сопоставлять её с ФИО
+            # не с чем (название ООО не является именем), а ИНН в ней —
+            # компании, а не должника. Единственное доступное основание — то,
+            # как её нашли: запрос по идентификатору должника связывает её с
+            # ним, запрос по ФИО не связывает ни с чем.
+            #
+            # Раньше такая запись шла общим путём и получала 0.20 — «слабое
+            # совпадение», — после чего блок БИЗНЕС её отбрасывал и печатал
+            # «связей с ИП и юрлицами не найдено» про должника с действующим
+            # ООО. С ИНН физлица в субъекте выходило ещё хуже: ИНН компании
+            # сравнивался с ИНН человека, не совпадал, и запись падала в ноль.
+            if _linked_by_identifier(record):
+                return MatchAssessment(
+                    confidence=IDENTIFIER_LOOKUP_CONFIDENCE,
+                    reasons=("связь получена по ИНН должника",),
+                )
+            return MatchAssessment(
+                confidence=NAME_UNKNOWN,
+                reasons=("связь с должником не подтверждена идентификатором",),
+            )
+
         record_name = _record_name(record)
         record_birth_date = _record_birth_date(record)
         record_inn = _record_inn(record)
@@ -248,8 +271,29 @@ def _record_birth_date(record: SourcedFact) -> date | None:
     return None
 
 
+def _is_about_a_company(record: SourcedFact) -> bool:
+    """Записи, чей субъект — организация, а не человек."""
+    if isinstance(record, LegalEntityCase):
+        return True
+    return isinstance(record, BusinessRelation) and record.is_legal_entity
+
+
+def _linked_by_identifier(record: SourcedFact) -> bool:
+    if isinstance(record, LegalEntityCase):
+        # Дело найдено по ИНН компании, а компания — по ИНН должника: цепочка
+        # держится на идентификаторах от начала до конца.
+        return True
+    return isinstance(record, BusinessRelation) and record.linked_by_identifier
+
+
 def _record_inn(record: SourcedFact) -> str | None:
-    if isinstance(record, (BankruptcyRecord, BusinessRelation, CourtCase)):
+    if isinstance(record, BusinessRelation):
+        # У связи с юрлицом ИНН принадлежит компании, а не человеку: десять
+        # цифр против двенадцати. Сравнивать их бессмысленно, а штраф за
+        # «несовпадение» стирал бы из отчёта ровно то юрлицо, ради которого
+        # источник и опрашивали.
+        return None if record.is_legal_entity else record.inn
+    if isinstance(record, (BankruptcyRecord, CourtCase)):
         return record.inn
     if isinstance(record, PledgeRecord):
         return record.pledgor_inn

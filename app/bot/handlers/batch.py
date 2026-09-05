@@ -28,6 +28,7 @@ from app.bot.keyboards import (
 from app.bot.states import BatchCheck
 from app.container import Container
 from app.db.repository import BatchRepository
+from app.domain.enums import PROVIDER_TITLES
 from app.domain.verdict import VERDICT_TITLES, Verdict
 from app.logging_setup import get_logger
 from app.services.batch import BatchEstimate, BatchProgress, BatchSummary
@@ -54,10 +55,19 @@ def render_estimate(estimate: BatchEstimate, app_name: str) -> str:
         f"Уже проверено недавно: {estimate.cached} — будут взяты из кэша",
         f"Нужно опросить: {estimate.to_query}",
     ]
-    if estimate.providers_per_debtor:
+    if estimate.calls_max:
+        # Считаются вызовы, а не источники: ФССП делает вызов на регион, залоги —
+        # до двух, а цепочка по юрлицам умножается на число компаний. Диапазон
+        # означает именно её: минимум — прогон без цепочки, максимум — с колпаком.
+        if estimate.is_range:
+            lines.append(f"Платных вызовов: от {estimate.calls_min} до {estimate.calls_max}")
+        else:
+            lines.append(f"Платных вызовов: {estimate.calls_max}")
+        lines.extend(_per_provider_lines(estimate))
+    elif estimate.providers_per_debtor:
         lines.append(
-            f"Обращений к источникам: около {estimate.requests} "
-            f"({estimate.providers_per_debtor} на должника)"
+            "Подключённые источники не смогут ничего запросить: "
+            "в карточках нет данных, по которым они ищут."
         )
     else:
         lines.append("Внешние источники не подключены — проверка пройдёт по внутренней базе.")
@@ -86,6 +96,12 @@ def _bridge_lines(estimate: BatchEstimate) -> list[str]:
             "статус ИП и арбитраж по ним проверены НЕ будут."
         ]
     return []
+
+
+def _per_provider_lines(estimate: BatchEstimate) -> list[str]:
+    """Разбивка по источникам — чтобы дорогое было видно до подтверждения."""
+    ordered = sorted(estimate.per_provider.items(), key=lambda item: -item[1])
+    return [f"  · {PROVIDER_TITLES.get(name, name.value)}: до {count}" for name, count in ordered]
 
 
 def render_progress(progress: BatchProgress) -> str:

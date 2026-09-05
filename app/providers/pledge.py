@@ -18,15 +18,19 @@ no entry there is not queried, and the report says the source was not checked.
 
 Both answers carry two registries side by side: ``fnp`` — the pledge register —
 and ``fedresurs`` — leasing contracts and other encumbrances. One map entry
-describes one set of rows, so the shipped map reads the ФНП branch only, and a
-debtor whose only encumbrance is a leasing contract comes back ``NO_RESULTS``.
+describes one set of rows, so the shipped map reads the ФНП branch only. Hence
+the wording of the report: "записей в реестре залогов не найдено", which is what
+was actually checked, and not "имущество не обременено". The Федресурс branch is
+paid for in every answer and read by nobody, so the report says so in as many
+words instead of passing it off as checked.
 
-Everything downstream is therefore worded to the branch that was actually read:
-the report prints "записей в реестре залогов не найдено" followed by
-``PLEDGE_SCOPE_NOTE``, and the score's positive factor says "в реестре
-уведомлений ФНП действующих залогов не найдено". Neither says "имущество не
-обременено" — that would be a claim about all of the debtor's property drawn
-from one register of movables, and one leasing contract would make it a lie.
+There is a third branch, and it produced a live inversion. Alongside ``fnp`` the
+answer carries ``fnp_urls`` — one link per notice. A captured response held
+``"fnp": []`` and thirteen links: the vendor found thirteen notices and parsed
+none of them. The map read ``fnp``, found an empty array — present, so not a
+missing path — and the report told the operator the register was clean about a
+debtor with thirteen registered pledge notices. Hence :func:`_unparsed_notices`:
+links without notices are "не разобрано", never "чисто".
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ from typing import Any
 from app.domain.enums import PledgeStatus, ProviderName, ProviderStatus
 from app.domain.identity import SearchSubject
 from app.domain.models import PledgeRecord, ProviderResult
+from app.providers.base import NO_CONTEXT, FetchContext, ProviderUnavailableError
 from app.providers.mapping import as_text
 from app.providers.newdb import COUNTRY_RU, NewDBMethodProvider, person_params_for
 from app.utils.dates import parse_date, utcnow
@@ -44,6 +49,16 @@ from app.utils.dates import parse_date, utcnow
 PERSON_METHOD = "pledge_person"
 VIN_METHOD = "pledge_vin"
 MAX_RECORDS = 100
+
+# Ветки одного контейнера, проверенные на живых ответах.
+NOTICES_KEY = "fnp"
+NOTICE_URLS_KEY = "fnp_urls"
+FEDRESURS_KEY = "fedresurs"
+
+FEDRESURS_NOTE = (
+    "Сообщения Федресурса по залогу и лизингу в ответе есть, но не разбирались: "
+    "финансовая аренда — тоже недоступный взыскателю актив."
+)
 
 # Дата рождения зовётся здесь иначе, чем в ФССП. Документация pledge_person
 # называет её ``datebirth`` во всех четырёх местах — во входной схеме, в примере
@@ -76,18 +91,35 @@ class NewDBPledgeProvider(NewDBMethodProvider):
 
         records: list[PledgeRecord] = []
         raw_bodies: list[str] = []
+        containers: list[Any] = []
         for method, params in plans:
-            rows, raw = await self.rows_for(method, params)
+            rows, method_containers, raw = await self.rows_and_containers(method, params)
             raw_bodies.append(raw)
+            containers.extend(method_containers)
             records.extend(_to_pledge(row) for row in rows)
+
+        unparsed = _unparsed_notices(containers)
+        if unparsed:
+            raise ProviderUnavailableError(
+                "unexpected_schema",
+                f"Реестр вернул {unparsed} ссылок на уведомления о залоге, "
+                "но ни одного разобранного уведомления",
+            )
 
         unique = _dedupe(records)[:MAX_RECORDS]
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.SUCCESS if unique else ProviderStatus.NO_RESULTS,
             records=list(unique),
+            notes=(FEDRESURS_NOTE,) if _has_fedresurs_messages(containers) else (),
             raw_response=self.raw_for("\n".join(raw_bodies)),
         )
+
+    def planned_calls(self, subject: SearchSubject, context: FetchContext = NO_CONTEXT) -> int:
+        """One call per method this subject can actually be looked up by."""
+        if not self.is_configured:
+            return 0
+        return len(self._plans(subject))
 
     def _plans(self, subject: SearchSubject) -> list[tuple[str, dict[str, Any]]]:
         """Which of the two methods this subject can actually be looked up by.
@@ -105,6 +137,35 @@ class NewDBPledgeProvider(NewDBMethodProvider):
         if _has_identity(subject) and PERSON_METHOD in mapped:
             plans.append((PERSON_METHOD, person_params_for(subject, birth_date_key=DATE_BIRTH_KEY)))
         return plans
+
+
+def _unparsed_notices(containers: list[Any]) -> int:
+    """Notice links the answer carries without a single parsed notice.
+
+    Checked against a live response where the two match one to one: one notice,
+    one link. Links with no notices therefore mean the vendor found registrations
+    and did not read them — the opposite of an empty register, and the only
+    reading under which "залогов не найдено" would be a lie.
+    """
+    notices = 0
+    links = 0
+    for container in containers:
+        if not isinstance(container, Mapping):
+            continue
+        notices += _length_of(container.get(NOTICES_KEY))
+        links += _length_of(container.get(NOTICE_URLS_KEY))
+    return links if links and not notices else 0
+
+
+def _has_fedresurs_messages(containers: list[Any]) -> bool:
+    return any(
+        isinstance(container, Mapping) and _length_of(container.get(FEDRESURS_KEY))
+        for container in containers
+    )
+
+
+def _length_of(node: Any) -> int:
+    return len(node) if isinstance(node, list) else 0
 
 
 def _searchable_by(subject: SearchSubject) -> bool:
