@@ -27,6 +27,7 @@ from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
 from app.bot.middleware import ACCESS_DENIED_MESSAGE
 from app.bot.router import setup_dispatcher
+from app.config import Settings
 from app.container import Container
 
 FAKE_TOKEN = "123456789:AAEnoughCharactersToLookLikeARealToken00"
