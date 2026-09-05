@@ -21,6 +21,7 @@ from app.providers.base import ProviderError, ProviderUnavailableError
 
 logger = get_logger(__name__)
 
+HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 HTTP_PAYMENT_REQUIRED = 402
@@ -130,7 +131,13 @@ async def request_json(
 
 def _classify(response: httpx.Response, *, provider: str) -> ProviderError | None:
     status = response.status_code
-    if status < HTTP_UNAUTHORIZED:
+    # Порог — 400, а не 401. С 401 всякий ответ 4xx ниже него считался успехом и
+    # уходил в разбор тела: при пустом теле источник докладывался как приславший
+    # мусор, а при теле вида ``{"data": []}`` — как ответивший пусто. Второе и
+    # есть запрещённая подмена: отвергнутый запрос, показанный как «ничего не
+    # найдено». Для 1С это отвергнутый ``$filter``, для NewDB — невалидные
+    # параметры, и оба обязаны быть видимой ошибкой.
+    if status < HTTP_BAD_REQUEST:
         return None
     if status in {HTTP_UNAUTHORIZED, HTTP_FORBIDDEN}:
         return ProviderAuthError(f"{provider} rejected the credentials (HTTP {status})")
