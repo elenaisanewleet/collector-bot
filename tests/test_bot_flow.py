@@ -27,6 +27,7 @@ from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
 from app.bot.middleware import ACCESS_DENIED_MESSAGE
 from app.bot.router import setup_dispatcher
+from app.config import Settings
 from app.container import Container
 
 FAKE_TOKEN = "123456789:AAEnoughCharactersToLookLikeARealToken00"
@@ -683,3 +684,19 @@ async def test_progress_message_is_edited_not_reposted(
     # Первое — прогресс, дальше правка того же сообщения результатом.
     assert any("Проверяю" in text for text in sent.texts)
     assert sent.contains("Recovery Score")
+
+
+def test_star_opens_the_bot_to_everyone(live_settings: Settings) -> None:
+    """``*`` — единственный способ открыть бота, и он должен быть явным."""
+    from app.bot.middleware import AllowlistMiddleware
+
+    closed = live_settings.model_copy(update={"allowed_telegram_user_ids": "1,2"})
+    assert not closed.telegram_access_is_open
+    assert not AllowlistMiddleware(closed.allowed_user_ids).is_allowed(999)
+
+    opened = live_settings.model_copy(update={"allowed_telegram_user_ids": "*"})
+    assert opened.telegram_access_is_open
+    guard = AllowlistMiddleware(opened.allowed_user_ids, open_access=True)
+    assert guard.is_allowed(999)
+    # Отсутствие пользователя не значит «открыто»: анонимный апдейт всё равно нет.
+    assert not guard.is_allowed(None)

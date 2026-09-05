@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 MISSING_TOKEN = "TELEGRAM_BOT_TOKEN не задан. Укажите его в .env — токен выдаёт @BotFather."
 EMPTY_ALLOWLIST = (
     "ALLOWED_TELEGRAM_USER_IDS пуст: бот закрытый и никого не пустит. "
-    "Укажите числовые Telegram ID через запятую."
+    "Укажите числовые Telegram ID через запятую — или «*», чтобы открыть всем."
 )
 BAD_TOKEN = "Telegram отклонил токен. Проверьте TELEGRAM_BOT_TOKEN в .env."
 NO_NETWORK = (
@@ -108,10 +108,18 @@ async def start_bot(settings: Settings | None = None) -> None:
 def _validate(settings: Settings) -> None:
     if not settings.telegram_bot_token:
         raise SystemExit(MISSING_TOKEN)
-    if not settings.allowed_user_ids:
+    if not settings.allowed_user_ids and not settings.telegram_access_is_open:
         raise SystemExit(EMPTY_ALLOWLIST)
     if settings.web_url_is_insecure and not settings.web_allow_insecure:
         raise SystemExit(INSECURE_WEB_URL)
+    if settings.telegram_access_is_open:
+        # Не отказ и не предупреждение в лог, которое никто не прочтёт: строка
+        # печатается при каждом старте, потому что открытый бот тратит чужими
+        # руками оплаченный баланс и тянет данные живых людей.
+        logger.warning(
+            "access.open",
+            note="ALLOWED_TELEGRAM_USER_IDS=* — бот отвечает всем, кто его найдёт",
+        )
     _validate_newdb_field_map(settings)
 
 
