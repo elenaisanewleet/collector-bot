@@ -19,11 +19,14 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
 from app.config import Settings
+from app.db.models import SearchResult
 from app.db.repository import AuditRepository, SearchRepository
 from app.db.session import Database
 from app.domain.enums import ProviderName, ProviderStatus, SearchType
@@ -54,6 +57,19 @@ _RECORDS_ADAPTER: TypeAdapter[list[FactRecord]] = TypeAdapter(list[FactRecord])
 # without a date of birth: the identifier is our own and unique.
 IDENTIFIER_MATCH_FLOOR = 0.95
 INTERNAL_TIMEOUT_MULTIPLIER = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class SearchOutcome:
+    """Отчёт вместе с идентификатором сохранённого запроса.
+
+    Идентификатор нужен, чтобы выдать ссылку на веб-отчёт. Он не кладётся в
+    саму модель отчёта: отчёт — это доменный объект, а номер строки в таблице
+    к предметной области не относится.
+    """
+
+    report: DebtorReport
+    request_id: int | None
 
 
 class SearchService:
@@ -96,6 +112,19 @@ class SearchService:
         force_refresh: bool = False,
     ) -> DebtorReport:
         """Run a full check and store it. Returns a cached report when fresh."""
+        outcome = await self.search_detailed(
+            subject, telegram_user_id=telegram_user_id, force_refresh=force_refresh
+        )
+        return outcome.report
+
+    async def search_detailed(
+        self,
+        subject: SearchSubject,
+        *,
+        telegram_user_id: int,
+        force_refresh: bool = False,
+    ) -> SearchOutcome:
+        """То же, что :meth:`search`, но с идентификатором запроса для ссылки."""
         query_hash = build_query_hash(subject)
 
         if not force_refresh and self._settings.cache_enabled:
@@ -106,7 +135,7 @@ class SearchService:
                     user_id=telegram_user_id,
                     search_type=subject.search_type,
                 )
-                return cached
+                return SearchOutcome(cached.report, cached.request_id)
 
         internal_records = await self.lookup_internal(subject)
         provider_results = await self._run_external(subject)
@@ -116,12 +145,12 @@ class SearchService:
         )
         report.recovery_score = self._score_engine.evaluate(report)
 
-        await self._persist(
+        request_id = await self._persist(
             report,
             telegram_user_id=telegram_user_id,
             query_hash=query_hash,
         )
-        return report
+        return SearchOutcome(report, request_id)
 
     async def lookup_internal(self, subject: SearchSubject) -> list[InternalDebtorRecord]:
         """Query our own records using whichever identifiers we have.
@@ -223,10 +252,10 @@ class SearchService:
         *,
         telegram_user_id: int,
         query_hash: str,
-    ) -> None:
+    ) -> int | None:
         score = report.recovery_score
         if score is None:  # pragma: no cover - the caller always sets it
-            return
+            return None
         async with self._database.session() as session:
             search_repo = SearchRepository(session)
             request = await search_repo.create_request(
@@ -254,8 +283,30 @@ class SearchService:
                 entity_id=str(request.id),
                 detail=f"{report.subject.search_type}: {score.score}/100",
             )
+            return request.id
 
-    async def _load_cached(self, subject: SearchSubject, query_hash: str) -> DebtorReport | None:
+    async def load_report(self, request_id: int) -> DebtorReport | None:
+        """Восстановить сохранённый отчёт по идентификатору запроса.
+
+        Нужен веб-странице: ссылка живёт дольше сообщения в чате, и открывший
+        её через день должен увидеть тот же отчёт, а не пустоту. Субъект
+        берётся из сохранённого запроса, поэтому страница не зависит от
+        состояния диалога.
+        """
+        async with self._database.session() as session:
+            repo = SearchRepository(session)
+            request = await repo.get_request(request_id)
+            if request is None:
+                return None
+            subject = subject_from_json(request.subject_json)
+            if subject is None:
+                return None
+            stored_results = await repo.results_for_request(request.id)
+            created_at = request.created_at
+
+        return await self._rebuild(subject, stored_results, created_at)
+
+    async def _load_cached(self, subject: SearchSubject, query_hash: str) -> SearchOutcome | None:
         """Rebuild a recent report of the same subject from storage."""
         async with self._database.session() as session:
             repo = SearchRepository(session)
@@ -269,7 +320,18 @@ class SearchService:
             if stored_report is None:
                 return None
             created_at = request.created_at
+            request_id = request.id
 
+        report = await self._rebuild(subject, stored_results, created_at)
+        return SearchOutcome(report, request_id)
+
+    async def _rebuild(
+        self,
+        subject: SearchSubject,
+        stored_results: Sequence[SearchResult],
+        created_at: datetime,
+    ) -> DebtorReport:
+        """Собрать отчёт из сохранённых ответов провайдеров."""
         results: list[ProviderResult] = []
         for row in stored_results:
             records = _deserialize_records(row.normalized_json)
@@ -410,6 +472,7 @@ def describe_subject(subject: SearchSubject) -> str:
 
 __all__ = [
     "RecoveryScore",
+    "SearchOutcome",
     "SearchService",
     "build_query_hash",
     "describe_subject",

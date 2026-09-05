@@ -16,6 +16,7 @@ from app.services.identity import IdentityMatcher
 from app.services.import_service import ImportService
 from app.services.scoring import RecoveryScoreEngine
 from app.services.search import SearchService
+from app.services.share import ShareLinkService
 from app.services.subject_store import SubjectStore
 from app.services.verdict import VerdictEngine
 
@@ -30,6 +31,8 @@ class Container:
     search_service: SearchService
     import_service: ImportService
     batch_service: BatchService
+    verdict_engine: VerdictEngine
+    share_service: ShareLinkService
     subject_store: SubjectStore
 
     async def dispose(self) -> None:
@@ -40,6 +43,7 @@ def build_container(settings: Settings | None = None) -> Container:
     resolved = settings or get_settings()
     database = Database(resolved.database_url)
     registry = build_registry(resolved, database)
+    verdict_engine = VerdictEngine(resolved)
     search_service = SearchService(
         settings=resolved,
         database=database,
@@ -57,7 +61,9 @@ def build_container(settings: Settings | None = None) -> Container:
             settings=resolved,
             database=database,
             search_service=search_service,
-            verdict_engine=VerdictEngine(resolved),
+            verdict_engine=verdict_engine,
         ),
+        verdict_engine=verdict_engine,
+        share_service=ShareLinkService(resolved, database),
         subject_store=SubjectStore(),
     )

@@ -23,6 +23,7 @@ from app.db.models import (
     DebtorReportRow,
     SearchRequest,
     SearchResult,
+    ShareLink,
 )
 from app.domain.models import InternalDebtorRecord, ProviderResult, RecoveryScore
 from app.utils.dates import utcnow
@@ -349,6 +350,73 @@ class SearchRepository:
             await self._session.execute(
                 delete(SearchRequest).where(SearchRequest.created_at < cutoff)
             ),
+        )
+        return result.rowcount or 0
+
+
+class ShareLinkRepository:
+    """Выдача и проверка ссылок на веб-отчёты."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create(
+        self,
+        *,
+        token: str,
+        kind: str,
+        target_id: int,
+        telegram_user_id: int,
+        ttl_hours: int,
+    ) -> ShareLink:
+        link = ShareLink(
+            token=token,
+            kind=kind,
+            target_id=target_id,
+            telegram_user_id=telegram_user_id,
+            expires_at=utcnow() + timedelta(hours=ttl_hours),
+        )
+        self._session.add(link)
+        await self._session.flush()
+        return link
+
+    async def find_active(self, token: str) -> ShareLink | None:
+        """Живая ссылка по токену.
+
+        Просроченная не возвращается вовсе: страница должна отдать 404, а не
+        содержимое с пометкой «устарело».
+        """
+        stmt = select(ShareLink).where(ShareLink.token == token, ShareLink.expires_at > utcnow())
+        found: ShareLink | None = await self._session.scalar(stmt)
+        return found
+
+    async def find_for_target(self, kind: str, target_id: int) -> ShareLink | None:
+        """Действующая ссылка на тот же отчёт — чтобы не плодить новые."""
+        stmt = (
+            select(ShareLink)
+            .where(
+                ShareLink.kind == kind,
+                ShareLink.target_id == target_id,
+                ShareLink.expires_at > utcnow(),
+            )
+            .order_by(ShareLink.created_at.desc())
+            .limit(1)
+        )
+        found: ShareLink | None = await self._session.scalar(stmt)
+        return found
+
+    async def mark_opened(self, link_id: int) -> None:
+        link = await self._session.get(ShareLink, link_id)
+        if link is None:
+            return
+        link.opened_count += 1
+        link.last_opened_at = utcnow()
+        await self._session.flush()
+
+    async def purge_expired(self) -> int:
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(delete(ShareLink).where(ShareLink.expires_at <= utcnow())),
         )
         return result.rowcount or 0
 

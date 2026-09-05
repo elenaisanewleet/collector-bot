@@ -71,6 +71,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]
+# Таблица стилей — не код: перенос CSS-правил по 100 символов только вредит.
+"app/web/style.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

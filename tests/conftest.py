@@ -37,7 +37,9 @@ from app.services.batch import BatchService
 from app.services.import_service import ImportService
 from app.services.scoring import RecoveryScoreEngine
 from app.services.search import SearchService
+from app.services.share import ShareLinkService
 from app.services.subject_store import SubjectStore
+from app.services.verdict import VerdictEngine
 
 DEMO_CSV = Path("data/demo_debtors.csv")
 
@@ -94,6 +96,8 @@ async def container(settings: Settings, database: Database) -> AsyncIterator[Con
         batch_service=BatchService(
             settings=settings, database=database, search_service=search_service
         ),
+        verdict_engine=VerdictEngine(settings),
+        share_service=ShareLinkService(settings, database),
         subject_store=SubjectStore(),
     )
     yield instance

@@ -151,6 +151,30 @@ def history_keyboard(tokens: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     )
 
 
+def report_keyboard(
+    *, url: str | None, refresh_token: str | None = None
+) -> InlineKeyboardMarkup | None:
+    """Кнопки под карточкой отчёта.
+
+    Ссылка — первой и отдельной строкой: за ней вся таблица, и это главное
+    действие. Эмодзи здесь работает как иконка, помогая выцепить кнопку
+    взглядом; в тексте отчёта их нет.
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+    if url:
+        rows.append([InlineKeyboardButton(text="📄 Открыть отчёт", url=url)])
+    if refresh_token:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔄 Обновить", callback_data=f"{REFRESH_PREFIX}:{refresh_token}"
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="🔍 Новая проверка", callback_data="menu:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def batch_confirm_keyboard() -> InlineKeyboardMarkup:
     """Прогон тратит платные запросы, поэтому запускается только по подтверждению."""
     return InlineKeyboardMarkup(
@@ -174,9 +198,27 @@ def batch_result_keyboard() -> InlineKeyboardMarkup:
                 ),
                 InlineKeyboardButton(text="Не подавать", callback_data=f"{BATCH_PREFIX}:list:drop"),
             ],
-            [InlineKeyboardButton(text="Выгрузить в CSV", callback_data=f"{BATCH_PREFIX}:export")],
+            [
+                InlineKeyboardButton(
+                    text="📥 Выгрузить в CSV", callback_data=f"{BATCH_PREFIX}:export"
+                )
+            ],
         ]
     )
+
+
+def batch_result_keyboard_with_link(url: str | None) -> InlineKeyboardMarkup:
+    """Та же клавиатура, но ссылкой на веб-очередь первой строкой.
+
+    Таблицу на восемьсот строк в сообщении не показать, поэтому ссылка — это
+    главное действие, а фильтры по вердикту остаются как быстрый просмотр.
+    """
+    base = batch_result_keyboard()
+    if not url:
+        return base
+    rows = [[InlineKeyboardButton(text="📊 Открыть очередь", url=url)]]
+    rows.extend(base.inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def remove_reply_keyboard() -> ReplyKeyboardRemove:

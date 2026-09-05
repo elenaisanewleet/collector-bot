@@ -22,6 +22,7 @@ from app.bot.router import setup_dispatcher
 from app.config import Settings, get_settings
 from app.container import Container, build_container
 from app.logging_setup import configure_logging, get_logger
+from app.web.app import run_web_server
 
 logger = get_logger(__name__)
 
@@ -61,6 +62,10 @@ async def start_bot(settings: Settings | None = None) -> None:
     )
     dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)
 
+    # Веб-сервер отчётов живёт в том же цикле событий, что и опрос Telegram:
+    # это одна и та же библиотека (aiohttp), отдельный процесс не нужен.
+    web_runner = await run_web_server(container) if resolved.web_enabled else None
+
     logger.info(
         "bot.starting",
         app_name=resolved.app_name,
@@ -84,6 +89,8 @@ async def start_bot(settings: Settings | None = None) -> None:
         logger.info("bot.stopped")
         raise
     finally:
+        if web_runner is not None:
+            await web_runner.cleanup()
         await bot.session.close()
         await container.dispose()
 
