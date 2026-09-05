@@ -537,6 +537,14 @@ def _enrich_from_internal(
         birth = next((record.birth_date for record in records if record.birth_date), None)
         if birth is not None:
             update["birth_date"] = birth
+    if subject.inn is None:
+        # Ради этой строки колонка ИНН и заведена в выгрузке: банкротство,
+        # статус ИП и арбитраж ищут только по нему. Есть он в 1С — три
+        # источника открываются от одного введённого телефона, и платный
+        # запрос ИНН по паспорту не понадобится.
+        found_inn = next((record.inn for record in records if record.inn), None)
+        if found_inn is not None:
+            update["inn"] = found_inn
 
     return subject.model_copy(update=update) if update else subject
 

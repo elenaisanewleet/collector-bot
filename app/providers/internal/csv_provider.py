@@ -189,6 +189,7 @@ def to_record(row: DebtorRow) -> InternalDebtorRecord:
         birth_date=row.birth_date,
         phone=row.phone,
         phone_masked=mask_phone(row.phone),
+        inn=row.inn,
         contract_number=row.contract_number,
         claim_number=row.claim_number,
         debt_amount=row.debt_amount,

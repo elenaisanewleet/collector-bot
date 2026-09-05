@@ -17,8 +17,10 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from app.domain.identity import (
+    INN_INDIVIDUAL_LENGTH,
     NameParseError,
     normalize_address,
+    normalize_inn,
     normalize_phone,
     normalize_plate,
     normalize_vin,
@@ -33,6 +35,7 @@ CANONICAL_COLUMNS = (
     "fio",
     "birth_date",
     "phone",
+    "inn",
     "contract_number",
     "claim_number",
     "debt_amount",
@@ -59,6 +62,12 @@ COLUMN_ALIASES: dict[str, str] = {
     "phone": "phone",
     "tel": "phone",
     "телефон": "phone",
+    # ИНН физлица. Ради него колонка и заводится: без него банкротство, статус
+    # ИП и арбитраж не проверяются вовсе — эти источники ищут только по нему.
+    # Выгрузка из 1С его обычно содержит, а импорт до сих пор молча выбрасывал.
+    "inn": "inn",
+    "инн": "inn",
+    "innfiz": "inn",
     "contract": "contract_number",
     "contract_no": "contract_number",
     "договор": "contract_number",
@@ -94,6 +103,7 @@ class DebtorRow:
     full_name: str | None = None
     birth_date: date | None = None
     phone: str | None = None
+    inn: str | None = None
     contract_number: str | None = None
     claim_number: str | None = None
     debt_amount: Decimal | None = None
@@ -209,6 +219,7 @@ def _build_row(mapping: dict[int, str | None], raw_row: list[str]) -> DebtorRow:
 
     row.birth_date = _parse_optional_date(values.get("birth_date"), "birth_date", row)
     row.phone = _parse_optional_phone(values.get("phone"), row)
+    row.inn = _parse_optional_inn(values.get("inn"), row)
     row.debt_amount = _parse_optional_amount(values.get("debt_amount"), row)
     row.address = normalize_address(values.get("address"))
     row.vehicle_plate = _parse_optional_plate(values.get("vehicle_plate"), row)
@@ -236,6 +247,24 @@ def _parse_optional_date(raw: str | None, label: str, row: DebtorRow) -> date | 
     if parsed is None:
         row.warnings.append(f"{label}: не распознана дата «{raw}»")
     return parsed
+
+
+def _parse_optional_inn(raw: str | None, row: DebtorRow) -> str | None:
+    """ИНН физлица из выгрузки — двенадцать цифр, и только они.
+
+    Десятизначный ИНН принадлежит юрлицу, и подставлять его в проверку человека
+    нельзя: источники отвергнут запрос, а оператор увидит «не проверено» без
+    объяснимой причины. Непохожее значение не молчит, а становится замечанием
+    к строке — выгрузка чинится один раз, а неверный ИНН тянулся бы в каждый
+    отчёт по этому должнику.
+    """
+    if not raw:
+        return None
+    normalized = normalize_inn(raw)
+    if normalized is None or len(normalized) != INN_INDIVIDUAL_LENGTH:
+        row.warnings.append(f"inn: не похоже на ИНН физлица «{raw}»")
+        return None
+    return normalized
 
 
 def _parse_optional_phone(raw: str | None, row: DebtorRow) -> str | None:

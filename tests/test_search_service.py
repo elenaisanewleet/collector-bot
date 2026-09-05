@@ -442,3 +442,36 @@ async def test_a_namesake_hit_does_not_borrow_a_birth_date(container: Container)
 
     assert not exact, "поиск по имени — не точный идентификатор"
     assert _enrich_from_internal(by_name, records, exact=exact).birth_date is None
+
+
+async def test_an_inn_from_the_export_opens_three_more_sources(container: Container) -> None:
+    """ИНН из выгрузки переносится в запрос — ради этого колонка и заведена.
+
+    Банкротство, статус ИП и арбитраж ищут ТОЛЬКО по ИНН. Если он лежит в 1С
+    рядом с телефоном, оператору достаточно ввести номер: три источника
+    откроются сами, и платный запрос ИНН по паспорту не понадобится.
+    """
+    from app.domain.models import InternalDebtorRecord
+
+    record = InternalDebtorRecord(debtor_id="DEM-001", inn="770912345601")
+    subject = SearchSubject(search_type="person", phone="+79991234501")
+
+    enriched = _enrich_from_internal(subject, [record], exact=True)
+
+    assert enriched.inn == "770912345601"
+
+
+def test_a_ten_digit_inn_never_reaches_the_card() -> None:
+    """Десятизначный ИНН — юрлица, и в проверке человека ему делать нечего.
+
+    Источники отвергли бы такой запрос целиком, а оператор увидел бы «не
+    проверено» без объяснимой причины. Строка выгрузки при этом не теряется:
+    она приходит с замечанием, которое видно при импорте.
+    """
+    from app.providers.internal.csv_schema import DebtorRow, iter_rows
+
+    parsed = [row for _number, row in iter_rows("fio,inn\nТестов Андрей Сергеевич,7709123456\n")]
+    row = parsed[0]
+    assert isinstance(row, DebtorRow)
+    assert row.inn is None
+    assert any("inn" in warning for warning in row.warnings)
