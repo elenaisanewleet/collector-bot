@@ -72,11 +72,14 @@ async def run_and_send_report(
         return report
 
     token = container.subject_store.put(subject)
+    text_url, print_url = container.share_service.export_urls(url, ShareKind.REPORT)
     await _edit_or_send(
         notice,
         message,
-        view.report_card(report, decision),
-        reply_markup=report_keyboard(url=url, refresh_token=token),
+        view.report_card(report, decision, demo_mode=container.settings.is_demo),
+        reply_markup=report_keyboard(
+            url=url, refresh_token=token, text_url=text_url, print_url=print_url
+        ),
     )
     return report
 

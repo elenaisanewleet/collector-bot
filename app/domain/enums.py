@@ -149,9 +149,25 @@ BUSINESS_ROLE_TITLES: dict[BusinessRole, str] = {
 
 
 class BusinessStatus(StrEnum):
+    """Состояние ИП или юрлица в реестре.
+
+    ``UNKNOWN`` — не «прекращено»: запись найдена, а состояние в ответе
+    источника не прочитано. Действующее ИП с непрочитанным статусом — это плюс
+    к перспективе взыскания, и терять его нельзя.
+    """
+
     ACTIVE = "active"
     TERMINATED = "terminated"
     UNKNOWN = "unknown"
+
+
+BUSINESS_STATUS_TITLES: dict[BusinessStatus, str] = {
+    BusinessStatus.ACTIVE: "действует",
+    BusinessStatus.TERMINATED: "прекращено",
+    # Не «прекращено»: непрочитанное состояние, поданное как закрытая
+    # регистрация, убирает из поля зрения оператора живое ИП.
+    BusinessStatus.UNKNOWN: "состояние не определено",
+}
 
 
 class BankruptcyStatus(StrEnum):
@@ -218,10 +234,3 @@ COURT_CASE_ROLE_TITLES: dict[CourtCaseRole, str] = {
     CourtCaseRole.PLAINTIFF: "истец",
     CourtCaseRole.OTHER: "иная роль",
 }
-
-
-class ImportRowOutcome(StrEnum):
-    CREATED = "created"
-    UPDATED = "updated"
-    SKIPPED = "skipped"
-    FAILED = "failed"

@@ -13,7 +13,8 @@
 from __future__ import annotations
 
 from app.domain.models import DebtorReport
-from app.domain.verdict import VERDICT_TITLES, FeeBasis, Verdict, VerdictDecision
+from app.domain.verdict import FeeBasis, Verdict, VerdictDecision
+from app.services.reporting import DEMO_BANNER, unchecked_titles
 from app.utils.dates import format_datetime
 from app.utils.money import format_amount
 
@@ -69,9 +70,14 @@ def batch_progress(processed: int, total: int, failed: int) -> str:
     return "\n".join(lines)
 
 
-def report_card(report: DebtorReport, decision: VerdictDecision) -> str:
+def report_card(report: DebtorReport, decision: VerdictDecision, *, demo_mode: bool = False) -> str:
     """Короткая карточка в чат. Подробности — на странице по кнопке."""
-    lines = [
+    lines: list[str] = []
+    if demo_mode:
+        # Тот же баннер, что в текстовом отчёте: карточка с выдуманными данными
+        # не должна быть неотличима от настоящей проверки.
+        lines.extend((DEMO_BANNER, ""))
+    lines += [
         report.subject.display_name,
         "",
         VERDICT_LEAD[decision.verdict],
@@ -92,7 +98,9 @@ def report_card(report: DebtorReport, decision: VerdictDecision) -> str:
             f"уверенность данных {round(score.confidence * 100)}%"
         )
 
-    unchecked = _unchecked_sources(report)
+    # Названия непроверенных источников берутся из общего места: строка «не
+    # проверено» в чате и на странице обязана совпадать слово в слово.
+    unchecked = unchecked_titles(report)
     if unchecked:
         lines.append("")
         lines.append(f"Не проверено: {', '.join(unchecked)}")
@@ -102,43 +110,3 @@ def report_card(report: DebtorReport, decision: VerdictDecision) -> str:
         lines.append(f"Данные проверки от {format_datetime(report.cached_at)}")
 
     return "\n".join(lines)
-
-
-def batch_card(
-    *,
-    processed: int,
-    total: int,
-    failed: int,
-    counts: dict[str, int],
-    actionable_debt: str,
-    saved_fees: str,
-) -> str:
-    lines = ["Проверка завершена", "", f"Проверено: {processed} из {total}"]
-    for verdict in (Verdict.FILE, Verdict.ORDER, Verdict.REVIEW, Verdict.DROP):
-        count = counts.get(verdict.value, 0)
-        if count:
-            lines.append(f"{VERDICT_TITLES[verdict]}: {count}")
-    if actionable_debt:
-        lines.append("")
-        lines.append(f"В суд можно нести на {actionable_debt}")
-    if saved_fees:
-        lines.append(f"Не уйдёт на пошлины по безнадёжным: {saved_fees}")
-    if failed:
-        lines.append("")
-        lines.append(f"Не удалось проверить: {failed}")
-    return "\n".join(lines)
-
-
-def _unchecked_sources(report: DebtorReport) -> list[str]:
-    """Источники, которые не ответили.
-
-    Выносится в карточку отдельной строкой: «не проверено» обязано быть видно
-    там же, где вердикт, а не только на странице.
-    """
-    from app.domain.enums import PROVIDER_TITLES
-
-    return [
-        PROVIDER_TITLES.get(result.provider, result.provider.value)
-        for result in report.provider_results
-        if not result.is_answered
-    ]

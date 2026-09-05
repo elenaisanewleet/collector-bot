@@ -20,8 +20,9 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.router import setup_dispatcher
 from app.config import Settings, get_settings
-from app.container import Container, build_container
+from app.container import build_container
 from app.logging_setup import configure_logging, get_logger
+from app.services.retention import run_retention
 from app.web.app import run_web_server
 
 logger = get_logger(__name__)
@@ -39,6 +40,11 @@ NO_NETWORK = (
 ALREADY_RUNNING = (
     "С этим токеном уже запущен другой экземпляр бота. "
     "Остановите его или используйте отдельный токен."
+)
+INSECURE_WEB_URL = (
+    "WEB_PUBLIC_URL должен начинаться с https://. По http токен доступа к отчёту "
+    "идёт открытым текстом, а за ссылкой персональные данные должника. "
+    "Для локальной отладки поставьте WEB_ALLOW_INSECURE=true."
 )
 BAD_NEWDB_FIELD_MAP = (
     "NEWDB_FIELD_MAP указывает на файл, который не читается. "
@@ -65,6 +71,9 @@ async def start_bot(settings: Settings | None = None) -> None:
     # Веб-сервер отчётов живёт в том же цикле событий, что и опрос Telegram:
     # это одна и та же библиотека (aiohttp), отдельный процесс не нужен.
     web_runner = await run_web_server(container) if resolved.web_enabled else None
+    # Ретеншен идёт тем же циклом: отдельный планировщик ради одной ежесуточной
+    # задачи — лишняя движущаяся часть.
+    retention = asyncio.create_task(run_retention(resolved, container.database))
 
     logger.info(
         "bot.starting",
@@ -89,6 +98,7 @@ async def start_bot(settings: Settings | None = None) -> None:
         logger.info("bot.stopped")
         raise
     finally:
+        retention.cancel()
         if web_runner is not None:
             await web_runner.cleanup()
         await bot.session.close()
@@ -100,6 +110,8 @@ def _validate(settings: Settings) -> None:
         raise SystemExit(MISSING_TOKEN)
     if not settings.allowed_user_ids:
         raise SystemExit(EMPTY_ALLOWLIST)
+    if settings.web_url_is_insecure and not settings.web_allow_insecure:
+        raise SystemExit(INSECURE_WEB_URL)
     _validate_newdb_field_map(settings)
 
 
@@ -134,7 +146,7 @@ def main() -> None:
     asyncio.run(start_bot())
 
 
-__all__ = ["Container", "main", "run_demo", "start_bot"]
+__all__ = ["main", "run_demo", "start_bot"]
 
 
 if __name__ == "__main__":

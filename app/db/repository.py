@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, Select, delete, func, or_, select
+from sqlalchemy import CursorResult, Select, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -118,22 +118,6 @@ class DebtorRepository:
         needle = f"%{address.strip().lower()}%"
         return await self._all(
             select(Debtor).where(func.lower(Debtor.address).like(needle)).limit(25)
-        )
-
-    async def search_any(self, term: str) -> list[Debtor]:
-        """Loose lookup used by the contract handler, which accepts a contract
-        number, a claim number or an internal id in one field."""
-        value = term.strip().lower()
-        return await self._all(
-            select(Debtor)
-            .where(
-                or_(
-                    func.lower(Debtor.contract_number) == value,
-                    func.lower(Debtor.claim_number) == value,
-                    func.lower(Debtor.external_debtor_id) == value,
-                )
-            )
-            .limit(25)
         )
 
     async def _all(self, stmt: Select[tuple[Debtor]]) -> list[Debtor]:
@@ -386,7 +370,11 @@ class ShareLinkRepository:
         Просроченная не возвращается вовсе: страница должна отдать 404, а не
         содержимое с пометкой «устарело».
         """
-        stmt = select(ShareLink).where(ShareLink.token == token, ShareLink.expires_at > utcnow())
+        stmt = select(ShareLink).where(
+            ShareLink.token == token,
+            ShareLink.expires_at > utcnow(),
+            ShareLink.revoked_at.is_(None),
+        )
         found: ShareLink | None = await self._session.scalar(stmt)
         return found
 
@@ -398,6 +386,7 @@ class ShareLinkRepository:
                 ShareLink.kind == kind,
                 ShareLink.target_id == target_id,
                 ShareLink.expires_at > utcnow(),
+                ShareLink.revoked_at.is_(None),
             )
             .order_by(ShareLink.created_at.desc())
             .limit(1)
@@ -412,6 +401,38 @@ class ShareLinkRepository:
         link.opened_count += 1
         link.last_opened_at = utcnow()
         await self._session.flush()
+
+    async def revoke(self, *, kind: str, target_id: int) -> int:
+        """Погасить все живые ссылки на один отчёт или прогон."""
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                update(ShareLink)
+                .where(
+                    ShareLink.kind == kind,
+                    ShareLink.target_id == target_id,
+                    ShareLink.revoked_at.is_(None),
+                )
+                .values(revoked_at=utcnow())
+            ),
+        )
+        return result.rowcount or 0
+
+    async def revoke_all(self, *, telegram_user_id: int) -> int:
+        """Погасить все живые ссылки одного оператора — на случай «всё сразу»."""
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                update(ShareLink)
+                .where(
+                    ShareLink.telegram_user_id == telegram_user_id,
+                    ShareLink.revoked_at.is_(None),
+                    ShareLink.expires_at > utcnow(),
+                )
+                .values(revoked_at=utcnow())
+            ),
+        )
+        return result.rowcount or 0
 
     async def purge_expired(self) -> int:
         result = cast(

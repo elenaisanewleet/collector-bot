@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 
 TELEGRAM_MESSAGE_LIMIT = 4096
 _SAFE_CHUNK_LIMIT = 3900
@@ -24,10 +24,6 @@ def signed(value: int) -> str:
 
 def percent(value: float) -> str:
     return f"{round(value * 100)}%"
-
-
-def join_nonempty(parts: Iterable[str | None], separator: str = ", ") -> str:
-    return separator.join(part for part in parts if part)
 
 
 def split_message(text: str, limit: int = _SAFE_CHUNK_LIMIT) -> list[str]:

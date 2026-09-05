@@ -216,7 +216,9 @@ def test_confidence_notes_name_the_missing_sources(
 ) -> None:
     report = build_report(person_subject, fssp=(ProviderStatus.NOT_CONFIGURED, []))
     score = score_engine.evaluate(report)
-    assert any("не подключён" in note for note in score.confidence_notes)
+    # Формулировка приходит из общей таблицы состояний источника, а не из
+    # собственного набора слов в скоринге.
+    assert any("ФССП: не подключено" in note for note in score.confidence_notes)
 
 
 def test_search_without_birth_date_lowers_confidence(

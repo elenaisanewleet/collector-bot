@@ -62,7 +62,7 @@ DOCUMENTED_PERSON = SearchSubject(
 # VIN ровно из «Примера запроса» страницы pledge_vin.
 DOCUMENTED_VIN = SearchSubject(
     search_type=SearchType.VIN.value,
-    vehicle=VehicleDescriptor(vin="JTEHD21A850036287"),
+    vehicle=VehicleDescriptor(vin="XWEHD21A800000017"),
 )
 
 
@@ -184,7 +184,7 @@ async def test_documented_pledge_vin_response_reaches_the_report(
     )
 
     record = pledges_of(report)[0]
-    assert record.vin == "JTEHD21A850036287"
+    assert record.vin == "XWEHD21A800000017"
     assert record.pledgor_name == "Игорь Юрьевич Семенов"
     assert record.is_usable
     assert "совпадает VIN, по которому шёл поиск" in record.match_reasons

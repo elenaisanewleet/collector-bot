@@ -93,10 +93,6 @@ class PersonName(BaseModel):
         omit the patronymic."""
         return normalize_token(f"{self.last_name} {self.first_name}")
 
-    @property
-    def has_middle_name(self) -> bool:
-        return bool(self.middle_name)
-
 
 def parse_fio(raw: str) -> PersonName:
     """Parse ``Фамилия Имя [Отчество]``.

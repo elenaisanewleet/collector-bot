@@ -136,7 +136,13 @@ async def test_second_identical_search_uses_the_cache(container: Container) -> N
 
     assert second.from_cache
     assert second.cached_at is not None
-    assert all(result.cache_hit for result in second.provider_results)
+    # Внутренняя база опрашивается заново даже на кэше — она наша и бесплатная,
+    # поэтому из проверки на кэш-попадание исключена.
+    assert all(
+        result.cache_hit
+        for result in second.provider_results
+        if result.provider is not ProviderName.INTERNAL
+    )
 
 
 async def test_force_refresh_bypasses_the_cache(container: Container) -> None:

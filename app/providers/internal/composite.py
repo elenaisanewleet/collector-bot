@@ -11,8 +11,11 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import date
 
 from app.domain.models import InternalDebtorRecord
-from app.providers.internal.base import InternalDebtorProvider
+from app.logging_setup import get_logger
+from app.providers.internal.base import InternalDebtorProvider, InternalSourceError
 from app.utils.hashing import stable_hash
+
+logger = get_logger(__name__)
 
 Lookup = Callable[[InternalDebtorProvider], Awaitable[list[InternalDebtorRecord]]]
 
@@ -29,11 +32,25 @@ class CompositeInternalDebtorProvider(InternalDebtorProvider):
             return_exceptions=True,
         )
         records: list[InternalDebtorRecord] = []
+        failures: list[BaseException] = []
         for item in results:
             # One failing internal source must not hide the others.
             if isinstance(item, BaseException):
+                failures.append(item)
                 continue
             records.extend(item)
+        if failures:
+            logger.warning(
+                "internal.source_failed",
+                failed=len(failures),
+                total=len(self._providers),
+                error=type(failures[0]).__name__,
+            )
+        if failures and not records:
+            # Ни одной записи и хотя бы один упавший источник: сказать
+            # «совпадений нет» здесь было бы утверждением, которого никто не
+            # проверял. Пусть отчёт покажет это как ошибку источника.
+            raise InternalSourceError(type(failures[0]).__name__)
         return _dedupe(records)
 
     async def find_by_fio(

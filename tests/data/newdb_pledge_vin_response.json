@@ -2,10 +2,10 @@
   "params": {
     "method": "pledge_vin",
     "country": "ru",
-    "vin": "JTEHD21A850036287",
+    "vin": "XWEHD21A800000017",
     "newdb_qid": "EK0LIPKclrO0MygC"
   },
-  "requestId": "a5962f88-2926-4279-b59d-43c023faa195",
+  "requestId": "b702a110-0000-0000-0000-e0ceb9fb16fc",
   "datecreated": "2025-12-22 17:10:18",
   "state": "complete",
   "balance": 7977,
@@ -24,15 +24,15 @@
                 "message_number_and_date": "2015-000-291842-833 от 29.01.2015",
                 "reference_number": "2015-000-291842-833",
                 "message_type": "Возникновение залога",
-                "pledge_subject_ids_raw": "JTEHD21A850036287",
+                "pledge_subject_ids_raw": "XWEHD21A800000017",
                 "pledgor": "Игорь Юрьевич Семенов",
                 "pledgee": "АКЦИОНЕРНЫЙ БАНК \"ИНТЕРПРОГРЕССБАНК\" (ЗАКРЫТОЕ АКЦИОНЕРНОЕ ОБЩЕСТВО)",
-                "guid": "e612c5ce-2e10-3d20-9112-cf520df444ac",
-                "fnp_url": "https://www.reestr-zalogov.ru/search/notification/e612c5ce-2e10-3d20-9112-cf520df444ac",
+                "guid": "d9065702-0000-0000-0000-c36d09b9051a",
+                "fnp_url": "https://www.reestr-zalogov.ru/search/notification/d9065702-0000-0000-0000-c36d09b9051a",
                 "json_extra": {
                   "registrationTime": "2015-01-29T16:40:08",
                   "referenceNumber": "2015-000-291842-833",
-                  "guid": "e612c5ce-2e10-3d20-9112-cf520df444ac",
+                  "guid": "d9065702-0000-0000-0000-c36d09b9051a",
                   "pledgors": [
                     "Игорь Юрьевич Семенов"
                   ],
@@ -40,15 +40,15 @@
                     "АКЦИОНЕРНЫЙ БАНК \"ИНТЕРПРОГРЕССБАНК\" (ЗАКРЫТОЕ АКЦИОНЕРНОЕ ОБЩЕСТВО)"
                   ],
                   "subjects": [
-                    "JTEHD21A850036287"
+                    "XWEHD21A800000017"
                   ],
-                  "fnpUrl": "https://www.reestr-zalogov.ru/search/notification/e612c5ce-2e10-3d20-9112-cf520df444ac"
+                  "fnpUrl": "https://www.reestr-zalogov.ru/search/notification/d9065702-0000-0000-0000-c36d09b9051a"
                 }
               }
             ],
             "fedresurs": [],
             "fnp_urls": [
-              "https://www.reestr-zalogov.ru/search/notification/e612c5ce-2e10-3d20-9112-cf520df444ac"
+              "https://www.reestr-zalogov.ru/search/notification/d9065702-0000-0000-0000-c36d09b9051a"
             ]
           }
         ]

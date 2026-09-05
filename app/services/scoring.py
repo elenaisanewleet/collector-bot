@@ -21,7 +21,6 @@ from app.domain.enums import (
     BankruptcyStatus,
     PledgeStatus,
     ProviderName,
-    ProviderStatus,
 )
 from app.domain.models import (
     BusinessRelation,
@@ -409,13 +408,12 @@ def _confidence(report: DebtorReport) -> tuple[float, list[str]]:
     for provider_key, weight in PROVIDER_CONFIDENCE_WEIGHTS.items():
         total_weight += weight
         provider = ProviderName(provider_key)
-        if provider is ProviderName.INTERNAL:
-            if report.internal_records:
-                answered_weight += weight
-            else:
+        result = report.result_for(provider)
+        if provider is ProviderName.INTERNAL and result is not None and result.is_answered:
+            answered_weight += weight
+            if not report.internal_records:
                 notes.append("нет данных во внутренней базе")
             continue
-        result = report.result_for(provider)
         if result is not None and result.is_answered:
             answered_weight += weight
         else:
@@ -436,14 +434,16 @@ def _confidence(report: DebtorReport) -> tuple[float, list[str]]:
 
 
 def _unanswered_note(provider: ProviderName, result: ProviderResult | None) -> str:
+    """Строка про непроверенный источник в «Ограничениях оценки».
+
+    Формулировка берётся из общей таблицы состояний, а не сочиняется здесь:
+    свой набор слов на четвёртом выводе уже терял разницу между «не хватило
+    данных для запроса» и «ошибка обращения».
+    """
+    from app.services.reporting import source_state
+
     title = PROVIDER_TITLES.get(provider, provider.value)
-    if result is None:
-        return f"{title}: источник не опрошен"
-    if result.status is ProviderStatus.NOT_CONFIGURED:
-        return f"{title}: источник не подключён"
-    if result.status is ProviderStatus.UNAVAILABLE:
-        return f"{title}: источник недоступен"
-    return f"{title}: ошибка обращения к источнику"
+    return f"{title}: {source_state(result).label}"
 
 
 def _has_only_probable_matches(report: DebtorReport) -> bool:

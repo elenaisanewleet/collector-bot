@@ -7,13 +7,7 @@ data at 64 bytes.
 
 from __future__ import annotations
 
-from aiogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-)
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.domain.enums import REGION_TITLES, Region, SearchType
 
@@ -125,18 +119,6 @@ def external_check_keyboard(token: str) -> InlineKeyboardMarkup:
     )
 
 
-def refresh_keyboard(token: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Обновить сейчас", callback_data=f"{REFRESH_PREFIX}:{token}"
-                )
-            ]
-        ]
-    )
-
-
 def history_keyboard(tokens: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -152,17 +134,29 @@ def history_keyboard(tokens: list[tuple[int, str]]) -> InlineKeyboardMarkup:
 
 
 def report_keyboard(
-    *, url: str | None, refresh_token: str | None = None
+    *,
+    url: str | None,
+    refresh_token: str | None = None,
+    text_url: str | None = None,
+    print_url: str | None = None,
 ) -> InlineKeyboardMarkup | None:
     """Кнопки под карточкой отчёта.
 
     Ссылка — первой и отдельной строкой: за ней вся таблица, и это главное
-    действие. Эмодзи здесь работает как иконка, помогая выцепить кнопку
-    взглядом; в тексте отчёта их нет.
+    действие. Выгрузка стоит рядом: отчёт чаще печатают и подшивают, чем
+    дочитывают до конца. Эмодзи здесь работает как иконка, помогая выцепить
+    кнопку взглядом; в тексте отчёта их нет.
     """
     rows: list[list[InlineKeyboardButton]] = []
     if url:
         rows.append([InlineKeyboardButton(text="📄 Открыть отчёт", url=url)])
+    export: list[InlineKeyboardButton] = []
+    if print_url:
+        export.append(InlineKeyboardButton(text="🖨 PDF / печать", url=print_url))
+    if text_url:
+        export.append(InlineKeyboardButton(text="⬇️ Текстом", url=text_url))
+    if export:
+        rows.append(export)
     if refresh_token:
         rows.append(
             [
@@ -207,7 +201,9 @@ def batch_result_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def batch_result_keyboard_with_link(url: str | None) -> InlineKeyboardMarkup:
+def batch_result_keyboard_with_link(
+    url: str | None, *, csv_url: str | None = None, print_url: str | None = None
+) -> InlineKeyboardMarkup:
     """Та же клавиатура, но ссылкой на веб-очередь первой строкой.
 
     Таблицу на восемьсот строк в сообщении не показать, поэтому ссылка — это
@@ -217,19 +213,12 @@ def batch_result_keyboard_with_link(url: str | None) -> InlineKeyboardMarkup:
     if not url:
         return base
     rows = [[InlineKeyboardButton(text="📊 Открыть очередь", url=url)]]
+    export: list[InlineKeyboardButton] = []
+    if print_url:
+        export.append(InlineKeyboardButton(text="🖨 PDF / печать", url=print_url))
+    if csv_url:
+        export.append(InlineKeyboardButton(text="⬇️ Таблицей", url=csv_url))
+    if export:
+        rows.append(export)
     rows.extend(base.inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def remove_reply_keyboard() -> ReplyKeyboardRemove:
-    return ReplyKeyboardRemove()
-
-
-def commands_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="/search"), KeyboardButton(text="/history")],
-            [KeyboardButton(text="/import"), KeyboardButton(text="/help")],
-        ],
-        resize_keyboard=True,
-    )

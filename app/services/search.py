@@ -40,7 +40,7 @@ from app.domain.models import (
 )
 from app.logging_setup import get_logger
 from app.providers.base import BaseProvider
-from app.providers.internal.base import InternalDebtorProvider
+from app.providers.internal.base import InternalDebtorProvider, InternalSourceError
 from app.providers.registry import ProviderRegistry
 from app.services.aggregation import Aggregator
 from app.services.identity import IdentityMatcher
@@ -137,11 +137,11 @@ class SearchService:
                 )
                 return SearchOutcome(cached.report, cached.request_id)
 
-        internal_records = await self.lookup_internal(subject)
+        internal_records, internal_result = await self.lookup_internal_result(subject)
         provider_results = await self._run_external(subject)
 
         report = self._aggregator.build(
-            subject, provider_results, internal_records=internal_records
+            subject, [internal_result, *provider_results], internal_records=internal_records
         )
         report.recovery_score = self._score_engine.evaluate(report)
 
@@ -158,17 +158,51 @@ class SearchService:
         Exact-identifier hits get a confidence floor; a name-based hit goes
         through the ordinary matcher like any external record.
         """
+        records, _ = await self.lookup_internal_result(subject)
+        return records
+
+    async def lookup_internal_result(
+        self, subject: SearchSubject
+    ) -> tuple[list[InternalDebtorRecord], ProviderResult]:
+        """То же самое, но с состоянием источника рядом с записями.
+
+        Внутренняя база — такой же источник, как ФССП, и обязана уметь сказать
+        «я отработала и совпадений нет» отдельно от «я не отработала». Без
+        этого упавшая база и нечитаемая выгрузка печатались бы той же строкой,
+        что честный пустой ответ, а вердикт списывал бы это на неполноту
+        выгрузки.
+        """
         provider = self._registry.internal
-        records, exact = await self._internal_candidates(provider, subject)
+        if not _has_internal_query(subject):
+            return [], ProviderResult(
+                provider=ProviderName.INTERNAL,
+                status=ProviderStatus.ERROR,
+                error_code="insufficient_query",
+                error_message="для поиска во внутренней базе нужны ФИО, договор или телефон",
+            )
+        try:
+            records, exact = await self._internal_candidates(provider, subject)
+        except InternalSourceError as exc:
+            logger.warning("internal.lookup_failed", error=str(exc))
+            return [], ProviderResult(
+                provider=ProviderName.INTERNAL,
+                status=ProviderStatus.ERROR,
+                error_code="internal_source_failed",
+            )
+
         if not records:
-            return []
+            return [], ProviderResult(
+                provider=ProviderName.INTERNAL, status=ProviderStatus.NO_RESULTS
+            )
         unique = _dedupe_internal(records)
         self._matcher.annotate(
             subject,
             list(unique),
             confidence_floor=IDENTIFIER_MATCH_FLOOR if exact else None,
         )
-        return unique
+        # Записи живут в ``report.internal_records`` и не дублируются в
+        # результате: здесь важно только состояние источника.
+        return unique, ProviderResult(provider=ProviderName.INTERNAL, status=ProviderStatus.SUCCESS)
 
     # ------------------------------------------------------------- internals
 
@@ -334,6 +368,11 @@ class SearchService:
         """Собрать отчёт из сохранённых ответов провайдеров."""
         results: list[ProviderResult] = []
         for row in stored_results:
+            # Внутренняя база опрашивается заново, поэтому её сохранённое
+            # состояние здесь пропускается: иначе источник попал бы в список
+            # дважды и мог бы противоречить сам себе.
+            if row.provider == ProviderName.INTERNAL.value:
+                continue
             records = _deserialize_records(row.normalized_json)
             results.append(
                 ProviderResult(
@@ -348,8 +387,10 @@ class SearchService:
                 )
             )
 
-        internal_records = await self.lookup_internal(subject)
-        report = self._aggregator.build(subject, results, internal_records=internal_records)
+        internal_records, internal_result = await self.lookup_internal_result(subject)
+        report = self._aggregator.build(
+            subject, [internal_result, *results], internal_records=internal_records
+        )
         # The score is recomputed rather than read back: the rules may have
         # changed since the cached run, and recomputation is free.
         report.recovery_score = self._score_engine.evaluate(report)
@@ -371,6 +412,23 @@ def _deserialize_records(payload: str) -> list[FactRecord]:
     except ValidationError:
         logger.warning("cache.record_schema_mismatch")
         return []
+
+
+def _has_internal_query(subject: SearchSubject) -> bool:
+    """Есть ли вообще с чем идти во внутреннюю базу."""
+    vehicle = subject.vehicle
+    return any(
+        (
+            subject.debtor_id,
+            subject.contract_number,
+            subject.claim_number,
+            subject.phone,
+            subject.name,
+            subject.address,
+            vehicle.vin if vehicle else None,
+            vehicle.plate if vehicle else None,
+        )
+    )
 
 
 def _dedupe_internal(records: Sequence[InternalDebtorRecord]) -> list[InternalDebtorRecord]:

@@ -42,8 +42,13 @@ RUN mkdir -p /app/var && chown app:app /app/var
 
 USER app
 
-# Fails the container if the application cannot even be imported.
+EXPOSE 8080
+
+# Проверяем живой веб-сервер, а не импортируемость модуля: импорт проходит и у
+# наглухо упавшего бота.
 HEALTHCHECK --interval=60s --timeout=10s --start-period=15s --retries=3 \
-    CMD python -c "import app.main" || exit 1
+    CMD python -c "import urllib.request,sys; \
+sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5).status==200 else 1)" \
+    || exit 1
 
 CMD ["python", "-m", "app.main"]

@@ -58,9 +58,9 @@ DOC_RESPONSE = Path(__file__).parent / "data" / "newdb_bankruptcy_response.json"
 DOCUMENTED_PERSON = SearchSubject(
     search_type=SearchType.PERSON.value,
     name=PersonName(last_name="Иванов", first_name="Иван", middle_name="Иванович"),
-    inn="270392288605",
+    inn="000000000605",
 )
-DOCUMENTED_CASE = "А73-7992/2017"
+DOCUMENTED_CASE = "А00-0000/2017"
 STRANGERS_CASE = "А40-500100/2024"
 
 
@@ -135,7 +135,7 @@ async def test_the_documented_case_reaches_the_report_with_its_own_identity(
 
     record = case(report, DOCUMENTED_CASE)
     assert record.debtor_name == "Иванов Иван Иванович"
-    assert record.inn == "270392288605"
+    assert record.inn == "000000000605"
     assert record.status is BankruptcyStatus.COMPLETED
     assert record.match_level is MatchLevel.CONFIRMED
 
@@ -260,7 +260,7 @@ async def test_the_debtors_own_case_is_still_found_without_an_inn_of_its_own(
     report = await bankruptcy_report(shipped_settings, shipped_maps, response)
 
     record = case(report, DOCUMENTED_CASE)
-    assert record.inn == "270392288605"
+    assert record.inn == "000000000605"
     assert record.debtor_name is None
     assert record.is_usable
 
@@ -282,7 +282,7 @@ async def test_no_date_is_printed_for_dates_the_source_never_sent(
     assert record.procedure is None
     assert record.started_at is None and record.completed_at is None
     assert record.source_url == (
-        "https://fedresurs.ru/legalcases/7975d0c7-9c63-41b4-b649-cd17331c759e"
+        "https://fedresurs.ru/legalcases/6af58462-0000-0000-0000-5e4abfbc2d6e"
     )
 
     text = render_report(report)

@@ -18,7 +18,7 @@ from enum import StrEnum
 
 from app.config import Settings
 from app.db.models import ShareLink
-from app.db.repository import ShareLinkRepository
+from app.db.repository import AuditRepository, ShareLinkRepository
 from app.db.session import Database
 from app.logging_setup import get_logger
 
@@ -56,32 +56,65 @@ class ShareLinkService:
 
         По умолчанию переиспользует действующую ссылку на тот же отчёт: иначе
         каждое открытие плодило бы новый адрес, и отозвать их все стало бы
-        нечем.
+        нечем. Явный перевыпуск (``reuse=False``) сначала гасит старую — иначе
+        «выдать новую и забыть прежнюю» не работало бы, а именно этого от
+        перевыпуска и ждут.
         """
         if not self.enabled:
             return None
 
         async with self._database.session() as session:
             repo = ShareLinkRepository(session)
+            # Протухшие записи чистятся здесь же: связка «оператор → какой
+            # отчёт он смотрел» — готовая карта доступа к персданным, и
+            # хранить её вечно незачем.
+            purged = await repo.purge_expired()
             if reuse:
                 existing = await repo.find_for_target(target.kind.value, target.target_id)
                 if existing is not None:
                     return self.url_for(existing.token, target.kind)
+            else:
+                await repo.revoke(kind=target.kind.value, target_id=target.target_id)
             link = await repo.create(
                 token=secrets.token_urlsafe(TOKEN_BYTES),
                 kind=target.kind.value,
                 target_id=target.target_id,
                 telegram_user_id=telegram_user_id,
-                ttl_hours=self._settings.share_link_ttl_hours,
+                ttl_hours=self._ttl_for(target.kind),
             )
             token = link.token
+            link_id = link.id
+            # В аудит уходит идентификатор записи, но не токен: аудит не должен
+            # сам стать хранилищем ключей доступа.
+            await AuditRepository(session).record(
+                telegram_user_id=telegram_user_id,
+                action="share.issued",
+                entity_id=str(link_id),
+                detail=f"{target.kind.value}:{target.target_id}",
+            )
 
-        logger.info("share.issued", kind=target.kind.value, user_id=telegram_user_id)
+        logger.info("share.issued", kind=target.kind.value, user_id=telegram_user_id, purged=purged)
         return self.url_for(token, target.kind)
+
+    def _ttl_for(self, kind: ShareKind) -> int:
+        """Срок жизни ссылки.
+
+        У очереди он свой и заметно короче: за одной ссылкой на отчёт стоит
+        один человек, а за ссылкой на прогон — вся выгрузка целиком. Радиус
+        поражения отличается на три порядка, значит и обращение должно.
+        """
+        if kind is ShareKind.QUEUE:
+            return self._settings.share_queue_ttl_hours
+        return self._settings.share_link_ttl_hours
 
     def url_for(self, token: str, kind: ShareKind) -> str:
         prefix = "r" if kind is ShareKind.REPORT else "q"
         return f"{self._settings.web_public_url}/{prefix}/{token}"
+
+    def export_urls(self, url: str, kind: ShareKind) -> tuple[str, str]:
+        """Адреса выгрузки за тем же токеном: (текст или CSV, печать)."""
+        suffix = "report.txt" if kind is ShareKind.REPORT else "queue.csv"
+        return f"{url}/{suffix}", f"{url}/print"
 
     async def resolve(self, token: str, kind: ShareKind) -> ShareLink | None:
         """Найти живую ссылку и отметить открытие."""
@@ -91,4 +124,41 @@ class ShareLinkService:
             if link is None or link.kind != kind.value:
                 return None
             await repo.mark_opened(link.id)
+            # Открытие страницы с персданными обязано быть видно в /audit:
+            # после инцидента это первое, куда смотрят.
+            await AuditRepository(session).record(
+                telegram_user_id=link.telegram_user_id,
+                action="share.opened",
+                entity_id=str(link.id),
+                detail=f"{link.kind}:{link.target_id}",
+            )
             return link
+
+    async def revoke(self, target: ShareTarget, *, telegram_user_id: int) -> int:
+        """Погасить ссылки на один отчёт. Возвращает, сколько закрыто."""
+        async with self._database.session() as session:
+            repo = ShareLinkRepository(session)
+            count = await repo.revoke(kind=target.kind.value, target_id=target.target_id)
+            if count:
+                await AuditRepository(session).record(
+                    telegram_user_id=telegram_user_id,
+                    action="share.revoked",
+                    entity_id=f"{target.kind.value}:{target.target_id}",
+                    detail=f"links:{count}",
+                )
+        logger.info("share.revoked", kind=target.kind.value, count=count)
+        return count
+
+    async def revoke_all(self, *, telegram_user_id: int) -> int:
+        """Погасить все живые ссылки оператора."""
+        async with self._database.session() as session:
+            repo = ShareLinkRepository(session)
+            count = await repo.revoke_all(telegram_user_id=telegram_user_id)
+            if count:
+                await AuditRepository(session).record(
+                    telegram_user_id=telegram_user_id,
+                    action="share.revoked_all",
+                    detail=f"links:{count}",
+                )
+        logger.info("share.revoked_all", user_id=telegram_user_id, count=count)
+        return count

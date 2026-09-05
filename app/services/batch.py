@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -425,8 +425,3 @@ def _to_row(
 def _to_kopecks(amount: Decimal | None) -> int:
     """Целочисленный ключ сортировки: копейки, без потерь на float."""
     return int((amount * 100).to_integral_value()) if amount is not None else 0
-
-
-def snapshots_for(rows: Sequence[Debtor], telegram_user_id: int = 0) -> list[DebtorSnapshot]:
-    """Публичная обёртка для тестов и будущего API."""
-    return [_snapshot(row, telegram_user_id) for row in rows]

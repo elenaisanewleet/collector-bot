@@ -14,7 +14,6 @@ dependencies = [
     "aiosqlite>=0.20",
     "alembic>=1.13,<2",
     "structlog>=24.1",
-    "python-dateutil>=2.9",
 ]
 
 [project.optional-dependencies]
@@ -25,7 +24,6 @@ dev = [
     "respx>=0.21",
     "ruff>=0.6",
     "mypy>=1.11",
-    "types-python-dateutil>=2.9",
 ]
 
 [project.scripts]

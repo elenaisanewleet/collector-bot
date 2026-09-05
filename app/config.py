@@ -135,6 +135,10 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------- privacy
     store_raw_responses: bool = False
     store_sensitive_identifiers: bool = False
+    # Сколько дней хранить историю проверок. За ней ФИО, дата рождения и ИНН, а
+    # вместе с сырыми ответами — ещё и СНИЛС с адресом. 0 — не чистить, но это
+    # осознанное решение, а не значение по умолчанию.
+    history_retention_days: Annotated[int, Field(ge=0, le=3650)] = 90
 
     # ---------------------------------------------------------------- import
     max_import_file_bytes: Annotated[int, Field(ge=1024)] = 5 * 1024 * 1024
@@ -151,13 +155,21 @@ class Settings(BaseSettings):
     # Telegram нет ни таблиц, ни навигации, а смотреть надо на сорок строк
     # производств сразу.
     web_enabled: bool = True
-    web_host: str = "0.0.0.0"
+    # Слушаем только петлю: наружу порт выставляет TLS-терминатор, а не
+    # приложение. Токен ездит в пути URL, и открытый в мир http-порт означает
+    # ссылку с персданными открытым текстом на всём маршруте.
+    web_host: str = "127.0.0.1"
     web_port: Annotated[int, Field(ge=1, le=65535)] = 8080
     # Публичный адрес, который уходит в ссылку. Пустой — ссылки не отправляются:
     # бот не должен слать URL, по которому оператор не откроет страницу.
     web_public_url: str = ""
+    # Разрешить http в публичном адресе. Только для локальной отладки: по http
+    # токен доступа виден любому промежуточному узлу.
+    web_allow_insecure: bool = False
     # Ссылка живёт ограниченное время: за ней персональные данные должника.
     share_link_ttl_hours: Annotated[int, Field(ge=1, le=24 * 30)] = 72
+    # У очереди срок свой и короче: за одной ссылкой стоит вся выгрузка.
+    share_queue_ttl_hours: Annotated[int, Field(ge=1, le=24 * 7)] = 12
 
     # ---------------------------------------------------------------- массовая проверка
     # Каждый должник — это реальные запросы к платным источникам, поэтому прогон
@@ -212,6 +224,16 @@ class Settings(BaseSettings):
         остаётся на текстовом отчёте, а не шлёт нерабочий URL.
         """
         return self.web_enabled and bool(self.web_public_url)
+
+    @property
+    def web_url_is_insecure(self) -> bool:
+        """Публичный адрес отдаёт токен доступа открытым текстом.
+
+        Токен в пути URL — это bearer-credential: по http его видит любой узел
+        на маршруте, а типовой nginx ещё и пишет полный ``$request_uri`` в
+        access.log вместе со всеми его ротациями.
+        """
+        return bool(self.web_public_url) and not self.web_public_url.startswith("https://")
 
     @property
     def cache_enabled(self) -> bool:
@@ -283,7 +305,3 @@ def get_settings() -> Settings:
     clear the cache or construct :class:`Settings` directly.
     """
     return Settings()
-
-
-def reset_settings_cache() -> None:
-    get_settings.cache_clear()

@@ -240,11 +240,4 @@ def _dedupe(records: list[EnforcementProceeding]) -> list[EnforcementProceeding]
     return unique
 
 
-def build_fssp_provider(settings: Settings) -> FSSPProvider:
-    provider = FSSPProvider(settings)
-    if not provider.is_configured:
-        logger.info("fssp.not_configured", reason="NEWDB_API_KEY/NEWDB_BASE_URL missing")
-    return provider
-
-
-__all__ = ["FSSPProvider", "build_fssp_provider"]
+__all__ = ["FSSPProvider"]

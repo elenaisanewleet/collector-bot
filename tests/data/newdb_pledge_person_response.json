@@ -8,7 +8,7 @@
     "method": "pledge_person",
     "newdb_qid": "EOgIIM29hqGwMygC"
   },
-  "requestId": "a5962f88-2916-4779-b59d-43c023faa833",
+  "requestId": "fcce8f2d-0000-0000-0000-b101e962c14a",
   "datecreated": "2025-12-09 20:21:09",
   "state": "complete",
   "balance": 9928,
@@ -27,15 +27,15 @@
                 "message_number_and_date": "2025-012-232030-634 от 24.11.2025",
                 "reference_number": "2025-012-232030-634",
                 "message_type": "Возникновение залога",
-                "pledge_subject_ids_raw": "Y4K8722Z3SB324012",
+                "pledge_subject_ids_raw": "Y4K0000Z0SB000012",
                 "pledgor": "СЕРГЕЙ АНДРЕЕВИЧ ПЕТРОВ",
                 "pledgee": "АКЦИОНЕРНОЕ ОБЩЕСТВО \"АЛЬФА-БАНК\"",
-                "guid": "02cf5675-4c28-34f3-a3e0-898b24544077",
-                "fnp_url": "https://www.reestr-zalogov.ru/search/notification/02cf5675-4c28-34f3-a3e0-898b24544077",
+                "guid": "0152bdfc-0000-0000-0000-6988db7f80c6",
+                "fnp_url": "https://www.reestr-zalogov.ru/search/notification/0152bdfc-0000-0000-0000-6988db7f80c6",
                 "json_extra": {
                   "registrationTime": "2025-11-24T11:04:56",
                   "referenceNumber": "2025-012-232030-634",
-                  "guid": "02cf5675-4c28-34f3-a3e0-898b24544077",
+                  "guid": "0152bdfc-0000-0000-0000-6988db7f80c6",
                   "pledgors": [
                     "СЕРГЕЙ АНДРЕЕВИЧ ПЕТРОВ"
                   ],
@@ -43,9 +43,9 @@
                     "АКЦИОНЕРНОЕ ОБЩЕСТВО \"АЛЬФА-БАНК\""
                   ],
                   "subjects": [
-                    "Y4K8722Z3SB324012"
+                    "Y4K0000Z0SB000012"
                   ],
-                  "fnpUrl": "https://www.reestr-zalogov.ru/search/notification/02cf5675-4c28-34f3-a3e0-898b24544077"
+                  "fnpUrl": "https://www.reestr-zalogov.ru/search/notification/0152bdfc-0000-0000-0000-6988db7f80c6"
                 },
                 "pledgor_detail_raw": "СЕРГЕЙ АНДРЕЕВИЧ ПЕТРОВ, 10.05.1985",
                 "pledgor_detail_name": "СЕРГЕЙ АНДРЕЕВИЧ ПЕТРОВ",
@@ -57,7 +57,7 @@
                 "source": "Федресурс",
                 "message_number_and_date": "15169291 от 15.08.2023",
                 "message_number": "15169291",
-                "message_url": "https://fedresurs.ru/sfactmessages/290383f3-5712-4a9a-a1c1-d8ac93c76ada",
+                "message_url": "https://fedresurs.ru/sfactmessages/137abc0e-0000-0000-0000-311a76b8e8b7",
                 "message_type": "Заключение договора финансовой аренды (лизинга)",
                 "lessee": "Петров Сергей Андреевич",
                 "lessor": "ООО \"ГРИНФИНАНС МА\"",
@@ -65,10 +65,10 @@
                 "links": [
                   {
                     "text": "15169291 от 15.08.2023",
-                    "url": "https://fedresurs.ru/sfactmessages/290383f3-5712-4a9a-a1c1-d8ac93c76ada"
+                    "url": "https://fedresurs.ru/sfactmessages/137abc0e-0000-0000-0000-311a76b8e8b7"
                   }
                 ],
-                "encumbrance_guid": "290383f3-5712-4a9a-a1c1-d8ac93c76ada",
+                "encumbrance_guid": "137abc0e-0000-0000-0000-311a76b8e8b7",
                 "encumbrance_publish_date": "2023-08-15T10:10:28.393",
                 "encumbrance_type": "FinancialLeaseContract",
                 "encumbrance_highlights_raw": [
@@ -76,21 +76,21 @@
                   "ООО \"ГРИНФИНАНС МА\", ОГРН: 1166313123822, ИНН: 6330073199\nЛизингодатель: ООО \"ГРИНФИНАНС МА\", ОГРН: 1166313123822, ИНН: 6330073199\nЛизингополучатель: <res>Петров</res>"
                 ],
                 "encumbrance_highlights_text": "<res>Сергей</res> <res>Андреевич</res>\nДоговор: 531/03/23-А/МА/А от  17.03.2023\nПредмет финансовой аренды: , 0106008 Автомобили, Volkswagen, Polo, VIN XW8ZZZCKZMG012344\nСрок\nООО \"ГРИНФИНАНС МА\", ОГРН: 1166313123822, ИНН: 6330073199\nЛизингодатель: ООО \"ГРИНФИНАНС МА\", ОГРН: 1166313123822, ИНН: 6330073199\nЛизингополучатель: <res>Петров</res>",
-                "encumbrance_message_url": "https://fedresurs.ru/message/290383f3-5712-4a9a-a1c1-d8ac93c76ada",
+                "encumbrance_message_url": "https://fedresurs.ru/message/137abc0e-0000-0000-0000-311a76b8e8b7",
                 "json_extra": {
                   "number": "15169291",
-                  "guid": "290383f3-5712-4a9a-a1c1-d8ac93c76ada",
+                  "guid": "137abc0e-0000-0000-0000-311a76b8e8b7",
                   "publishDate": "2023-08-15T10:10:28.393",
                   "type": "FinancialLeaseContract",
                   "lessee": {
-                    "guid": "11b1bf07-46bd-4d2b-a3de-cdb886050ebd",
+                    "guid": "72d2926e-0000-0000-0000-db00a1d3f550",
                     "type": "Person",
                     "role": "Lessee",
                     "isHidden": false,
                     "name": "Петров Сергей Андреевич"
                   },
                   "lessor": {
-                    "guid": "895d63fc-8208-1728-95a4-6c2895b5dbf7",
+                    "guid": "5e9a846e-0000-0000-0000-8aff297c8f79",
                     "type": "Company",
                     "role": "Lessor",
                     "isHidden": false,
@@ -99,14 +99,14 @@
                     "ogrn": "1166313123822"
                   },
                   "highlights_text": "<res>Сергей</res> <res>Андреевич</res> ... Лизингополучатель: <res>Петров</res>",
-                  "message_url": "https://fedresurs.ru/message/290383f3-5712-4a9a-a1c1-d8ac93c76ada"
+                  "message_url": "https://fedresurs.ru/message/137abc0e-0000-0000-0000-311a76b8e8b7"
                 }
               },
               {
                 "source": "Федресурс",
                 "message_number_and_date": "15593458 от 05.06.2023",
                 "message_number": "15593458",
-                "message_url": "https://fedresurs.ru/sfactmessages/40de7684-5762-430a-bd05-83eb515108e2",
+                "message_url": "https://fedresurs.ru/sfactmessages/458679dd-0000-0000-0000-8b3d72220b88",
                 "message_type": "Возникновение права залога",
                 "lessee": "",
                 "lessor": "",
@@ -114,29 +114,29 @@
                 "links": [
                   {
                     "text": "15593458 от 05.06.2023",
-                    "url": "https://fedresurs.ru/sfactmessages/40de7684-5762-430a-bd05-83eb515108e2"
+                    "url": "https://fedresurs.ru/sfactmessages/458679dd-0000-0000-0000-8b3d72220b88"
                   }
                 ],
-                "encumbrance_guid": "40de7684-5762-430a-bd05-83eb515108e2",
+                "encumbrance_guid": "458679dd-0000-0000-0000-8b3d72220b88",
                 "encumbrance_publish_date": "2023-06-05T10:00:21.51",
                 "encumbrance_type": "CreationRightOfPledge2",
                 "encumbrance_highlights_raw": [],
                 "encumbrance_highlights_text": "",
-                "encumbrance_message_url": "https://fedresurs.ru/message/40de7684-5762-430a-bd05-83eb515108e2",
+                "encumbrance_message_url": "https://fedresurs.ru/message/458679dd-0000-0000-0000-8b3d72220b88",
                 "json_extra": {
                   "number": "15593458",
-                  "guid": "40de7684-5762-430a-bd05-83eb515108e2",
+                  "guid": "458679dd-0000-0000-0000-8b3d72220b88",
                   "publishDate": "2023-06-05T10:00:21.51",
                   "type": "CreationRightOfPledge2",
                   "highlights_text": "",
-                  "message_url": "https://fedresurs.ru/message/40de7684-5762-430a-bd05-83eb515108e2"
+                  "message_url": "https://fedresurs.ru/message/458679dd-0000-0000-0000-8b3d72220b88"
                 }
               }
             ],
             "fnp_urls": [
-              "https://www.reestr-zalogov.ru/search/notification/02cf5675-4c28-34f3-a3e0-898b24544077",
-              "https://www.reestr-zalogov.ru/search/notification/02b56bf3-3fc4-3d30-b191-d6b831146a61",
-              "https://www.reestr-zalogov.ru/search/notification/2b923573-861c-3909-8df4-d7999c85c270"
+              "https://www.reestr-zalogov.ru/search/notification/0152bdfc-0000-0000-0000-6988db7f80c6",
+              "https://www.reestr-zalogov.ru/search/notification/474c68e2-0000-0000-0000-d25d8ff614fc",
+              "https://www.reestr-zalogov.ru/search/notification/f2093253-0000-0000-0000-8389725c683d"
             ]
           }
         ]

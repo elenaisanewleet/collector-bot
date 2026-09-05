@@ -14,7 +14,7 @@ from pathlib import Path
 
 from app.domain.models import InternalDebtorRecord
 from app.logging_setup import get_logger
-from app.providers.internal.base import InternalDebtorProvider
+from app.providers.internal.base import InternalDebtorProvider, InternalSourceError
 from app.providers.internal.csv_schema import (
     CsvFormatError,
     DebtorRow,
@@ -52,10 +52,6 @@ class CSVInternalDebtorProvider(InternalDebtorProvider):
     def path(self) -> Path:
         return self._path
 
-    @property
-    def is_available(self) -> bool:
-        return self._path.is_file()
-
     async def _ensure_loaded(self) -> None:
         if not self._path.is_file():
             return
@@ -78,8 +74,11 @@ class CSVInternalDebtorProvider(InternalDebtorProvider):
                 else:
                     rows.append(item)
         except (OSError, CsvFormatError) as exc:
+            # Нечитаемая выгрузка — это отказ источника, а не пустая выгрузка.
+            # Проглоченная здесь ошибка выше по цепочке стала бы строкой
+            # «совпадений во внутренней базе нет».
             logger.warning("internal_csv.load_failed", path=str(self._path), error=str(exc))
-            return
+            raise InternalSourceError(str(exc)) from exc
 
         self._rows = rows
         self._reindex()
@@ -172,11 +171,6 @@ class CSVInternalDebtorProvider(InternalDebtorProvider):
             for row in self._rows
             if row.address and needle in normalize_token(row.address)
         ]
-
-    async def all_rows(self) -> list[DebtorRow]:
-        """Used by the seeder to push the bootstrap export into the database."""
-        await self._ensure_loaded()
-        return list(self._rows)
 
 
 def to_record(row: DebtorRow) -> InternalDebtorRecord:
