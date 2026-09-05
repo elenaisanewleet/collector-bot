@@ -8,6 +8,7 @@ stays *not configured* until its credentials are supplied.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
@@ -190,6 +191,12 @@ class Settings(BaseSettings):
     batch_concurrency: Annotated[int, Field(ge=1, le=32)] = 4
     # Как часто обновлять сообщение с прогрессом, в обработанных должниках.
     batch_progress_every: Annotated[int, Field(ge=1, le=1_000)] = 10
+    # Сколько стоит одно обращение к платному источнику, рублей. Ноль — цена не
+    # задана, и это не то же самое, что «бесплатно»: смета в этом случае честно
+    # говорит, что рублёвую сумму назвать нечем, и остаётся в обращениях.
+    # Придумывать здесь значение по умолчанию нельзя — тариф у каждого договора
+    # свой, а смета, назвавшая чужую цену, хуже сметы, промолчавшей о цене.
+    provider_request_cost: Annotated[Decimal, Field(ge=0)] = Decimal("0")
 
     @field_validator("log_level")
     @classmethod

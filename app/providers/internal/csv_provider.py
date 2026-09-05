@@ -12,6 +12,7 @@ from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
+from app.domain.identity import normalize_phone
 from app.domain.models import InternalDebtorRecord
 from app.logging_setup import get_logger
 from app.providers.internal.base import InternalDebtorProvider, InternalSourceError
@@ -102,7 +103,14 @@ class CSVInternalDebtorProvider(InternalDebtorProvider):
             if row.full_name:
                 self._by_name[normalize_token(row.full_name)].append(row)
             if row.phone:
-                self._by_phone[row.phone].append(row)
+                # Индекс строится по нормализованному номеру, а не по строке из
+                # файла. В выгрузке один и тот же телефон встречается как
+                # «+7 (999) 123-45-01», «89991234501» и «9991234501»; оператор
+                # вводит третий вариант, а в файле лежит первый. Поиск буква в
+                # букву не находил бы ничего — и это самый частый запрос:
+                # оператор помнит номер, а не ФИО.
+                key = normalize_phone(row.phone) or row.phone
+                self._by_phone[key].append(row)
             if row.contract_number:
                 self._by_contract[normalize_token(row.contract_number)].append(row)
             if row.claim_number:
@@ -138,7 +146,8 @@ class CSVInternalDebtorProvider(InternalDebtorProvider):
 
     async def find_by_phone(self, phone: str) -> list[InternalDebtorRecord]:
         await self._ensure_loaded()
-        return [to_record(row) for row in self._by_phone.get(phone, ())]
+        key = normalize_phone(phone) or phone
+        return [to_record(row) for row in self._by_phone.get(key, ())]
 
     async def find_by_contract(self, contract_number: str) -> list[InternalDebtorRecord]:
         await self._ensure_loaded()
@@ -180,6 +189,7 @@ def to_record(row: DebtorRow) -> InternalDebtorRecord:
         birth_date=row.birth_date,
         phone=row.phone,
         phone_masked=mask_phone(row.phone),
+        inn=row.inn,
         contract_number=row.contract_number,
         claim_number=row.claim_number,
         debt_amount=row.debt_amount,

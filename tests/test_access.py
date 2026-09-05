@@ -18,7 +18,6 @@ from datetime import datetime, timedelta
 
 import pytest
 from aiogram import Bot, Dispatcher
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Chat, Message, User
 from sqlalchemy import select
 
@@ -32,7 +31,6 @@ from app.bot.access_view import (
 )
 from app.bot.handlers.access import MODERATION_OFF, NOT_OWNER
 from app.bot.middleware import ACCESS_DENIED_MESSAGE
-from app.bot.router import setup_dispatcher
 from app.container import Container
 from app.db.models import AccessRequest
 from app.db.repository import AuditRepository, SearchRepository
@@ -40,7 +38,15 @@ from app.db.session import Database
 from app.services.access import AccessService, AccessStatus, RequestOutcome
 from app.utils.dates import utcnow
 
-from .bot_harness import CHAT_ID, OPERATOR_ID, SentMessages, feed, make_callback, make_message
+from .bot_harness import (
+    CHAT_ID,
+    OPERATOR_ID,
+    SentMessages,
+    dispatcher_for,
+    feed,
+    make_callback,
+    make_message,
+)
 
 OWNER_ID = 777
 STRANGER_ID = 999
@@ -72,7 +78,7 @@ def moderated(container: Container) -> Container:
 
 @pytest.fixture
 def moderated_dispatcher(moderated: Container) -> Dispatcher:
-    return setup_dispatcher(Dispatcher(storage=MemoryStorage()), moderated)
+    return dispatcher_for(moderated)
 
 
 @pytest.fixture
@@ -418,7 +424,7 @@ async def test_approval_survives_a_restart(
     await approve_stranger(moderated_dispatcher, bot)
 
     restarted = moderated_container(moderated, owners=str(OWNER_ID))
-    fresh = setup_dispatcher(Dispatcher(storage=MemoryStorage()), restarted)
+    fresh = dispatcher_for(restarted)
     sent.texts.clear()
     sent.chats.clear()
     sent.markups.clear()
@@ -435,7 +441,7 @@ async def test_rejection_survives_a_restart(
     await reject_stranger(moderated_dispatcher, bot)
 
     restarted = moderated_container(moderated, owners=str(OWNER_ID))
-    fresh = setup_dispatcher(Dispatcher(storage=MemoryStorage()), restarted)
+    fresh = dispatcher_for(restarted)
     sent.texts.clear()
     sent.chats.clear()
     sent.markups.clear()
@@ -453,7 +459,7 @@ async def test_open_access_still_lets_everyone_in(
     open_container: Container, bot: Bot, sent: SentMessages
 ) -> None:
     """«*» продолжает работать как работал: одобрение его не отменяет."""
-    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), open_container)
+    dispatcher = dispatcher_for(open_container)
 
     await feed(dispatcher, bot, message=stranger_message("/start"))
 
@@ -465,7 +471,7 @@ async def test_open_access_creates_no_requests(
     open_container: Container, bot: Bot, database: Database
 ) -> None:
     """Пущены и так все — заявке неоткуда взяться и нечего одобрять."""
-    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), open_container)
+    dispatcher = dispatcher_for(open_container)
 
     await feed(dispatcher, bot, message=stranger_message("/start"))
 
@@ -575,7 +581,7 @@ async def test_access_list_explains_when_moderation_is_off(
     open_bot = replace(
         container, settings=settings, access_service=AccessService(settings, container.database)
     )
-    open_dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), open_bot)
+    open_dispatcher = dispatcher_for(open_bot)
 
     await feed(open_dispatcher, bot, message=make_message("/access"))
 

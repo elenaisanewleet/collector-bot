@@ -43,6 +43,9 @@ class Debtor(Base):
     phone: Mapped[str | None] = mapped_column(String(20))
     phone_masked: Mapped[str | None] = mapped_column(String(32))
     phone_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    # ИНН физлица не маскируется и не хэшируется, в отличие от телефона: по нему
+    # ищут банкротство, ИП и арбитраж, и маскированный он для этого бесполезен.
+    inn: Mapped[str | None] = mapped_column(String(12), index=True)
     contract_number: Mapped[str | None] = mapped_column(String(64), index=True)
     claim_number: Mapped[str | None] = mapped_column(String(64), index=True)
     debt_amount: Mapped[Decimal | None] = mapped_column(Money)

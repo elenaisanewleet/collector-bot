@@ -18,6 +18,17 @@ def pluralize_ru(count: int, one: str, few: str, many: str) -> str:
     return many
 
 
+def group_digits(value: int) -> str:
+    """``3340`` → ``«3 340»``.
+
+    Считанные штуки — обращения к источникам, строки выгрузки — читаются глазом
+    так же плохо, как деньги, и группируются так же (:func:`money.format_amount`).
+    Четырёхзначное число обращений стоит четырёхзначных денег, и «до 3340»
+    рядом с «до 10 020 ₽» выглядит числом другого порядка, чем есть.
+    """
+    return f"{value:,}".replace(",", " ")
+
+
 def signed(value: int) -> str:
     return f"+{value}" if value > 0 else str(value)
 

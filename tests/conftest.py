@@ -14,9 +14,7 @@ import pytest
 import pytest_asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.storage.memory import MemoryStorage
 
-from app.bot.router import setup_dispatcher
 from app.config import AppMode, Settings
 from app.container import Container
 from app.db.session import Database
@@ -48,7 +46,7 @@ from app.services.share import ShareLinkService
 from app.services.subject_store import SubjectStore
 from app.services.verdict import VerdictEngine
 
-from .bot_harness import FAKE_TOKEN, SentMessages, intercept
+from .bot_harness import FAKE_TOKEN, SentMessages, dispatcher_for, intercept
 
 DEMO_CSV = Path("data/demo_debtors.csv")
 
@@ -294,4 +292,4 @@ def bot(sent: SentMessages, monkeypatch: pytest.MonkeyPatch) -> Iterator[Bot]:
 
 @pytest.fixture
 def dispatcher(container: Container) -> Dispatcher:
-    return setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)
+    return dispatcher_for(container)

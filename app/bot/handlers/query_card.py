@@ -233,9 +233,7 @@ def _ambiguous(found: card_identify.Identified, card: Card) -> str | None:
     """
     if not found.several:
         return None
-    head = card_view.FOUND_MANY.format(
-        count=found.count, who=card_identify.listing(found.records)
-    )
+    head = card_view.FOUND_MANY.format(count=found.count, who=card_identify.listing(found.records))
     step = card.step
     if step is None:
         return f"{head} {card_view.FOUND_MANY_STUCK}"

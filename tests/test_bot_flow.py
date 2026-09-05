@@ -13,10 +13,8 @@ from dataclasses import replace
 
 import pytest
 from aiogram import Bot, Dispatcher
-from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.middleware import ACCESS_DENIED_MESSAGE
-from app.bot.router import setup_dispatcher
 from app.config import Settings
 from app.container import Container
 
@@ -25,6 +23,9 @@ from .bot_harness import (
     OPERATOR_ID,
     OUTSIDER_ID,
     SentMessages,
+    buttons,
+    callbacks,
+    dispatcher_for,
     feed,
     make_callback,
     make_message,
@@ -94,28 +95,6 @@ async def collect_and_run(dispatcher: Dispatcher, bot: Bot, line: str = FULL_LIN
     """Типичный путь оператора: одна строка из 1С и одно нажатие."""
     await feed(dispatcher, bot, message=make_message(line))
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
-
-
-def buttons(sent: SentMessages) -> list[str]:
-    """Тексты всех кнопок, которые бот показал за прогон."""
-    return [
-        button.text
-        for markup in sent.markups
-        if markup is not None and getattr(markup, "inline_keyboard", None)
-        for row in markup.inline_keyboard
-        for button in row
-    ]
-
-
-def callbacks(sent: SentMessages) -> list[str]:
-    return [
-        button.callback_data
-        for markup in sent.markups
-        if markup is not None and getattr(markup, "inline_keyboard", None)
-        for row in markup.inline_keyboard
-        for button in row
-        if button.callback_data
-    ]
 
 
 async def test_a_line_fills_the_card_and_one_press_runs_it(
@@ -412,7 +391,9 @@ async def test_the_card_survives_a_restart(
     """Недособранная карточка живёт в базе, а не в памяти диспетчера."""
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
 
-    restarted = setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)
+    # Именно новый диспетчер с пустой памятью: карточка обязана пережить
+    # перезапуск бота, а не жить в оперативке процесса.
+    restarted = dispatcher_for(container)
     sent.texts.clear()
     await feed(restarted, bot, message=make_message("12.03.1985"))
 
@@ -574,7 +555,7 @@ async def test_passport_is_not_asked_before_the_report(
     карточку и стал кнопкой.
     """
     enabled = _with_bridge(container)
-    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+    dispatcher = dispatcher_for(enabled)
 
     await collect_and_run(dispatcher, bot)
 
@@ -604,7 +585,7 @@ async def test_the_passport_button_is_hidden_when_it_would_lie(
     ``tests/test_report_actions.py``: демо-мост не стоит денег и включён всегда.
     """
     enabled = _with_bridge(container)
-    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+    dispatcher = dispatcher_for(enabled)
 
     await collect_and_run(dispatcher, bot, line)
 
@@ -624,7 +605,7 @@ async def test_the_passport_button_masks_the_number_and_feeds_the_bridge(
     from app.db.repository import SearchRepository
 
     enabled = _with_bridge(container)
-    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+    dispatcher = dispatcher_for(enabled)
 
     await collect_and_run(dispatcher, bot)
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:passport"))
@@ -650,7 +631,7 @@ async def test_an_inn_from_the_line_skips_the_bridge_entirely(
     bot: Bot, sent: SentMessages, container: Container
 ) -> None:
     enabled = _with_bridge(container)
-    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+    dispatcher = dispatcher_for(enabled)
 
     await collect_and_run(dispatcher, bot, f"{FULL_LINE} 770912345601")
 
@@ -798,6 +779,15 @@ async def test_repeat_of_another_operators_search_is_refused(
 # ---------------------------------------------------------------- массовая проверка
 
 
+def confirm_callback(sent: SentMessages) -> str:
+    """Нажать ровно ту кнопку запуска, которую бот показал.
+
+    Не константа: в callback уезжает число должников из сметы, и тест, который
+    подставляет своё, проверяет не тот сценарий, который увидит оператор.
+    """
+    return next(data for data in callbacks(sent) if data.startswith("batch:run"))
+
+
 async def test_batch_shows_an_estimate_before_spending(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
@@ -826,12 +816,12 @@ async def test_batch_runs_and_reports_a_queue(
     await container.import_service.import_file(container.settings.internal_csv_path)
 
     await feed(dispatcher, bot, message=make_message("/batch"))
-    await feed(dispatcher, bot, callback_query=make_callback("batch:run"))
+    await feed(dispatcher, bot, callback_query=make_callback(confirm_callback(sent)))
 
     assert sent.contains("Проверка завершена")
     assert sent.contains("Судебный приказ")
     assert sent.contains("Не подавать")
-    assert sent.contains("Не будет потрачено на пошлины")
+    assert sent.contains("Сэкономлено на пошлинах")
 
 
 async def test_batch_lists_one_verdict(
@@ -839,7 +829,7 @@ async def test_batch_lists_one_verdict(
 ) -> None:
     await container.import_service.import_file(container.settings.internal_csv_path)
     await feed(dispatcher, bot, message=make_message("/batch"))
-    await feed(dispatcher, bot, callback_query=make_callback("batch:run"))
+    await feed(dispatcher, bot, callback_query=make_callback(confirm_callback(sent)))
 
     sent.texts.clear()
     await feed(dispatcher, bot, callback_query=make_callback("batch:list:drop"))
@@ -860,7 +850,7 @@ async def test_batch_export_sends_a_file(
 ) -> None:
     await container.import_service.import_file(container.settings.internal_csv_path)
     await feed(dispatcher, bot, message=make_message("/batch"))
-    await feed(dispatcher, bot, callback_query=make_callback("batch:run"))
+    await feed(dispatcher, bot, callback_query=make_callback(confirm_callback(sent)))
     await feed(dispatcher, bot, callback_query=make_callback("batch:export"))
 
     assert sent.documents, "CSV не отправлен"
@@ -939,7 +929,7 @@ def linked(container: Container) -> Container:
 
 @pytest.fixture
 def linked_dispatcher(linked: Container) -> Dispatcher:
-    return setup_dispatcher(Dispatcher(storage=MemoryStorage()), linked)
+    return dispatcher_for(linked)
 
 
 async def test_search_sends_a_card_with_a_link_not_a_wall(
@@ -978,7 +968,7 @@ async def test_batch_offers_the_queue_page(
     await linked.import_service.import_file(linked.settings.internal_csv_path)
 
     await feed(linked_dispatcher, bot, message=make_message("/batch"))
-    await feed(linked_dispatcher, bot, callback_query=make_callback("batch:run"))
+    await feed(linked_dispatcher, bot, callback_query=make_callback(confirm_callback(sent)))
 
     urls = [
         button.url

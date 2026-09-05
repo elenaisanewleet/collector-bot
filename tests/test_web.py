@@ -488,12 +488,12 @@ async def test_internal_lookup_reports_its_own_state(container: Container) -> No
         name=parse_fio("Никого Нет Такого"),
         birth_date=date(1970, 1, 1),
     )
-    _records, result = await container.search_service.lookup_internal_result(subject)
+    _records, result, _ = await container.search_service.lookup_internal_result(subject)
     assert result.provider is ProviderName.INTERNAL
     assert result.status is ProviderStatus.NO_RESULTS
 
     nameless = SearchSubject(search_type=SearchType.PERSON.value)
-    _none, empty = await container.search_service.lookup_internal_result(nameless)
+    _none, empty, _ = await container.search_service.lookup_internal_result(nameless)
     assert empty.error_code == "insufficient_query"
 
 
@@ -820,7 +820,12 @@ def test_source_states_are_distinguishable_without_colour() -> None:
 def test_print_expands_collapsed_blocks_and_hides_the_interface() -> None:
     print_css = _print_css()
     assert "details{display:block}" in print_css
-    assert "nav,.filters,.actions,.copyhint{display:none!important}" in print_css
+    hidden = re.search(r"\n  ([^\n]*?)\{display:none!important\}", print_css)
+    assert hidden is not None
+    # Интерфейсное на бумагу не уходит: оглавление, фильтры, поиск с сортировкой,
+    # счётчик показанного и кнопка «показать ещё».
+    for selector in ("nav", ".filters", ".actions", ".copyhint", ".tools", ".qstatus", ".more"):
+        assert selector in hidden.group(1).split(",")
     # Свёрнутое раскрывается и скриптом — CSS этого не умеет во всех браузерах.
     assert "beforeprint" in render._SCRIPT
     # Внешние ссылки печатаются текстом.

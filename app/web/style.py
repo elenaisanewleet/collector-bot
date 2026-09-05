@@ -196,7 +196,9 @@ th{font-size:var(--t-3xs);letter-spacing:.08em;text-transform:uppercase;color:va
 tr:last-child td{border-bottom:0}
 td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
 td.r{text-align:right}
-tbody tr:hover{background:var(--surface-2)}
+/* Именно background-color: у строк очереди фоном нарисована кромка вердикта,
+   и короткая запись стёрла бы её при наведении. */
+tbody tr:hover{background-color:var(--surface-2)}
 
 /* На узком экране таблица разворачивается в карточки: горизонтальный скролл
    без подсказки уносил вправо колонку «Совпадение» — самое важное после суммы. */
@@ -279,36 +281,216 @@ button.copy[data-done="1"]{border-color:var(--good);color:var(--good)}
 
 footer{color:var(--ink-3);font-size:var(--t-2xs);max-width:78ch;padding:2px 2px 0}
 
-/* ---------------- очередь ---------------- */
-.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(146px,1fr));
-  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-  overflow:hidden}
-.cell{padding:var(--s-3) var(--s-4);display:flex;flex-direction:column;gap:2px;
-  box-shadow:-1px 0 0 var(--line-soft),0 -1px 0 var(--line-soft)}
-.cell b{font-family:var(--mono);font-size:var(--t-2xl);font-weight:600;letter-spacing:-.02em;
-  font-variant-numeric:tabular-nums}
-.cell.good b{color:var(--good)} .cell.warn b{color:var(--warn)} .cell.crit b{color:var(--crit)}
-.cell.accent b{color:var(--accent)}
-.cell.failed b{color:var(--ink-2)}
-.cell small{color:var(--ink-3);font-size:var(--t-2xs)}
+/* ================ очередь ================
+   Главный экран продукта: восемьсот должников и один вопрос — на кого тратить
+   пошлину. Всё здесь подчинено ему. */
 
+/* ---------------- ответ про деньги ----------------
+   Один крупный счётчик вместо ряда равновеликих плиток: у плиток нет главной,
+   а вопрос ровно один. Остальные цифры идут под ним и мельче. */
+.hero .eyebrow{margin:0 0 var(--s-2);color:var(--hero-dim);font-family:var(--mono);
+  font-size:var(--t-3xs);letter-spacing:.08em;text-transform:uppercase}
+.hero.queue h1{font-size:var(--t-xl);color:var(--hero-soft);font-weight:600}
+.answer{display:flex;align-items:baseline;gap:var(--s-3);flex-wrap:wrap;
+  margin:var(--s-4) 0 0}
+.answer .lbl{flex:0 0 100%;color:var(--hero-dim)}
+.answer b{font-family:var(--mono);font-size:3.25rem;line-height:1;font-weight:600;
+  letter-spacing:-.045em;font-variant-numeric:tabular-nums;color:var(--hero-ink)}
+.answer .of{color:var(--hero-soft);font-size:var(--t-lg)}
+@media(max-width:600px){.answer b{font-size:2.5rem}}
+
+/* Сэкономленная пошлина — единственная хорошая новость на странице, и первая
+   цифра, которую эта страница вообще показала владельцу. Отбита линией сверху
+   и набрана как кредитовая строка сметы. */
+.saved{margin:var(--s-5) 0 0;padding:var(--s-3) 0 0;
+  border-top:1px solid rgba(255,255,255,.16);
+  display:flex;align-items:baseline;gap:var(--s-3);flex-wrap:wrap}
+.saved .lbl{flex:0 0 100%;color:#7BD7B0}
+.saved b{font-family:var(--mono);font-size:var(--t-2xl);font-weight:600;
+  letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:#7BD7B0}
+.saved small{color:var(--hero-dim);font-size:var(--t-2xs)}
+.saved.flat .lbl,.saved.flat b{color:var(--hero-dim)}
+
+/* ---------------- полоса пошлины ----------------
+   Ширина сегмента — рубли на одной общей шкале. Строки без посчитанной
+   пошлины ширины не получают: вместо них у полосы рваный правый край. */
+.feebar{margin:var(--s-4) 0 0;padding:0}
+.feebar .bar{display:flex;height:26px;border-radius:3px;overflow:hidden;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.20)}
+/* Рваный правый край: полоса заведомо не полна — часть строк без посчитанной
+   пошлины, и ширины им взять неоткуда. */
+.feebar .bar.open{border-right:2px dashed #F0C765;padding-right:7px;
+  border-top-right-radius:0;border-bottom-right-radius:0}
+.feebar .seg{display:block;min-width:3px;height:100%}
+.feebar .seg.pay{background:#9CC2FF}
+.feebar .seg.hold{background:repeating-linear-gradient(135deg,
+  rgba(240,199,101,.85) 0 6px,rgba(240,199,101,.45) 6px 12px)}
+.feebar .seg.save{background:#7BD7B0}
+.feebar .keys{display:flex;flex-wrap:wrap;gap:var(--s-2) var(--s-5);margin:var(--s-3) 0 0}
+.feebar .key{display:inline-flex;align-items:baseline;gap:6px;
+  color:var(--hero-soft);font-size:var(--t-2xs)}
+.feebar .key i{width:9px;height:9px;border-radius:2px;flex:0 0 auto;
+  transform:translateY(1px)}
+.feebar .key.pay i{background:#9CC2FF} .feebar .key.save i{background:#7BD7B0}
+.feebar .key.hold i{background:#F0C765}
+.feebar .key b{font-family:var(--mono);font-variant-numeric:tabular-nums;
+  color:var(--hero-ink);font-size:var(--t-xs)}
+.feebar .key .rows{color:var(--hero-dim)}
+.feebar .tail{margin:var(--s-2) 0 0;color:#F5DCA0;font-size:var(--t-2xs)}
+.feenone{margin:var(--s-4) 0 0;color:#F5DCA0;font-size:var(--t-sm)}
+
+/* ---------------- прогон идёт ---------------- */
 .running{background:var(--accent-soft);border:1px solid var(--accent);border-radius:var(--r);
   padding:var(--s-3) var(--s-4);color:var(--accent-ink);font-size:var(--t-sm)}
 .running b{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.running p{margin:var(--s-2) 0 0;font-size:var(--t-2xs)}
+.running .tick{color:var(--accent-ink);opacity:.75}
+/* Зависший прогон перекрашивается: бодрая синяя плашка на оборванном прогоне
+   врёт ровно так же, как «не проверено», поданное зелёным. */
+.running.stalled{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
+.running.stalled .meter i{background:var(--warn)}
+.running .halt{font-weight:600}
+/* Единственная анимация на странице, и она означает ровно одно: работа идёт. */
+.meter.live i{background-image:repeating-linear-gradient(135deg,
+  rgba(255,255,255,.45) 0 6px,transparent 6px 12px);
+  background-size:24px 100%;animation:crawl 1.1s linear infinite}
+@keyframes crawl{to{background-position:24px 0}}
 
+/* ---------------- полнота проверки ----------------
+   Четыре состояния, которые обязаны сойтись в общее число. Раньше три из них
+   сливались в бодрое «обработано N из M». */
+.cover{display:flex;flex-direction:column}
+.crow{display:grid;grid-template-columns:168px 1fr 64px;gap:var(--s-3);
+  align-items:center;padding:var(--s-2) 0;border-bottom:1px solid var(--line-soft)}
+.crow:last-child{border-bottom:0}
+.crow .nm{font-weight:600}
+.crow b{font-family:var(--mono);font-size:var(--t-lg);font-weight:600;text-align:right;
+  font-variant-numeric:tabular-nums}
+.crow small{grid-column:2/4;color:var(--ink-3);font-size:var(--t-2xs);margin-top:-4px}
+.crow .track{height:8px;border-radius:2px;background:var(--line-soft);overflow:hidden}
+.crow .track i{display:block;height:100%;background:var(--ink-3)}
+.crow.full .track i{background:var(--good)}
+.crow.partial .track i{background:repeating-linear-gradient(135deg,
+  var(--warn) 0 4px,transparent 4px 8px)}
+.crow.failed .track i{background:repeating-linear-gradient(135deg,
+  var(--ink-3) 0 3px,transparent 3px 6px)}
+.crow.pending .track i{background:var(--line)}
+.crow.full b{color:var(--good)} .crow.partial b{color:var(--warn)}
+@media(max-width:600px){.crow{grid-template-columns:1fr 64px}
+  .crow .nm{grid-column:1/3} .crow .track{grid-column:1/2} .crow small{grid-column:1/3}}
+
+/* ---------------- инструменты очереди ---------------- */
+.tools{display:flex;flex-wrap:wrap;gap:var(--s-3) var(--s-5);margin:0 0 var(--s-3);
+  align-items:end}
+.tools p{margin:0;display:flex;flex-direction:column;gap:var(--s-1)}
+.tools .find{flex:1 1 260px}
+.tools input,.tools select{font:inherit;font-size:var(--t-sm);min-height:40px;
+  padding:var(--s-2) var(--s-3);border:1px solid var(--line);border-radius:var(--r);
+  background:var(--surface);color:var(--ink)}
+.tools input{width:100%}
 .filters{display:flex;gap:var(--s-2);flex-wrap:wrap;margin:0 0 var(--s-3)}
 .filters button{font:inherit;font-size:var(--t-xs);font-weight:600;
   min-height:36px;padding:var(--s-2) var(--s-3);cursor:pointer;
   background:var(--surface);color:var(--ink-2);border:1px solid var(--line);border-radius:var(--r)}
 .filters button[aria-pressed="true"]{background:var(--accent);color:#fff;border-color:var(--accent)}
 @media(max-width:860px){.filters button{min-height:44px;padding:10px 14px}}
+.qstatus{margin:0 0 var(--s-2);color:var(--ink-3);font-size:var(--t-2xs)}
+/* Шапка числовой колонки стоит над своими числами, а не над соседней. */
+#money th:nth-child(2),#money th:nth-child(3),#money th:nth-child(4),
+#queue th:nth-child(3),#queue th:nth-child(4){text-align:right}
+/* Ширины заданы явно: при автоматической раскладке суммы и чипы вердикта
+   растягивались по содержимому, а обоснование — то самое, ради чего строку
+   читают, — сжималось в столбик по два слова. */
+@media(min-width:601px){
+  #queue table{table-layout:fixed}
+  #queue th:nth-child(1){width:15%} #queue th:nth-child(2){width:17%}
+  #queue th:nth-child(3){width:12%} #queue th:nth-child(4){width:11%}
+  #queue th:nth-child(5){width:10%} #queue th:nth-child(6){width:35%}
+  /* Название вердикта переносится, а не выезжает на соседнюю колонку: слова
+     те же самые, что в боте и в выгрузке, и сокращать их здесь нельзя. */
+  #queue td:first-child .tag{white-space:normal}
+}
+.note.thin{color:var(--warn);font-weight:600;border-left:3px solid var(--warn);
+  padding-left:var(--s-3);margin-bottom:var(--s-2)}
+.more{display:flex;justify-content:center;margin-top:var(--s-3)}
+.more button{font:inherit;font-size:var(--t-xs);font-weight:600;min-height:44px;
+  padding:var(--s-2) var(--s-6);cursor:pointer;background:var(--surface);
+  color:var(--ink-2);border:1px solid var(--line);border-radius:var(--r)}
+.more button:hover{border-color:var(--accent);color:var(--accent)}
 
-/* Полоса вердикта — кромкой строки, а не отдельным пятном рядом с подписью. */
-tr[data-tone="file"]{box-shadow:inset 3px 0 0 var(--good)}
-tr[data-tone="order"]{box-shadow:inset 3px 0 0 var(--accent)}
-tr[data-tone="review"]{box-shadow:inset 3px 0 0 var(--warn)}
-tr[data-tone="drop"]{box-shadow:inset 3px 0 0 var(--crit)}
-tr[data-tone="failed"]{box-shadow:inset 3px 0 0 var(--ink-3)}
+/* ---------------- строки очереди ----------------
+   Кромка слева несёт сразу два факта: цвет — вердикт, сплошная она или рваная —
+   ответили ли все источники. Поэтому сортировка по баллу физически не может
+   выглядеть надёжнее данных под ней. */
+#queue tbody tr[data-tone]{--rail:var(--ink-3);
+  background-image:linear-gradient(var(--rail),var(--rail));
+  background-repeat:no-repeat;background-position:left top;background-size:3px 100%}
+#queue tbody tr[data-tone="file"]{--rail:var(--good)}
+#queue tbody tr[data-tone="order"]{--rail:var(--accent)}
+#queue tbody tr[data-tone="review"]{--rail:var(--warn)}
+#queue tbody tr[data-tone="drop"]{--rail:var(--crit)}
+#queue tbody tr[data-cov="partial"]{background-image:repeating-linear-gradient(
+  var(--rail) 0 6px,transparent 6px 11px)}
+#queue tbody tr[data-cov="failed"]{background-image:repeating-linear-gradient(
+  var(--rail) 0 3px,transparent 3px 6px)}
+#queue tbody tr[data-tone] td:first-child{padding-left:var(--s-4)}
+tbody tr.total td{background:var(--surface-2);font-weight:600;
+  border-top:2px solid var(--line)}
+
+/* Заголовок группы: сворачивается, считает свои строки и называет их сумму. */
+tr[data-group] td{padding:0;background:var(--surface-2);
+  border-bottom:1px solid var(--line)}
+.ghead{display:flex;align-items:baseline;gap:var(--s-2);width:100%;font:inherit;
+  font-size:var(--t-2xs);font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  padding:var(--s-2) var(--s-3);cursor:pointer;border:0;background:none;color:var(--ink-2);
+  text-align:left}
+.ghead:hover{color:var(--accent)}
+.ghead .caret{width:0;height:0;flex:0 0 auto;border-left:5px solid currentColor;
+  border-top:4px solid transparent;border-bottom:4px solid transparent;
+  transform:rotate(90deg)}
+.ghead[aria-expanded="false"] .caret{transform:none}
+.ghead .gmoney{font-family:var(--mono);letter-spacing:0;color:var(--ink-3);
+  text-transform:none;font-weight:600}
+
+/* Должник и договор одной ячейкой: фамилия сверху, номер под ней кнопкой —
+   номер копируют, фамилию нет. */
+.who{display:block;font-weight:600}
+td .who + button.copy{margin-top:3px;font-size:var(--t-3xs);min-height:24px}
+
+/* Балл вместе со шкалой покрытия: число и то, по скольким источникам оно
+   посчитано, стоят в одной ячейке и никогда не разъезжаются. */
+.score{display:inline-flex;flex-direction:column;gap:1px;min-width:52px}
+.score b{font-family:var(--mono);font-size:var(--t-sm);font-weight:600;
+  font-variant-numeric:tabular-nums;line-height:1.1}
+.score .track{display:block;width:46px;height:4px;border-radius:2px;
+  background:var(--line-soft);overflow:hidden}
+.score .track i{display:block;height:100%;background:var(--good)}
+.score small{font-size:var(--t-3xs);color:var(--ink-3)}
+.score.thin b{color:var(--warn)}
+.score.thin .track i{background:repeating-linear-gradient(135deg,
+  var(--warn) 0 3px,transparent 3px 6px)}
+.score.none{color:var(--ink-3)}
+
+/* Обоснование обрезано двумя строками: восемьсот абзацев подряд не читаются.
+   Клик по строке раскрывает её, печать раскрывает всё. */
+.why{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden}
+tr.open .why{-webkit-line-clamp:unset;line-clamp:unset;overflow:visible}
+tbody tr[data-tone]{cursor:default}
+@media(max-width:600px){
+  /* Карточка на телефоне: вердикт и деньги — крупно, обоснование одной строкой
+     до тапа. Полторы тысячи слов пояснений в списке из восьмисот карточек
+     превращают его в стену текста. */
+  #queue tbody tr[data-tone]{padding-left:var(--s-4)}
+  /* Обоснование получает всю ширину карточки: подпись поля рядом с текстом
+     съедала треть строки, и от объяснения вердикта оставалось два слова. */
+  #queue td:last-child{display:block}
+  #queue td:last-child::before{display:block;margin-bottom:2px}
+  .why{-webkit-line-clamp:2;line-clamp:2}
+  tr[data-group] td{padding:0;display:block}
+  .score{flex-direction:row;align-items:baseline;gap:6px}
+  .score .track{transform:translateY(-2px)}
+}
 
 @media(prefers-reduced-motion:reduce){
   *{transition:none!important;animation:none!important}
@@ -341,7 +523,7 @@ tr[data-tone="failed"]{box-shadow:inset 3px 0 0 var(--ink-3)}
   }
   *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{background:#fff;color:#000;font-size:10.5pt}
-  nav,.filters,.actions,.copyhint{display:none!important}
+  nav,.filters,.actions,.copyhint,.tools,.qstatus,.more,.tick{display:none!important}
   .shell{display:block;max-width:none;padding:0}
   main{display:block}
   main > *{margin-bottom:5mm}
@@ -352,8 +534,12 @@ tr[data-tone="failed"]{box-shadow:inset 3px 0 0 var(--ink-3)}
   .hero .badge{background:#fff!important;border:1pt solid #000;color:#000!important}
   .hero .nums{border-top:.5pt solid #000}
   .coverage{background:#fff!important;border:1pt solid #000;color:#000}
-  .coverage.gap{background-image:repeating-linear-gradient(135deg,transparent 0 9px,
+  /* Цвета предупреждения заданы литералами и переживают печать: без явного
+     сброса самая важная оговорка страницы уходит на бумагу бледно-жёлтой. */
+  .coverage.gap{border-color:#000;color:#000;
+    background-image:repeating-linear-gradient(135deg,transparent 0 9px,
     rgba(0,0,0,.10) 9px 18px)}
+  .coverage.gap b,.coverage.gap a,.coverage.gap .miss{color:#000}
   .card{border:.5pt solid #000;border-radius:0;padding:3mm 4mm}
   .demo{border:1.5pt solid #000;color:#000;
     background-image:repeating-linear-gradient(135deg,transparent 0 10px,
@@ -371,8 +557,57 @@ tr[data-tone="failed"]{box-shadow:inset 3px 0 0 var(--ink-3)}
   thead{display:table-header-group}
   tr,.fact,.srow,.frow{break-inside:avoid;page-break-inside:avoid}
   section.card > h2,.card > h1{break-after:avoid;page-break-after:avoid}
-  .hero,.demo,.coverage,.strip{break-inside:avoid;page-break-inside:avoid}
-  tbody tr:hover{background:none}
+  .hero,.demo,.coverage,.feebar,.crow{break-inside:avoid;page-break-inside:avoid}
+  tbody tr:hover{background-color:transparent}
+  /* ---- очередь на бумаге ----
+     Всё, что на экране держалось на цвете, здесь держится на форме: сегмент
+     полосы — заливкой, штриховкой или пустотой; кромка строки — сплошной или
+     рваной; ни одна из этих разниц не исчезает на чёрно-белом принтере. */
+  .hero.queue h1{color:#000}
+  .answer b{color:#000} .answer .of{color:#1a1a1a}
+  .saved{border-top:.5pt solid #000}
+  .saved .lbl,.saved b{color:#000!important}
+  .saved small{color:#333}
+  .feebar .bar{border:.5pt solid #000;background:#fff}
+  .feebar .bar.open{border-right:1.5pt dashed #000}
+  .feebar .seg.pay{background:#000!important}
+  .feebar .seg.hold{background-image:repeating-linear-gradient(135deg,
+    #000 0 2px,#fff 2px 5px)!important;background-color:#fff!important}
+  .feebar .seg.save{background:#fff!important;box-shadow:inset 0 0 0 .5pt #000}
+  .feebar .key,.feebar .key b,.feebar .key .rows,.feebar .tail,.feenone{color:#000}
+  .feebar .key i{border:.5pt solid #000}
+  .feebar .key.pay i{background:#000} .feebar .key.save i{background:#fff}
+  .feebar .key.hold i{background-image:repeating-linear-gradient(135deg,
+    #000 0 2px,#fff 2px 4px)}
+  .running{border:1pt solid #000;background:#fff!important;color:#000}
+  .meter.live i{animation:none;background-image:none}
+  .crow .track{border:.5pt solid #000}
+  .crow.full .track i{background:#000}
+  .crow.pending .track i{background:#fff}
+  .crow b{color:#000!important}
+  /* Кромка строки печатается: без неё лист теряет и вердикт, и полноту. */
+  #queue tbody tr[data-tone]{background-size:2pt 100%}
+  /* Свои доли колонок: на листе обоснование получает почти половину ширины.
+     Автоматическая раскладка отдавала его двум словам в строку и растягивала
+     восемьсот строк вдвое больше листов, чем нужно. */
+  #queue table{table-layout:fixed;font-size:8pt}
+  #queue th{white-space:normal}
+  #queue th:nth-child(1){width:15%} #queue th:nth-child(2){width:17%}
+  #queue th:nth-child(3){width:12%} #queue th:nth-child(4){width:11%}
+  #queue th:nth-child(5){width:8%}  #queue th:nth-child(6){width:37%}
+  /* Разрядка чипа съедала полколонки: на бумаге его читают не издалека. */
+  #queue td:first-child .tag{font-size:6.5pt;letter-spacing:0;padding:1px 3px}
+  #queue .plate,#queue button.copy{font-size:7.5pt;padding:0 3px}
+  tr[data-group] td{background:#fff;border-bottom:1pt solid #000}
+  .ghead{color:#000;padding:1.5mm 2mm}
+  tbody tr.total td{background:#fff;border-top:1pt solid #000}
+  .score b,.score small{color:#000}
+  .score .track{border:.5pt solid #000}
+  .score .track i{background:#000}
+  /* Обрезанное обоснование на бумаге раскрывается целиком: строка, потерянная
+     на листе, — потерянный факт. Это тот же принцип, что и с details. */
+  .why{-webkit-line-clamp:unset!important;line-clamp:unset!important;
+    display:block!important;overflow:visible!important}
   /* Свёрнутое раскрывается: скрытая на бумаге строка — это потерянный факт. */
   details{display:block} details summary{display:none}
   /* Внешние ссылки печатаются текстом. Адрес самой страницы сюда не попадает:
