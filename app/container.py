@@ -15,6 +15,7 @@ from app.services.access import AccessService
 from app.services.batch import BatchService
 from app.services.identity import IdentityMatcher
 from app.services.import_service import ImportService
+from app.services.query_card import QueryCardService
 from app.services.scoring import RecoveryScoreEngine
 from app.services.search import SearchService
 from app.services.share import ShareLinkService
@@ -36,6 +37,7 @@ class Container:
     share_service: ShareLinkService
     subject_store: SubjectStore
     access_service: AccessService
+    query_cards: QueryCardService
 
     async def dispose(self) -> None:
         await self.database.dispose()
@@ -69,4 +71,5 @@ def build_container(settings: Settings | None = None) -> Container:
         share_service=ShareLinkService(resolved, database),
         subject_store=SubjectStore(),
         access_service=AccessService(resolved, database),
+        query_cards=QueryCardService(database),
     )

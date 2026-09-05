@@ -105,7 +105,7 @@ async def test_start_survives_a_missing_banner(
     await feed(dispatcher, bot, message=make_message("/start"))
 
     assert sent.photos == []
-    assert sent.contains("Получите вердикт")
+    assert sent.contains("получите вердикт")
     assert sent.markups[0] is not None
 
 
@@ -124,7 +124,7 @@ async def test_start_survives_a_telegram_refusal(
 
     await feed(dispatcher, bot, message=make_message("/start"))
 
-    assert sent.contains("Получите вердикт")
+    assert sent.contains("получите вердикт")
 
 
 # ---------------------------------------------------------------- приветствие
@@ -274,20 +274,27 @@ async def test_new_search_button_is_not_a_dead_end(
     assert sent.callback_answers
 
 
-async def test_new_search_button_clears_a_half_finished_dialog(
+async def test_new_search_button_leaves_the_card_alone(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
+    """«Новая проверка» возвращает в меню, но собранного должника не стирает.
+
+    Карточку очищает только её собственная кнопка: потерять наполовину
+    введённого человека от нажатия на меню — это ровно та потеря ввода, ради
+    прекращения которой карточка и заведена.
+
+    Человек взят заведомо не из выгрузки. В выгрузке бот его опознал бы и по
+    своему главному правилу пошёл бы готовить отчёт сам — а здесь проверяется
+    ровно обратное: строка, никого не опознавшая, денег не тратит.
+    """
     await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
     await feed(dispatcher, bot, callback_query=make_callback("menu:back"))
     sent.texts.clear()
 
-    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(dispatcher, bot, message=make_message("Неизвестнов Пётр Петрович"))
 
-    # Состояние сброшено: брошенный шаг ввода ФИО строку не подхватывает.
-    # Проверка при этом идёт — свободный ввод и есть запрос, — но как новый,
-    # с эхом разбора, а не как продолжение прерванного диалога.
-    assert not sent.contains("Дата рождения в формате")
-    assert sent.contains("Принял")
+    assert sent.contains("Фамилия: Неизвестнов")
+    assert not sent.contains("RECOVERY SCORE")
 
 
 def test_report_button_and_handler_share_one_payload() -> None:

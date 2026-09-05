@@ -148,6 +148,10 @@ class PassportInnProvider(InnBridgeProvider):
         """
         return self._settings.newdb_configured and self._settings.inn_bridge_enabled
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        """Мост требует все три поля: паспорт, ФИО и дату рождения."""
+        return missing_bridge_fields(subject)
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         missing = missing_bridge_input(subject)
         if missing is not None:

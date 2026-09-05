@@ -26,11 +26,10 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.bot.keyboards import CANCEL_CALLBACK, REFRESH_PREFIX
+from app.bot.keyboards import REFRESH_PREFIX
 from app.domain.enums import SearchType
 from app.domain.identity import PASSPORT_LENGTH, SearchSubject
 from app.providers.identity_bridge import InnBridgeProvider
-from app.providers.newdb import individual_inn
 
 #: ``padd:<поле>:<токен субъекта>``. Двадцать семь байт при лимите Telegram в 64.
 PERSON_ADD_PREFIX = "padd"
@@ -40,14 +39,6 @@ FIELD_BIRTH_DATE = "birth_date"
 FIELD_INN = "inn"
 FIELD_PASSPORT = "passport"
 FIELD_REGION = "region"
-
-#: «Проверить без даты рождения» — единственный способ уйти с вопроса про дату
-#: вперёд, а не назад.
-RUN_WITHOUT_DATE = "pskip:birth_date"
-
-#: Ответы на вопрос «паспорт или телефон» про десять цифр с девятки.
-TEN_AS_PASSPORT = "pten:passport"
-TEN_AS_PHONE = "pten:phone"
 
 #: Паспорт-заглушка, которым проверяется «а если бы паспорт был?». Наружу не
 #: уходит никогда: :meth:`will_query` — чистая функция от полей субъекта.
@@ -99,18 +90,25 @@ def report_keyboard(
 def _offers(
     subject: SearchSubject, bridge: InnBridgeProvider | None, *, token: str
 ) -> list[list[InlineKeyboardButton]]:
-    rows: list[list[InlineKeyboardButton]] = []
-    if subject.search_type != SearchType.PERSON.value:
-        return rows
+    """Что предложить под отчётом сверх того, что уже предлагает карточка.
 
-    if subject.birth_date is None and subject.name is not None:
-        rows.append([_add(FIELD_BIRTH_DATE, token, "📅 Добавить дату рождения — ФССП и залоги")])
-    if individual_inn(subject) is None:
-        rows.append([_add(FIELD_INN, token, "➕ Добавить ИНН — банкротство, ИП, арбитраж")])
-    if passport_would_help(subject, bridge):
-        rows.append([_add(FIELD_PASSPORT, token, "🪪 Узнать ИНН по паспорту — платный запрос")])
-    rows.append([_add(FIELD_REGION, token, "📍 Сузить до одного региона (сейчас — все)")])
-    return rows
+    Предложений осталось одно, и это сокращение — суть правки. Добор ИНН, даты
+    рождения и паспорта переехал в карточку запроса, которая теперь стоит
+    сразу под отчётом: два ряда кнопок про одно и то же, один под другим, —
+    это ровно та «сложновато», от которой карточку и заводили.
+
+    Регион остаётся здесь, потому что он единственный относится к УЖЕ
+    полученному отчёту, а не к тому, что собирают: сузить область поиска можно
+    только после того, как увидел, сколько нашлось по всем.
+
+    Старые кнопки ``padd:*`` под отчётами, отправленными до карточки,
+    продолжают работать — обработчик их не удалён, он вливает субъект в
+    карточку. Кнопка живёт в чате бесконечно, и молчащая кнопка хуже
+    отсутствующей.
+    """
+    if subject.search_type != SearchType.PERSON.value:
+        return []
+    return [[_add(FIELD_REGION, token, "📍 Сузить до одного региона (сейчас — все)")]]
 
 
 def passport_would_help(subject: SearchSubject, bridge: InnBridgeProvider | None) -> bool:
@@ -126,41 +124,6 @@ def passport_would_help(subject: SearchSubject, bridge: InnBridgeProvider | None
     return bridge.will_query(subject.model_copy(update={"passport": _PROBE_PASSPORT}))
 
 
-def add_keyboard() -> InlineKeyboardMarkup:
-    """Под уточняющим вопросом — только отмена. Пропуска здесь нет: оператор уже
-    получил отчёт и пришёл сюда сам."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data=CANCEL_CALLBACK)]]
-    )
-
-
-def bad_date_keyboard() -> InlineKeyboardMarkup:
-    """Дата не разобралась. Уйти вперёд можно, но названной ценой."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Проверить без даты рождения", callback_data=RUN_WITHOUT_DATE
-                )
-            ],
-            [InlineKeyboardButton(text="Отмена", callback_data=CANCEL_CALLBACK)],
-        ]
-    )
-
-
-def ten_digits_keyboard() -> InlineKeyboardMarkup:
-    """Десять цифр с девятки — паспорт или телефон. Гадать нельзя."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🪪 Паспорт", callback_data=TEN_AS_PASSPORT),
-                InlineKeyboardButton(text="📞 Телефон", callback_data=TEN_AS_PHONE),
-            ],
-            [InlineKeyboardButton(text="Отмена", callback_data=CANCEL_CALLBACK)],
-        ]
-    )
-
-
 def _add(field: str, token: str, text: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=f"{PERSON_ADD_PREFIX}:{field}:{token}")
 
@@ -171,12 +134,6 @@ __all__ = [
     "FIELD_PASSPORT",
     "FIELD_REGION",
     "PERSON_ADD_PREFIX",
-    "RUN_WITHOUT_DATE",
-    "TEN_AS_PASSPORT",
-    "TEN_AS_PHONE",
-    "add_keyboard",
-    "bad_date_keyboard",
     "passport_would_help",
     "report_keyboard",
-    "ten_digits_keyboard",
 ]

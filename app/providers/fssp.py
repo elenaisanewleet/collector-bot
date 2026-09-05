@@ -70,6 +70,16 @@ _DEBT_HEAD_RE = re.compile(r"\s*Сумма долга\s*:")
 _PROCEEDING_TAIL_RE = re.compile(r"\s+от\s+\d{2}\.\d{2}\.\d{4}.*$")
 
 
+#: Текст под каждое недостающее поле. Ровно один источник правды на пару
+#: «поле — фраза»: раньше их было две, и они разъезжались при правке.
+_GAP_TEXTS: dict[MissingInput, str] = {
+    MissingInput.NAME: "Для поиска в ФССП нужно ФИО",
+    MissingInput.BIRTH_DATE: (
+        "Для поиска в ФССП нужна дата рождения — источник требует её обязательно"
+    ),
+}
+
+
 class FSSPProvider(BaseProvider):
     """Enforcement proceedings for an individual, via NewDB."""
 
@@ -84,18 +94,29 @@ class FSSPProvider(BaseProvider):
     def is_configured(self) -> bool:
         return self._settings.fssp_configured
 
-    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        """ФИО **и** дата рождения — оба обязательны, NewDB требует dob.
+
+        Зовётся из :meth:`_fetch`, а не повторяет его: гейт и предикат обязаны
+        быть одним куском кода, иначе карточка пообещает источник, который
+        откажется отвечать.
+        """
         if subject.name is None:
-            return self.insufficient_query(
-                "Для поиска в ФССП нужно ФИО", missing=(MissingInput.NAME,)
-            )
+            return (MissingInput.NAME,)
         if subject.birth_date is None:
-            # NewDB requires dob. Saying so is honest; querying without it and
-            # reporting the rejection as "ничего не найдено" would not be.
-            return self.insufficient_query(
-                "Для поиска в ФССП нужна дата рождения — источник требует её обязательно",
-                missing=(MissingInput.BIRTH_DATE,),
-            )
+            return (MissingInput.BIRTH_DATE,)
+        return ()
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        missing = self.missing_input_for(subject)
+        if missing:
+            # Querying without dob and reporting the rejection as "ничего не
+            # найдено" would not be honest; saying what is missing is.
+            return self.insufficient_query(_GAP_TEXTS[missing[0]], missing=missing)
+        # Пустой ``missing`` и есть доказательство, что оба поля на месте:
+        # лестница проверок одна, и второй раз её здесь не переписывают.
+        assert subject.name is not None
+        assert subject.birth_date is not None
 
         base = person_params(
             last_name=subject.name.last_name,

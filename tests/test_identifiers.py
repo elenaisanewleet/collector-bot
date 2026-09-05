@@ -77,7 +77,7 @@ def test_inn_alone_is_a_valid_query_not_a_missing_name() -> None:
     assert parsed.inn == "770912345601"
     assert parsed.name is None
     assert parsed.name_error is None
-    assert parsed.has_subject
+    assert parsed.runnable
 
 
 def test_bare_inn_without_a_label() -> None:
@@ -90,7 +90,7 @@ def test_name_alone() -> None:
     assert parsed.name is not None
     assert parsed.name.full == "Сидоров Сидор Сидорович"
     assert parsed.inn is None
-    assert parsed.has_subject
+    assert parsed.runnable
 
 
 # ---------------------------------------------------------------- метки и группы
@@ -253,7 +253,7 @@ def test_an_unparseable_name_is_reported_not_raised() -> None:
 def test_garbage_never_raises(raw: str | None) -> None:
     parsed = parse_query(raw)
 
-    assert not parsed.has_subject
+    assert not parsed.runnable
     assert parsed.birth_date is None
     assert parsed.ambiguity is None
 
@@ -296,3 +296,85 @@ def test_the_parser_does_not_import_the_provider_layer() -> None:
     source = inspect.getsource(identifiers)
     assert "app.providers" not in source
     assert "app.container" not in source
+
+
+# ---------------------------------------------------------------- дата пробелами
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["24.11.1994", "24111994", "24-11-1994", "1994-11-24", "24 11 1994"],
+)
+def test_every_accepted_date_form_gives_the_same_day(token: str) -> None:
+    """«24 11 1994» — дословный пример владелицы, и он читался тремя оговорками.
+
+    Пробел :data:`_DATE_SHAPE` не ловит: три числа приезжают тремя токенами и до
+    разбора дат не доходят вовсе. Остальные четыре формы работали и раньше и
+    стоят здесь, чтобы починка не развела их между собой.
+    """
+    assert parse_query(token).birth_date == date(1994, 11, 24)
+
+
+def test_a_two_digit_year_is_not_a_date_and_the_century_is_not_guessed() -> None:
+    """Ошибка в веке стоит пустого ответа ФССП, который читается как «чисто»."""
+    assert parse_query("24 11 94").birth_date is None
+    fragment = identifiers.classify_fragment("24 11 94")
+    assert fragment.kind is identifiers.FragmentKind.BAD_DATE
+    assert "век угадывать не буду" in fragment.reason
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["4515 38 4710", "770912345601 12 34"],
+    ids=["паспорт разбит на три группы", "ИНН и хвост"],
+)
+def test_the_spaced_date_branch_does_not_eat_other_numbers(line: str) -> None:
+    """Условие по форме групп — единственное, что отделяет дату от чужих цифр."""
+    assert parse_query(line).birth_date is None
+
+
+# ---------------------------------------------------------------- фрагменты
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("Клочкова Елена Николаевна", identifiers.FragmentKind.FIO),
+        ("Клочкова", identifiers.FragmentKind.NAME_WORD),
+        ("asdf", identifiers.FragmentKind.UNKNOWN),
+        ("770912345601", identifiers.FragmentKind.INN12),
+        ("инн 7709123456", identifiers.FragmentKind.INN10),
+        ("9160000000", identifiers.FragmentKind.AMBIGUOUS_TEN),
+        ("(916) 000-00-00", identifiers.FragmentKind.PHONE),
+        ("4515 384710", identifiers.FragmentKind.PASSPORT),
+        ("О123АА777", identifiers.FragmentKind.PLATE),
+        ("XW8ZZZ61ZKG011111", identifiers.FragmentKind.VIN),
+        ("15.13.1985", identifiers.FragmentKind.BAD_DATE),
+        ("   ", identifiers.FragmentKind.EMPTY),
+    ],
+)
+def test_a_fragment_is_classified_by_its_shape(text: str, kind: identifiers.FragmentKind) -> None:
+    assert identifiers.classify_fragment(text).kind is kind
+
+
+def test_a_latin_word_is_garbage_while_a_russian_one_is_a_name() -> None:
+    """Оба проходят алфавит имени — и без кириллицы «asdf» уехало бы в фамилию.
+
+    Когда поле названо кнопкой, требование снимается: там оператор уже сказал,
+    что это имя, и спорить не с чем.
+    """
+    assert identifiers.classify_fragment("asdf").kind is identifiers.FragmentKind.UNKNOWN
+    asked = identifiers.classify_fragment("asdf", expect=identifiers.Field.FIO)
+    assert asked.kind is identifiers.FragmentKind.NAME_WORD
+
+
+def test_a_named_field_refuses_a_wrong_shape_instead_of_moving_it() -> None:
+    fragment = identifiers.classify_fragment("Клочкова", expect=identifiers.Field.INN)
+    assert fragment.kind is identifiers.FragmentKind.UNKNOWN
+    assert "12 цифр" in fragment.reason
+
+
+def test_a_phone_alone_is_not_something_to_run_a_check_on() -> None:
+    """Ни один внешний реестр по телефону не ищет — платить за него нечем."""
+    assert not parse_query("+79161234567").runnable
+    assert parse_query("Иванов Иван 01.01.1985").runnable

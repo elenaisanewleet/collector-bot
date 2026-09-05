@@ -108,7 +108,11 @@ def button_texts(markup: object) -> list[str]:
 def test_a_complete_subject_keeps_the_keyboard_as_short_as_before(
     bridge_settings: Settings, subject: SearchSubject
 ) -> None:
-    """ФИО, дата и ИНН — предлагать нечего, кроме региона, ссылки и повтора."""
+    """ФИО, дата и ИНН — предлагать нечего, кроме региона, ссылки и повтора.
+
+    Добор полей переехал в карточку запроса, которая стоит сразу под отчётом.
+    Второй ряд кнопок про то же самое здесь был бы не помощью, а шумом.
+    """
     complete = subject.model_copy(update={"inn": "770912345601"})
     markup = report_keyboard(
         url="https://reports.example.test/r/x",
@@ -126,11 +130,11 @@ def test_a_complete_subject_keeps_the_keyboard_as_short_as_before(
 def test_the_export_row_rides_along_with_the_link(
     bridge_settings: Settings, subject: SearchSubject
 ) -> None:
-    """Выгрузка живёт в той же клавиатуре, что и предложения добрать данные.
+    """Выгрузка живёт в той же клавиатуре, что ссылка и сужение по региону.
 
     Клавиатур под карточкой ровно одна: пока их было две, «Полный отчёт» и
-    «➕ Добавить ИНН» показывались взаимоисключающе, и оператор терял то одно,
-    то другое.
+    предложения показывались взаимоисключающе, и оператор терял то одно, то
+    другое.
     """
     markup = report_keyboard(
         url="https://reports.example.test/r/x",
@@ -144,13 +148,13 @@ def test_the_export_row_rides_along_with_the_link(
     texts = button_texts(markup)
     assert "🖨 PDF / печать" in texts
     assert "⬇️ Текстом" in texts
-    assert any(text.startswith("➕") for text in texts)
+    assert any(text.startswith("📍") for text in texts)
 
 
 def test_without_a_link_there_is_nothing_to_export(
     bridge_settings: Settings, subject: SearchSubject
 ) -> None:
-    """Деплой без веба: кнопок выгрузки нет, предложения добрать данные есть."""
+    """Деплой без веба: кнопок выгрузки нет, сужение по региону есть."""
     markup = report_keyboard(
         url=None,
         refresh_token="tok",
@@ -160,7 +164,7 @@ def test_without_a_link_there_is_nothing_to_export(
 
     texts = button_texts(markup)
     assert not any(text.startswith(("🖨", "⬇️", "📄")) for text in texts)
-    assert any(text.startswith("➕") for text in texts)
+    assert any(text.startswith("📍") for text in texts)
 
 
 def test_offers_never_appear_for_a_vehicle_search(bridge_settings: Settings) -> None:

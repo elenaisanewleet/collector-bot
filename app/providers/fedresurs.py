@@ -108,14 +108,18 @@ class FedresursProvider(BaseProvider):
             )
         return self._client
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        return () if (subject.name is not None or subject.inn) else (MissingInput.NAME,)
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if self._settings.fedresurs_backend is not FedresursBackend.GENERIC_JSON:
             # DEMO is served by the mock provider in the registry; reaching here
             # with any other backend means the wiring is incomplete.
             return self.not_configured("Бэкенд ЕФРСБ не настроен")
-        if subject.name is None and not subject.inn:
+        missing = self.missing_input_for(subject)
+        if missing:
             return self.insufficient_query(
-                "Для проверки банкротства нужно ФИО или ИНН", missing=(MissingInput.NAME,)
+                "Для проверки банкротства нужно ФИО или ИНН", missing=missing
             )
 
         params: dict[str, Any] = {}
@@ -199,13 +203,16 @@ class NewDBBankruptcyProvider(NewDBMethodProvider):
     title = "ЕФРСБ"
     methods = (NEWDB_METHOD,)
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        return () if individual_inn(subject) else (MissingInput.INN,)
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         inn = individual_inn(subject)
         if inn is None:
             return self.insufficient_query(
                 "Для проверки банкротства нужен ИНН физлица (12 цифр) — "
                 "источник ищет только по нему",
-                missing=(MissingInput.INN,),
+                missing=self.missing_input_for(subject),
             )
 
         records, raw = await self.rows_for(NEWDB_METHOD, inn_params(inn))

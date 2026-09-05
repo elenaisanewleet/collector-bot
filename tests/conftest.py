@@ -41,6 +41,7 @@ from app.providers.registry import (
 from app.services.access import AccessService
 from app.services.batch import BatchService
 from app.services.import_service import ImportService
+from app.services.query_card import QueryCardService
 from app.services.scoring import RecoveryScoreEngine
 from app.services.search import SearchService
 from app.services.share import ShareLinkService
@@ -109,6 +110,7 @@ async def container(settings: Settings, database: Database) -> AsyncIterator[Con
         share_service=ShareLinkService(settings, database),
         subject_store=SubjectStore(),
         access_service=AccessService(settings, database),
+        query_cards=QueryCardService(database),
     )
     yield instance
 

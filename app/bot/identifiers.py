@@ -46,6 +46,8 @@ from app.domain.identity import (
     PHONE_LENGTH,
     NameParseError,
     PersonName,
+    capitalize_name,
+    is_name_word,
     normalize_phone,
     normalize_plate,
     normalize_vin,
@@ -118,9 +120,23 @@ class ParsedQuery:
     leftover: tuple[str, ...] = ()
 
     @property
-    def has_subject(self) -> bool:
-        """Есть ли вообще по чему запускать проверку."""
-        return any((self.name, self.inn, self.passport, self.phone, self.plate, self.vin))
+    def runnable(self) -> bool:
+        """Есть ли вообще по чему запускать проверку.
+
+        Заменяет прежний ``has_subject``, и разница в двух полях, каждое из
+        которых там было ошибкой.
+
+        **Телефона здесь нет.** Ни один внешний реестр по телефону не ищет:
+        он находит запись в нашей собственной базе и укрепляет сопоставление,
+        не более. Прежний ``has_subject`` считал одинокий ``+79161234567``
+        достаточным поводом для полного платного прогона, и оператор получал
+        шапку ``👤 —`` и пять строк «нужно ФИО» за деньги.
+
+        **Паспорта здесь тоже нет.** Сам по себе он не открывает ничего: мост
+        ``passport_fns`` требует ещё ФИО и дату рождения и без них отвечает
+        ``insufficient_query``, не сделав ни одного вызова.
+        """
+        return any((self.name, self.inn, self.plate, self.vin))
 
     def problem(self, kind: ProblemKind) -> Problem | None:
         return next((item for item in self.problems if item.kind is kind), None)
@@ -167,6 +183,19 @@ _PHONE_GROUPINGS: frozenset[tuple[int, ...]] = frozenset(
 
 #: Разбивка десяти цифр, однозначно читающаяся паспортом: серия и номер.
 _PASSPORT_GROUPING: tuple[int, ...] = (4, 6)
+
+#: Разбивки трёх числовых токенов, читающиеся датой: «24 11 1994», «1 5 1980».
+#:
+#: Условие по форме групп обязательно. Без него склейка трёх любых чисел
+#: пробовалась бы как дата и съедала бы чужие числа — «4515 38 4710» стало бы
+#: датой вместо паспорта. Год только четырёхзначный: двузначный век мы не
+#: угадываем (см. :func:`describe_bad_date`).
+_DATE_RUN_SHAPES: frozenset[tuple[int, ...]] = frozenset(
+    {(2, 2, 4), (1, 2, 4), (2, 1, 4), (1, 1, 4)}
+)
+
+#: День, месяц, год — ровно три группы, не две и не четыре.
+_DATE_RUN_TOKENS = 3
 
 
 class _Label(StrEnum):
@@ -435,6 +464,8 @@ def _take_run(
         return
     if _take_ten_from_nine(run, joined, shown, draft, ten_digits_as=ten_digits_as):
         return
+    if _take_spaced_date(run, draft):
+        return
     if len(run) > 1:
         # Склейка ни на что не похожа — значит это несколько идентификаторов
         # подряд, а не одно длинное число.
@@ -452,6 +483,33 @@ def _take_run(
             ),
         )
     )
+
+
+def _take_spaced_date(run: list[_Item], draft: _Draft) -> bool:
+    """«24 11 1994» — дата, набранная пробелами.
+
+    Дословный пример владелицы, и до этой ветки он давал три оговорки
+    «не похоже ни на ИНН, ни на паспорт, ни на телефон» подряд. Точку и дефис
+    :data:`_DATE_SHAPE` ловит целым словом, пробел — нет: три числа приезжают
+    тремя токенами и до разбора дат не доходят вовсе.
+
+    Условий три, и каждое сужает ветку до безопасной. Ровно три группы цифр —
+    иначе «01 01 1985 770912345601» читалось бы как одна длинная дата. Форма
+    групп из :data:`_DATE_RUN_SHAPES` — иначе паспорт «4515 38 4710» стал бы
+    датой. Дата рождения ещё не занята — первая разобравшаяся дата остаётся
+    главной, как и в :func:`_take_dates`.
+    """
+    if draft.birth_date is not None or len(run) != _DATE_RUN_TOKENS:
+        return False
+    shape = tuple(len(item.digits) for item in run)
+    if shape not in _DATE_RUN_SHAPES:
+        return False
+    day, month, year = (item.digits for item in run)
+    parsed = parse_date(f"{int(day):02d}.{int(month):02d}.{year}")
+    if parsed is None:
+        return False
+    draft.birth_date = parsed
+    return True
 
 
 def _assign(digits: str, draft: _Draft) -> bool:
@@ -558,12 +616,454 @@ def _take_name(stream: list[_Item]) -> tuple[PersonName | None, str | None, tupl
         return None, str(exc), tuple(words)
 
 
+# ---------------------------------------------------------------- фрагмент
+#
+# Всё, что выше, разбирает СТРОКУ — законченное описание должника. Ниже —
+# разбор ФРАГМЕНТА: одного присланного сообщения, которое дописывается в уже
+# существующую карточку. Разница не в алгоритме, а в вопросе. Строка отвечает
+# на «кого проверяем», фрагмент — на «что это за одно значение и в какое поле
+# оно ложится», и у фрагмента есть подсказка: поле, кнопку которого нажали.
+
+
+class FragmentKind(StrEnum):
+    """Чем оказался присланный кусок."""
+
+    DATE = "date"
+    PHONE = "phone"
+    #: ИНН физлица, двенадцать цифр. Единственный, который годится источникам.
+    INN12 = "inn12"
+    #: Десять цифр под меткой «ИНН» — организация, человека по нему не ищут.
+    INN10 = "inn10"
+    PASSPORT = "passport"
+    #: Десять цифр с девятки слитно: паспорт или телефон, решить нельзя.
+    AMBIGUOUS_TEN = "ambiguous_ten"
+    PLATE = "plate"
+    VIN = "vin"
+    #: Фамилия, имя и (иногда) отчество разом — разобрал :func:`parse_fio`.
+    FIO = "fio"
+    #: Одно слово буквами. В какое поле оно ложится, решает карточка.
+    NAME_WORD = "name_word"
+    #: Несколько слов буквами в ответ на вопрос про КОНКРЕТНЫЙ слот имени.
+    #: «Елена Николаевна» на вопрос «Имя» — это имя с отчеством, а на вопрос
+    #: «Фамилия» — фамилия с именем. Разложить их может только тот, кто знает
+    #: вопрос, поэтому слова едут в карточку списком, а не разобранным ФИО.
+    NAME_PARTS = "name_parts"
+    #: Номер договора или адрес — то, что ищется только в нашей выгрузке.
+    TEXT = "text"
+    #: Похоже на дату, но датой не является.
+    BAD_DATE = "bad_date"
+    #: Прислали, но не разобрали.
+    UNKNOWN = "unknown"
+    #: Не прислали ничего — пробелы.
+    EMPTY = "empty"
+
+
+class Field(StrEnum):
+    """Поле карточки, которое ждут после нажатия кнопки.
+
+    Значения короткие и ASCII: они уезжают и в ``callback_data`` (лимит 64
+    байта), и в колонку ``query_cards.awaiting_field``.
+    """
+
+    FIO = "fio"
+    BIRTH_DATE = "birth_date"
+    INN = "inn"
+    PHONE = "phone"
+    PASSPORT = "passport"
+    #: Госномер или VIN одной кнопкой: оператор не обязан знать, чем они
+    #: отличаются, а форма записи различает их сама.
+    AUTO = "auto"
+    #: Фамилия и имя по отдельности. Нужны ведомому сценарию, который спрашивает
+    #: их разными шагами: «Елена Николаевна» в ответ на «Имя» — это имя с
+    #: отчеством, а тот же текст в ответ на «Фамилия» — фамилия с именем.
+    #: :data:`FIO` эту разницу передать не может, он про все три слота разом.
+    LAST_NAME = "last"
+    FIRST_NAME = "first"
+    #: Отчество отдельной кнопкой: в основные шаги оно не входит («это опция»),
+    #: но однофамильцев различает лучше всего.
+    MIDDLE_NAME = "middle"
+    #: Номер договора и адрес. Ни один внешний реестр по ним не ищет — они
+    #: поднимают строку из выгрузки 1С, то есть работают на главный источник.
+    CONTRACT = "contract"
+    ADDRESS = "address"
+
+
+@dataclass(frozen=True, slots=True)
+class Fragment:
+    """Разобранный кусок сообщения.
+
+    Значение лежит в поле своего типа, а не в общем ``value: Any``: карточка
+    кладёт его в колонку, у колонки есть тип, и «строка, которая иногда дата»
+    развалилась бы на первом же ``mypy``.
+    """
+
+    kind: FragmentKind
+    #: То, что прислал человек, — обрезанное до :data:`ECHO_LIMIT`.
+    shown: str = ""
+    date: date | None = None
+    digits: str = ""
+    phone: str | None = None
+    name: PersonName | None = None
+    word: str = ""
+    #: Слова имени по порядку — для :attr:`FragmentKind.NAME_PARTS`.
+    words: tuple[str, ...] = ()
+    #: Значение поля, которое хранится как есть: номер договора, адрес.
+    text: str = ""
+    plate: str | None = None
+    vin: str | None = None
+    #: Почему не разобрали. Готовая фраза, как у :class:`Problem`.
+    reason: str = ""
+
+
+#: Сколько символов чужого ввода бот повторяет обратно. Оператор способен
+#: вставить в чат весь абзац из 1С, а лимит сообщения Telegram — 4096.
+ECHO_LIMIT = 32
+
+#: Слово из русских букв. Латиница сюда не входит намеренно: «asdf» проходит
+#: :data:`app.domain.identity._NAME_ALLOWED` и без этого условия молча уехало
+#: бы в фамилию.
+_CYRILLIC_WORD = re.compile(r"^[а-яё]+(?:-[а-яё]+)*$", re.IGNORECASE)
+
+#: Окончания отчеств. При пустых слотах слово с таким хвостом — отчество, а не
+#: фамилия: «Николаевна» в графе «Фамилия» это заметная глазом ошибка.
+_PATRONYMIC_SUFFIXES = ("овна", "евна", "ична", "инична", "ович", "евич", "ьич")
+
+
+def echo(text: str) -> str:
+    """Чужой ввод, безопасный для повторения в сообщении."""
+    collapsed = " ".join((text or "").split())
+    if len(collapsed) <= ECHO_LIMIT:
+        return collapsed
+    return collapsed[:ECHO_LIMIT] + "…"
+
+
+def looks_like_patronymic(word: str) -> bool:
+    return word.casefold().endswith(_PATRONYMIC_SUFFIXES)
+
+
+def looks_like_russian_name(word: str) -> bool:
+    """Русское слово, которое можно молча положить в слот ФИО.
+
+    Требование кириллицы здесь не про язык, а про разницу между «Клочкова» и
+    «asdf»: оба состоят из букв, оба проходят алфавит
+    :func:`app.domain.identity.is_name_word`, и без этого условия мусор молча
+    уезжал бы в фамилию. Там, где поле названо кнопкой, требование снимается —
+    оператор уже сказал, что это имя, и спорить не с чем.
+    """
+    return bool(_CYRILLIC_WORD.match(word))
+
+
+def classify_fragment(text: str | None, *, expect: Field | None = None) -> Fragment:
+    """Чем является одно присланное сообщение.
+
+    ``expect`` — поле, кнопку которого нажали. Когда оно задано, гадать не
+    нужно и нельзя: «Клочкова» в ответ на «+ ИНН» — это не фамилия, которую
+    надо тихо положить в другое поле, а ошибка, о которой надо сказать. Когда
+    оно не задано, форма записи решает сама, а неразрешимое (десять цифр с
+    девятки) приезжает :attr:`FragmentKind.AMBIGUOUS_TEN` и стоит одного
+    вопроса.
+
+    Никогда не бросает — по той же причине, что и :func:`parse_query`.
+    """
+    shown = echo(text or "")
+    if not (text or "").strip():
+        return Fragment(kind=FragmentKind.EMPTY)
+    if expect is not None:
+        return _expected(text or "", shown, expect)
+    return _guessed(text or "", shown)
+
+
+def _expected(text: str, shown: str, expect: Field) -> Fragment:
+    """Прочитать текст как названное поле. Ответ «не оно» — тоже ответ."""
+    match expect:
+        case Field.BIRTH_DATE:
+            return _as_date(text, shown)
+        case Field.INN:
+            return _as_inn(text, shown)
+        case Field.PHONE:
+            return _as_phone(text, shown)
+        case Field.PASSPORT:
+            return _as_passport(text, shown)
+        case Field.AUTO:
+            return _as_auto(text, shown)
+        case Field.FIO:
+            return _as_name(text, shown)
+        case Field.LAST_NAME | Field.FIRST_NAME | Field.MIDDLE_NAME:
+            return _as_name_parts(text, shown)
+        case Field.CONTRACT | Field.ADDRESS:
+            return Fragment(kind=FragmentKind.TEXT, shown=shown, text=" ".join(text.split()))
+
+
+def _as_date(text: str, shown: str) -> Fragment:
+    parsed = _any_date(text)
+    if parsed is not None:
+        return Fragment(kind=FragmentKind.DATE, shown=shown, date=parsed)
+    return Fragment(
+        kind=FragmentKind.BAD_DATE,
+        shown=shown,
+        reason=f"«{shown}» на дату не похоже — {describe_bad_date(text.strip())}.",
+    )
+
+
+def _any_date(text: str) -> date | None:
+    """Дата в любой принимаемой форме, включая набранную пробелами."""
+    stripped = _normalize(text)
+    direct = parse_date(stripped.rstrip("."))
+    if direct is not None:
+        return direct
+    draft = _Draft()
+    stream = [_classify_token(token) for token in stripped.split()]
+    if all(item.kind is _Kind.DIGITS for item in stream):
+        _take_spaced_date(stream, draft)
+    return draft.birth_date
+
+
+def _as_inn(text: str, shown: str) -> Fragment:
+    digits = _only_digits(text)
+    if len(digits) == INN_INDIVIDUAL_LENGTH:
+        return Fragment(kind=FragmentKind.INN12, shown=shown, digits=digits)
+    if len(digits) == INN_ENTITY_LENGTH:
+        return Fragment(kind=FragmentKind.INN10, shown=shown, digits=digits, reason=_ENTITY_INN)
+    return Fragment(
+        kind=FragmentKind.UNKNOWN,
+        shown=shown,
+        reason=f"«{shown}» — на ИНН физлица не похоже, нужны {INN_INDIVIDUAL_LENGTH} цифр.",
+    )
+
+
+def _as_phone(text: str, shown: str) -> Fragment:
+    phone = normalize_phone(text)
+    if phone is not None:
+        return Fragment(kind=FragmentKind.PHONE, shown=shown, phone=phone)
+    return Fragment(
+        kind=FragmentKind.UNKNOWN,
+        shown=shown,
+        reason=f"«{shown}» — на телефон не похоже. Пример: +7 916 000 00 00.",
+    )
+
+
+def _as_passport(text: str, shown: str) -> Fragment:
+    digits = _only_digits(text)
+    if len(digits) == PASSPORT_LENGTH:
+        return Fragment(kind=FragmentKind.PASSPORT, shown=shown, digits=digits)
+    return Fragment(
+        kind=FragmentKind.UNKNOWN,
+        shown=shown,
+        reason=f"Нужно ровно {PASSPORT_LENGTH} цифр — серия и номер.",
+    )
+
+
+def _as_auto(text: str, shown: str) -> Fragment:
+    vin = normalize_vin(text)
+    if vin is not None:
+        return Fragment(kind=FragmentKind.VIN, shown=shown, vin=vin)
+    plate = normalize_plate(text)
+    if plate is not None:
+        return Fragment(kind=FragmentKind.PLATE, shown=shown, plate=plate)
+    return Fragment(
+        kind=FragmentKind.UNKNOWN,
+        shown=shown,
+        reason=f"«{shown}» — не госномер и не VIN. Пример: О123АА777.",
+    )
+
+
+def _as_name(text: str, shown: str) -> Fragment:
+    """ФИО целиком или одно слово из него.
+
+    :func:`parse_fio` не ослабляется: неверное разбиение имени молча отравляет
+    всякое последующее сопоставление. Одно слово он законно отвергает — и это
+    ровно тот случай, ради которого заведён :attr:`FragmentKind.NAME_WORD`:
+    решение, в какой слот его положить, принимает карточка, у которой видно,
+    какие слоты пусты.
+    """
+    words = [word for word in _normalize(text).split() if word]
+    if len(words) == 1 and is_name_word(words[0]):
+        return Fragment(kind=FragmentKind.NAME_WORD, shown=shown, word=capitalize_name(words[0]))
+    try:
+        return Fragment(kind=FragmentKind.FIO, shown=shown, name=parse_fio(" ".join(words)))
+    except NameParseError as exc:
+        return Fragment(kind=FragmentKind.UNKNOWN, shown=shown, reason=str(exc))
+
+
+def _as_name_parts(text: str, shown: str) -> Fragment:
+    """Ответ на вопрос про один слот имени: «Фамилия», «Имя», «Отчество».
+
+    От :func:`_as_name` отличается тем, что НЕ зовёт :func:`parse_fio`, и это
+    принципиально. ``parse_fio`` раскладывает слова по своему порядку —
+    фамилия, имя, отчество, — а здесь порядок задан вопросом: «Елена
+    Николаевна» на шаге «Имя» это имя с отчеством, и разобрать её фамилией
+    значило бы переспросить оператора о том, на что он только что ответил.
+    Куда лягут слова, решает карточка, знающая вопрос; сюда приезжает список.
+    """
+    words = [word for word in _normalize(text).split() if word]
+    if not words:
+        return Fragment(kind=FragmentKind.EMPTY, shown=shown)
+    if not all(is_name_word(word) for word in words):
+        return Fragment(
+            kind=FragmentKind.UNKNOWN,
+            shown=shown,
+            reason=f"«{shown}» на часть имени не похоже — жду одно слово буквами.",
+        )
+    if len(words) > _NAME_SLOT_COUNT:
+        return Fragment(kind=FragmentKind.UNKNOWN, shown=shown, reason=TOO_MANY_NAME_WORDS)
+    capitalized = tuple(capitalize_name(word) for word in words)
+    if len(capitalized) == 1:
+        return Fragment(kind=FragmentKind.NAME_WORD, shown=shown, word=capitalized[0])
+    return Fragment(kind=FragmentKind.NAME_PARTS, shown=shown, words=capitalized)
+
+
+def _guessed(text: str, shown: str) -> Fragment:
+    """Кнопку не нажимали — решает форма записи.
+
+    Порядок веток тот же, что в :func:`parse_query`, и по тем же причинам;
+    сам разбор тоже его, чтобы два места не разъехались.
+    """
+    parsed = parse_query(text)
+    if parsed.ambiguity is not None:
+        return Fragment(
+            kind=FragmentKind.AMBIGUOUS_TEN,
+            shown=shown,
+            digits=_only_digits(parsed.ambiguity.token),
+        )
+    if parsed.birth_date is not None:
+        return Fragment(kind=FragmentKind.DATE, shown=shown, date=parsed.birth_date)
+    if parsed.inn is not None:
+        return Fragment(kind=FragmentKind.INN12, shown=shown, digits=parsed.inn)
+    if parsed.passport is not None:
+        return Fragment(kind=FragmentKind.PASSPORT, shown=shown, digits=parsed.passport)
+    if parsed.phone is not None:
+        return Fragment(kind=FragmentKind.PHONE, shown=shown, phone=parsed.phone)
+    if parsed.vin is not None:
+        return Fragment(kind=FragmentKind.VIN, shown=shown, vin=parsed.vin)
+    if parsed.plate is not None:
+        return Fragment(kind=FragmentKind.PLATE, shown=shown, plate=parsed.plate)
+    if parsed.name is not None:
+        return Fragment(kind=FragmentKind.FIO, shown=shown, name=parsed.name)
+
+    entity_inn = parsed.problem(ProblemKind.ENTITY_INN)
+    if entity_inn is not None:
+        return Fragment(
+            kind=FragmentKind.INN10,
+            shown=shown,
+            digits=_only_digits(entity_inn.token),
+            reason=_ENTITY_INN,
+        )
+    bad_date = parsed.problem(ProblemKind.BAD_DATE)
+    if bad_date is not None:
+        return Fragment(kind=FragmentKind.BAD_DATE, shown=shown, reason=f"{bad_date.text}.")
+    if _has_two_digit_year(text):
+        return Fragment(
+            kind=FragmentKind.BAD_DATE, shown=shown, reason=TWO_DIGIT_YEAR.format(shown)
+        )
+    return _guessed_word(parsed, shown)
+
+
+def _has_two_digit_year(text: str) -> bool:
+    """«24 11 94» — три группы цифр с коротким годом.
+
+    Век не угадываем: «94» это и 1994, и 2094 у ребёнка, и 1894 в архивной
+    выгрузке. Ошибка в веке стоит пустого ответа ФССП, который читается как
+    «производств нет», — цена вопроса несопоставима с ценой двух символов.
+    """
+    groups = [_only_digits(token) for token in _normalize(text).split()]
+    if len(groups) != _DATE_RUN_TOKENS or not all(groups):
+        return False
+    shape = tuple(len(group) for group in groups)
+    return shape[:2] in {(1, 1), (1, 2), (2, 1), (2, 2)} and shape[2] == _SHORT_YEAR_DIGITS
+
+
+def _guessed_word(parsed: ParsedQuery, shown: str) -> Fragment:
+    """Осталось буквами. Одно русское слово — часть имени, всё прочее — мусор.
+
+    Требование кириллицы здесь не про язык, а про разницу между «Клочкова» и
+    «asdf»: оба проходят :data:`app.domain.identity._NAME_ALLOWED`, оба
+    состоят из букв, и без этого условия мусор молча уезжал бы в фамилию.
+    Когда кнопку нажали, требование снимается (:func:`_as_name`) — там
+    оператор сказал, что это имя, и спорить не с чем.
+    """
+    words = list(parsed.leftover)
+    if len(words) == 1 and looks_like_russian_name(words[0]):
+        return Fragment(kind=FragmentKind.NAME_WORD, shown=shown, word=capitalize_name(words[0]))
+    if words and parsed.name_error and all(looks_like_russian_name(word) for word in words):
+        return Fragment(kind=FragmentKind.UNKNOWN, shown=shown, reason=parsed.name_error)
+    unknown_digits = parsed.problem(ProblemKind.UNKNOWN_DIGITS)
+    if unknown_digits is not None:
+        return Fragment(kind=FragmentKind.UNKNOWN, shown=shown, reason=unknown_digits.text)
+    return Fragment(kind=FragmentKind.UNKNOWN, shown=shown, reason=NOT_UNDERSTOOD.format(shown))
+
+
+#: Больше трёх слов в имени не бывает: фамилия, имя, отчество.
+_NAME_SLOT_COUNT = 3
+
+TOO_MANY_NAME_WORDS = (
+    "Слишком много слов для имени. Ожидается: Фамилия Имя Отчество — или по одному слову за раз."
+)
+
+#: Цифра в ответе на вопрос про имя и русская буква в ответе на вопрос про
+#: телефон. Оба — признак того, что оператор ответил не на вопрос, а прислал
+#: строку целиком.
+_A_DIGIT = re.compile(r"\d")
+_A_RUSSIAN_LETTER = re.compile(r"[а-яё]", re.IGNORECASE)
+
+#: Поля, вопрос о которых можно перебить строкой целиком.
+_NAME_FIELDS = frozenset({Field.FIO, Field.LAST_NAME, Field.FIRST_NAME, Field.MIDDLE_NAME})
+
+
+def spills_beyond(text: str | None, expect: Field) -> bool:
+    """Прислали не ответ на вопрос, а всю строку про должника.
+
+    Короткий путь, который нельзя ломать: он уже в проде, и оператор,
+    вставляющий «Клочкова Елена Николаевна 24.11.1994 +79161234567» в ответ на
+    «Фамилия», ждёт, что заполнится всё, а не что у него спросят, при чём тут
+    цифры. Признак нарочно грубый и наблюдаемый глазом — цифра там, где ждали
+    имя, и русская буква там, где ждали телефон. Тонкая эвристика здесь
+    опаснее: она сработала бы неожиданно, а эта видна в самом вводе.
+
+    Действует только на трёх ведомых шагах (см. :mod:`app.services.query_card`).
+    У кнопок «+ ИНН» и «+ Паспорт» правило прежнее и обратное: названное поле
+    читается как названное поле, иначе бот молча положит ответ не туда.
+    """
+    if not text:
+        return False
+    if expect in _NAME_FIELDS:
+        return bool(_A_DIGIT.search(text))
+    if expect is Field.PHONE:
+        return bool(_A_RUSSIAN_LETTER.search(text))
+    return False
+
+
+_ENTITY_INN = f"Это ИНН организации, для человека нужны {INN_INDIVIDUAL_LENGTH} цифр."
+
+_SHORT_YEAR_DIGITS = 2
+
+TWO_DIGIT_YEAR = "«{}» — двузначный год не разбираю, век угадывать не буду. Напишите 24.11.1994."
+
+NOT_UNDERSTOOD = (
+    "«{}» не понял — на дату, телефон, ИНН, паспорт, госномер и VIN не похоже. "
+    "Если это фамилия или имя — нажмите «Исправить ФИО»."
+)
+
+
+def _only_digits(text: str) -> str:
+    return "".join(char for char in text if char.isdigit())
+
+
 __all__ = [
+    "ECHO_LIMIT",
+    "TOO_MANY_NAME_WORDS",
     "Ambiguity",
+    "Field",
+    "Fragment",
+    "FragmentKind",
     "ParsedQuery",
     "Problem",
     "ProblemKind",
     "TenDigits",
+    "classify_fragment",
     "describe_bad_date",
+    "echo",
+    "looks_like_patronymic",
+    "looks_like_russian_name",
     "parse_query",
+    "spills_beyond",
 ]

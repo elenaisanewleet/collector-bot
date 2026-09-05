@@ -142,7 +142,7 @@ def parse_fio(raw: str) -> PersonName:
     for part in parts:
         if not _NAME_ALLOWED.match(part):
             raise NameParseError(f"Недопустимые символы в «{part}»")
-    normalized = [_capitalize_name(part) for part in parts]
+    normalized = [capitalize_name(part) for part in parts]
     return PersonName(
         last_name=normalized[0],
         first_name=normalized[1],
@@ -150,8 +150,24 @@ def parse_fio(raw: str) -> PersonName:
     )
 
 
-def _capitalize_name(part: str) -> str:
-    """Capitalize each hyphen-separated segment: ``петров-водкин`` -> ``Петров-Водкин``."""
+def is_name_word(word: str | None) -> bool:
+    """Может ли отдельное слово быть частью имени.
+
+    Тот же алфавит, что проверяет :func:`parse_fio`, — буквы, дефис, апостроф.
+    Публичной эта проверка стала для карточки запроса: она принимает ФИО по
+    одному слову, и ей нужно отличить «Клочкова» от «77091», не ослабляя сам
+    разбор ФИО и не заводя вторую копию алфавита.
+    """
+    return bool(word and _NAME_ALLOWED.match(word))
+
+
+def capitalize_name(part: str) -> str:
+    """Capitalize each hyphen-separated segment: ``петров-водкин`` -> ``Петров-Водкин``.
+
+    Публичная ради карточки запроса: она принимает имя по одному слову, минуя
+    :func:`parse_fio`, и приводить регистр обязана теми же правилами — иначе
+    «клочкова», набранное отдельным сообщением, оседало бы в карточке строчным.
+    """
     return "-".join(segment.capitalize() for segment in part.split("-"))
 
 

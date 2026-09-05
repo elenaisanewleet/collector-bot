@@ -257,6 +257,87 @@ class AccessRequest(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
 
+class QueryCard(Base):
+    """Накопительная карточка запроса: что оператор уже собрал про должника.
+
+    Живёт в базе, а не в FSM, и это не про надёжность хранилища — про роутеры.
+    Все конкурирующие текстовые хендлеры (госномер, VIN, адрес, договор,
+    паспорт, импорт) привязаны к состояниям, а свободный текст ловит последний
+    роутер с ``StateFilter(None)``. Сделай карточку состоянием — и она забрала
+    бы себе весь текст, сняв этот фильтр. Строка в таблице позволяет ей помнить
+    всё, не занимая состояние вовсе: ``awaiting_field`` — это колонка, а не
+    ``State``.
+
+    Ключ — пара «пользователь + чат», а не один ``chat_id``: бот умеет работать
+    в группе, и одна карточка на чат склеила бы двух операторов в одного
+    должника.
+
+    Три отдельные nullable-колонки под ФИО, а не :class:`PersonName`: он требует
+    фамилию **и** имя, а карточка обязана существовать при одной фамилии —
+    ровно ради этого она и заведена. ``PersonName`` собирается лениво, в момент
+    «Проверить».
+
+    **Колонок ``passport`` и ``phone`` здесь нет вовсе** — ни под каким флагом.
+    ``redact_subject`` уже выбрасывает их перед записью в ``subject_json``, а
+    ``SubjectStore`` держит паспорт только в памяти и только час. Карточка —
+    черновик, живущий минуты; платить за него отменой действующей политики
+    приватности нечем. В базу едут только маски, они необратимы, а сами номера
+    лежат в памяти процесса (``app.services.query_card.CardSecrets``). После
+    перезапуска карточка честно пишет «сам номер не храню, пришлите заново» —
+    это не молчание и не прочерк.
+    """
+
+    __tablename__ = "query_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    chat_id: Mapped[int] = mapped_column(Integer)
+    # Какое сообщение править. Переживает рестарт: иначе после перезапуска бот
+    # присылал бы вторую карточку под первой, и обе выглядели бы живыми.
+    card_message_id: Mapped[int | None] = mapped_column(Integer)
+    last_name: Mapped[str | None] = mapped_column(String(64))
+    first_name: Mapped[str | None] = mapped_column(String(64))
+    middle_name: Mapped[str | None] = mapped_column(String(64))
+    birth_date: Mapped[date | None] = mapped_column(Date)
+    inn: Mapped[str | None] = mapped_column(String(12))
+    phone_masked: Mapped[str | None] = mapped_column(String(32))
+    passport_masked: Mapped[str | None] = mapped_column(String(32))
+    plate: Mapped[str | None] = mapped_column(String(16))
+    vin: Mapped[str | None] = mapped_column(String(17))
+    # Договор и адрес ищутся только в нашей выгрузке: ни один внешний реестр по
+    # ним не работает. В карточке они стоят потому, что выгрузка 1С — главный
+    # источник продукта, а не вспомогательный.
+    contract_number: Mapped[str | None] = mapped_column(String(64))
+    address: Mapped[str | None] = mapped_column(String(256))
+    # Поля, которые оператор пропустил ЯВНО. Отличается от пустого: пустое —
+    # «я не спрашивал», пропущенное — «спросил, ответили, что не знают». В
+    # отчёт эта разница не едет (там она про оператора, а не про качество
+    # проверки), но карточка обязана её показывать, иначе кнопка «Пропустить»
+    # неотличима от «Отмена».
+    skipped_json: Mapped[str] = mapped_column(Text, default="[]")
+    # Какое поле ждём после нажатия кнопки. Заменяет состояние FSM — см.
+    # докстринг класса.
+    awaiting_field: Mapped[str | None] = mapped_column(String(16))
+    # Идём ли по трём основным шагам — телефон, фамилия, имя. Тоже колонка, и
+    # по той же причине: оператор бросает недособранную карточку чаще, чем
+    # перезапускается бот, и вернуться он должен на тот же вопрос.
+    guided: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Набор полей прошлого прогона. На нём держится отказ платить дважды за
+    # один и тот же запрос: «Проверить» без единого нового поля — это не
+    # проверка, это списание.
+    last_run_hash: Mapped[str | None] = mapped_column(String(64))
+    checked_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    # Последняя проверка не нашла ничего. Пустой отчёт без предложения искать
+    # иначе — тупик: у оператора на руках может лежать ИНН из договора или
+    # госномер машины, а бот молчит.
+    last_run_empty: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("telegram_user_id", "chat_id", name="uq_query_cards_user_chat"),
+    )
+
+
 class AuditEvent(Base):
     """Append-only trail of who did what.
 

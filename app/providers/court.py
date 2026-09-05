@@ -77,13 +77,16 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
     title = "Суды"
     methods = (NEWDB_METHOD,)
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        return () if individual_inn(subject) else (MissingInput.INN,)
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         inn = individual_inn(subject)
         if inn is None:
             return self.insufficient_query(
                 "Для проверки арбитража нужен ИНН физлица (12 цифр) — "
                 "поиск по одному ФИО дал бы чужие дела",
-                missing=(MissingInput.INN,),
+                missing=self.missing_input_for(subject),
             )
 
         mapped, raw = await self.mapped_for(NEWDB_METHOD, inn_params(inn))

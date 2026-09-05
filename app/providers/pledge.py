@@ -79,11 +79,16 @@ class NewDBPledgeProvider(NewDBMethodProvider):
     title = "Залоги"
     methods = (PERSON_METHOD, VIN_METHOD)
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        """Два пути: VIN либо ФИО с датой рождения. VIN закрывает оба гейта."""
+        return () if _searchable_by(subject) else _missing_for(subject)
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
-        if not _searchable_by(subject):
+        missing = self.missing_input_for(subject)
+        if missing:
             return self.insufficient_query(
                 "Для проверки залогов нужен VIN либо ФИО с датой рождения",
-                missing=_missing_for(subject),
+                missing=missing,
             )
         plans = self._plans(subject)
         if not plans:

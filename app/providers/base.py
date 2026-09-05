@@ -65,6 +65,25 @@ class BaseProvider(ABC):
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         """Perform the lookup. May raise :class:`ProviderError`."""
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        """Чего не хватает этому субъекту, чтобы источник вообще можно было спросить.
+
+        Пустой кортеж — «спросим». Ответ по умолчанию именно такой: источник,
+        который ничего не требует, ничего и не блокирует.
+
+        Существует ради карточки запроса, которая обязана сказать, что
+        откроется от каждого недостающего поля («добавьте ИНН — откроются три
+        источника»), — и обязана не соврать. Захардкоженный список подписей
+        рядом с кнопками уже был и разъезжался с провайдерами при первой же
+        правке гейта. Правильный образец лежит рядом: ``passport_would_help``
+        спрашивает сам мост через ``will_query``.
+
+        Требование к переопределяющим: **звать эту же функцию из своего
+        ``_fetch``**. Иначе гейт и предикат снова станут двумя разными кусками
+        кода, и весь смысл потеряется.
+        """
+        return ()
+
     async def fetch(self, subject: SearchSubject) -> ProviderResult:
         started = time.perf_counter()
         if not self.is_configured:

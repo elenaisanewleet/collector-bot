@@ -7,7 +7,7 @@ plain values so services never see a SQLAlchemy construct.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
@@ -22,6 +22,7 @@ from app.db.models import (
     BatchRun,
     Debtor,
     DebtorReportRow,
+    QueryCard,
     SearchRequest,
     SearchResult,
     ShareLink,
@@ -513,6 +514,55 @@ class AccessRepository:
         )
         result = await self._session.scalars(stmt)
         return list(result.all())
+
+
+class QueryCardRepository:
+    """Накопительная карточка запроса. Одна строка на пару «оператор + чат»."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get(self, telegram_user_id: int, chat_id: int) -> QueryCard | None:
+        stmt = select(QueryCard).where(
+            QueryCard.telegram_user_id == telegram_user_id, QueryCard.chat_id == chat_id
+        )
+        found: QueryCard | None = await self._session.scalar(stmt)
+        return found
+
+    async def save(
+        self, telegram_user_id: int, chat_id: int, values: Mapping[str, Any]
+    ) -> QueryCard:
+        """Создать строку или переписать существующую целиком.
+
+        Именно целиком, а не по изменённым полям: карточка редактируется и
+        очищается, и частичное обновление оставило бы прошлого должника в тех
+        колонках, которые новый не заполнил. ``values`` приходит из
+        :class:`app.services.query_card.Card`, где перечислены все колонки.
+        """
+        row = await self.get(telegram_user_id, chat_id)
+        if row is None:
+            row = QueryCard(telegram_user_id=telegram_user_id, chat_id=chat_id)
+            self._session.add(row)
+        for column, value in values.items():
+            setattr(row, column, value)
+        row.updated_at = utcnow()
+        await self._session.flush()
+        return row
+
+    async def delete(self, telegram_user_id: int, chat_id: int) -> None:
+        await self._session.execute(
+            delete(QueryCard).where(
+                QueryCard.telegram_user_id == telegram_user_id, QueryCard.chat_id == chat_id
+            )
+        )
+
+    async def purge_older_than(self, cutoff: datetime) -> int:
+        """Ретеншен: карточка — черновик, а не история, и живёт по своему сроку."""
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(delete(QueryCard).where(QueryCard.updated_at < cutoff)),
+        )
+        return result.rowcount or 0
 
 
 class AuditRepository:

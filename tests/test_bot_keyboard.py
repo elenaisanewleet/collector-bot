@@ -215,10 +215,9 @@ async def test_a_typed_label_without_the_emoji_is_not_a_press(
 
     assert not sent.contains("Массовая проверка")
     assert not sent.contains("Внутренняя база пуста")
-    # Ввод достался шагу ФИО и увёл диалог дальше, а не кнопке.
-    # Свободный ввод не блокирует проверку ради полноты: строка ушла в поиск,
-    # а не кнопке, и бот сразу сказал, что принял и чего не хватает.
-    assert sent.contains("Проверяю")
+    # Ввод достался карточке, а не кнопке: набранный текст — это данные про
+    # должника, чем бы они ни были похожи на подпись кнопки.
+    assert sent.contains("Собираю проверку")
 
 
 async def test_a_contract_number_that_reads_like_a_button_still_searches(
@@ -266,28 +265,24 @@ async def test_reading_buttons_do_not_abandon_a_half_finished_search(
 
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
 
-    # Человек вернулся ровно на тот шаг, где стоял.
-    assert sent.contains("Дата рождения")
+    # Человек вернулся ровно к своей карточке, а не к пустому месту.
+    assert sent.contains("Фамилия: Тестов")
 
 
-async def test_starting_buttons_reset_a_half_finished_search(
+async def test_starting_buttons_do_not_lose_the_card(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """А вот кнопка, начинающая другой сценарий, старый диалог закрывает.
+    """Кнопка другого сценария чистит СОСТОЯНИЕ, но не карточку.
 
-    Иначе следующая набранная строка досталась бы забытому шагу ввода ФИО, и
-    человек получил бы отчёт, которого не просил.
+    Карточка — не диалог: она живёт в базе, а не в FSM, и «посмотрел историю»
+    не повод стирать наполовину собранного должника. Строка, никого не
+    опознавшая в выгрузке, денег по-прежнему не тратит: платит кнопка.
     """
     await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
     await feed(dispatcher, bot, message=make_message(BUTTON_HISTORY))
     sent.texts.clear()
 
-    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(dispatcher, bot, message=make_message("Неизвестнов Пётр Петрович"))
 
-    # Отчёт здесь появиться ОБЯЗАН, и это не регрессия: со свободным вводом
-    # набранная строка сама по себе есть запрос проверки. Сторожим другое —
-    # что она обработана как новый запрос, а не как продолжение брошенного
-    # диалога: бот заново говорит, что принял, вместо молчаливого доигрывания
-    # забытого шага.
-    assert sent.contains("Принял")
-    assert not sent.contains("Дата рождения в формате")
+    assert sent.contains("Фамилия: Неизвестнов")
+    assert not sent.contains("RECOVERY SCORE")

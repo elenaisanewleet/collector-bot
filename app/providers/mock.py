@@ -228,9 +228,12 @@ class DemoFSSPProvider(BaseProvider):
     def is_configured(self) -> bool:
         return True
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        return () if subject.name is not None else (MissingInput.NAME,)
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Нужно ФИО", missing=(MissingInput.NAME,))
+            return self.insufficient_query("Нужно ФИО", missing=self.missing_input_for(subject))
 
         profile = _profile_for(subject)
         if profile is not None:
@@ -300,9 +303,12 @@ class DemoFedresursProvider(BaseProvider):
     def is_configured(self) -> bool:
         return True
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        return () if subject.name is not None else (MissingInput.NAME,)
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Нужно ФИО", missing=(MissingInput.NAME,))
+            return self.insufficient_query("Нужно ФИО", missing=self.missing_input_for(subject))
 
         profile = _profile_for(subject)
         if profile is None or profile.bankruptcy is None:
@@ -333,9 +339,12 @@ class DemoFNSProvider(BaseProvider):
     def is_configured(self) -> bool:
         return True
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        return () if subject.name is not None else (MissingInput.NAME,)
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Нужно ФИО", missing=(MissingInput.NAME,))
+            return self.insufficient_query("Нужно ФИО", missing=self.missing_input_for(subject))
 
         profile = _profile_for(subject)
         if profile is None:
@@ -377,9 +386,12 @@ class DemoPledgeProvider(BaseProvider):
     def is_configured(self) -> bool:
         return True
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        return () if subject.name is not None else (MissingInput.NAME,)
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Нужно ФИО", missing=(MissingInput.NAME,))
+            return self.insufficient_query("Нужно ФИО", missing=self.missing_input_for(subject))
 
         profile = _profile_for(subject)
         if profile is None:
@@ -457,9 +469,12 @@ class DemoCourtProvider(BaseProvider):
     def is_configured(self) -> bool:
         return True
 
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        return () if subject.name is not None else (MissingInput.NAME,)
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Нужно ФИО", missing=(MissingInput.NAME,))
+            return self.insufficient_query("Нужно ФИО", missing=self.missing_input_for(subject))
 
         profile = _profile_for(subject)
         if profile is None:

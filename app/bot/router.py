@@ -15,6 +15,7 @@ from app.bot.handlers import (
     buttons,
     history,
     import_csv,
+    query_card,
     search_contract,
     search_misc,
     search_person,
@@ -56,7 +57,10 @@ def build_router() -> Router:
     # проверку. Ни один хендлер здесь состояние не трогает.
     root.include_router(access.build_router())
     root.include_router(batch.build_router())
-    root.include_router(search_person.build_router())
+    # Карточка запроса. Ни одного состояния FSM внутри — только колбэки
+    # ``qc:*`` и старые ``padd:*`` под отчётами, отправленными до неё. Поэтому
+    # место в цепочке ни у кого ничего не отнимает.
+    root.include_router(query_card.build_router())
     root.include_router(search_vehicle.build_router())
     root.include_router(search_contract.build_router())
     root.include_router(search_misc.build_router())

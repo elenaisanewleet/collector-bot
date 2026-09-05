@@ -161,34 +161,40 @@ def cancel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def region_keyboard() -> InlineKeyboardMarkup:
+def region_keyboard(token: str) -> InlineKeyboardMarkup:
+    """Регионы под отчётом. Токен субъекта едет прямо в ``callback_data``.
+
+    Раньше он лежал в состоянии FSM, а состояний в поиске по человеку больше
+    нет: их место заняла карточка запроса, которая сознательно не состояние.
+    Класть токен в саму карточку незачем — выбор региона относится к уже
+    полученному отчёту, а не к тому, что собирают.
+
+    Payload менять безопасно: клавиатура строится в момент нажатия, старых
+    кнопок с этим префиксом в чате не остаётся.
+    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=REGION_TITLES[Region.MOSCOW],
-                    callback_data=f"{REGION_PREFIX}:{Region.MOSCOW.value}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=REGION_TITLES[Region.MOSCOW_OBLAST],
-                    callback_data=f"{REGION_PREFIX}:{Region.MOSCOW_OBLAST.value}",
-                )
-            ],
+            *(
+                [
+                    InlineKeyboardButton(
+                        text=REGION_TITLES[region],
+                        callback_data=f"{REGION_PREFIX}:{region.value}:{token}",
+                    )
+                ]
+                for region in (Region.MOSCOW, Region.MOSCOW_OBLAST)
+            ),
             [
                 InlineKeyboardButton(
                     text="Москва + МО",
-                    callback_data=f"{REGION_PREFIX}:{REGION_COMBINED}",
+                    callback_data=f"{REGION_PREFIX}:{REGION_COMBINED}:{token}",
                 )
             ],
             [
                 InlineKeyboardButton(
                     text=REGION_TITLES[Region.OTHER],
-                    callback_data=f"{REGION_PREFIX}:{Region.OTHER.value}",
+                    callback_data=f"{REGION_PREFIX}:{Region.OTHER.value}:{token}",
                 )
             ],
-            [InlineKeyboardButton(text="Отмена", callback_data=CANCEL_CALLBACK)],
         ]
     )
 
