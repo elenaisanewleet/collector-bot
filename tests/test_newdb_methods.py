@@ -275,6 +275,184 @@ def test_field_map_rejects_row_fields_without_a_nested_array(tmp_path: Path) -> 
         NewDBFieldMaps.load(path)
 
 
+def _method_map_with(entry: Mapping[str, Any], tmp_path: Path) -> Any:
+    path = tmp_path / "one.json"
+    path.write_text(json.dumps({"probe": entry}, ensure_ascii=False), encoding="utf-8")
+    return NewDBFieldMaps.load(path).require("probe")
+
+
+def test_a_missed_path_in_a_record_does_not_erase_the_container_value(tmp_path: Path) -> None:
+    """Запись перекрывает контейнер значением, а не промахом.
+
+    ``FieldMap.apply`` пишет каждый ключ, включая ``None``, поэтому простое
+    объединение «контейнер, сверху запись» позволяло непопавшему пути записи
+    затереть то, что контейнер знал. Ловушка стоит ровно там, где ею захотят
+    воспользоваться: очевидное применение ``row_fields`` — «возьми из
+    контейнера, если в записи нет».
+    """
+    method_map = _method_map_with(
+        {
+            "records_path": "cases",
+            "row_fields": {"status": "common.status"},
+            "fields": {"status": "status", "case_number": "number"},
+        },
+        tmp_path,
+    )
+
+    mapped = method_map.apply(
+        [{"common": {"status": "из контейнера"}, "cases": [{"number": "А40-1/2025"}]}]
+    )
+
+    assert mapped.records == [{"status": "из контейнера", "case_number": "А40-1/2025"}]
+
+
+def test_a_value_in_the_record_still_wins_over_the_container(tmp_path: Path) -> None:
+    method_map = _method_map_with(
+        {
+            "records_path": "cases",
+            "row_fields": {"status": "common.status"},
+            "fields": {"status": "status"},
+        },
+        tmp_path,
+    )
+
+    mapped = method_map.apply(
+        [{"common": {"status": "из контейнера"}, "cases": [{"status": "из записи"}]}]
+    )
+
+    assert mapped.records == [{"status": "из записи"}]
+
+
+def test_the_container_is_read_even_when_its_array_is_empty(tmp_path: Path) -> None:
+    """«Нашёл тринадцать, отдал ноль» обязано отличаться от «ничего нет».
+
+    ФНП отвечает ``"fnp": []`` рядом с непустым ``fnp_urls``. Пока контейнер
+    читался только при непустом вложенном массиве, такой ответ был неотличим от
+    пустого реестра: ноль записей, ноль неразобранного, «залогов нет».
+    """
+    method_map = _method_map_with(
+        {
+            "records_path": "fnp",
+            "row_fields": {"notice_urls": "fnp_urls"},
+            "fields": {"registration_number": "reference_number"},
+        },
+        tmp_path,
+    )
+
+    mapped = method_map.apply([{"fnp": [], "fnp_urls": ["https://example.test/n/1"]}])
+
+    assert mapped.records == []
+    assert mapped.unreadable == 0
+    assert mapped.containers == [{"notice_urls": ["https://example.test/n/1"]}]
+
+
+@pytest.mark.parametrize(
+    "array",
+    [
+        # Реестр, приславший уведомления строками, а не объектами.
+        ["УВ-1", "УВ-2"],
+        # Смесь: одно уведомление разобрано, второе — нет.
+        [{"reference_number": "2025-012-1"}, "УВ-2"],
+        [None, None],
+    ],
+)
+def test_items_that_are_not_records_are_counted_as_losses(tmp_path: Path, array: Any) -> None:
+    """Потеря ВНУТРИ массива — тоже потеря, и раньше её никто не считал.
+
+    Проверялся только тип самого массива: список — значит ответ прочитан.
+    ``{"fnp": ["УВ-1", "УВ-2"]}`` давало ноль записей и ноль неразобранного,
+    источник отвечал «залогов не найдено», а скоринг платил за это плюс. Два
+    найденных уведомления исчезали молча — это ровно инверсия, ради которой всё
+    остальное в этом файле и написано.
+    """
+    method_map = _method_map_with(
+        {
+            "records_path": "fnp",
+            "fields": {"registration_number": "reference_number"},
+        },
+        tmp_path,
+    )
+
+    mapped = method_map.apply([{"fnp": array}])
+
+    assert mapped.unreadable == sum(1 for item in array if not isinstance(item, dict))
+
+
+def test_a_container_whose_own_fields_all_missed_is_a_loss(tmp_path: Path) -> None:
+    """Записи есть, а чьи они — не прочитано.
+
+    ``row_fields`` держат личность записей. Стоит вендору переименовать блок
+    (живьём он называется ``commmon``, с тремя «m»), как все пути промахнутся, а
+    дела останутся — и код проставит на них идентификатор запроса, то есть
+    в ответе с двумя субъектами отдаст дела второго первому. Молча.
+    """
+    method_map = _method_map_with(
+        {
+            "records_path": "bankruptcy",
+            "row_fields": {"debtor_name": "commmon.name_or_fio", "inn": "commmon.inn"},
+            "fields": {"case_number": "case_number"},
+        },
+        tmp_path,
+    )
+
+    mapped = method_map.apply(
+        [{"common": {"inn": "770912345601"}, "bankruptcy": [{"case_number": "А73-1/2017"}]}]
+    )
+
+    assert mapped.records == []
+    assert mapped.unreadable == 1
+
+
+def test_an_empty_container_beside_an_empty_array_is_still_an_answer(tmp_path: Path) -> None:
+    """Живой пустой ответ ``bankrot_person`` — это ``commmon: {}`` и ``bankruptcy: []``.
+
+    Приписывать там нечего и некому, поэтому нечитаемым такой контейнер не
+    считается: иначе каждый должник без банкротства получал бы «не проверено».
+    """
+    method_map = _method_map_with(
+        {
+            "records_path": "bankruptcy",
+            "row_fields": {"debtor_name": "commmon.name_or_fio"},
+            "fields": {"case_number": "case_number"},
+        },
+        tmp_path,
+    )
+
+    mapped = method_map.apply([{"commmon": {}, "bankruptcy": []}])
+
+    assert mapped.records == []
+    assert mapped.unreadable == 0
+
+
+def test_an_empty_string_in_a_record_does_not_erase_the_container_value(tmp_path: Path) -> None:
+    """Пустая строка — не значение, а её отсутствие.
+
+    Живой ``bankrot_person`` присылает ``commmon.address: ""``; такое же поле в
+    записи затирало бы прочитанное значение контейнера ничем.
+    """
+    method_map = _method_map_with(
+        {
+            "records_path": "cases",
+            "row_fields": {"debtor_name": "commmon.name_or_fio"},
+            "fields": {"debtor_name": "debtor", "case_number": "number"},
+        },
+        tmp_path,
+    )
+
+    mapped = method_map.apply(
+        [
+            {
+                "commmon": {"name_or_fio": "Тестов Андрей Сергеевич"},
+                "cases": [{"number": "А40-1/2025", "debtor": ""}],
+            }
+        ]
+    )
+
+    assert mapped.records == [
+        {"debtor_name": "Тестов Андрей Сергеевич", "case_number": "А40-1/2025"}
+    ]
+
+
 def test_field_map_rejects_non_object_options(tmp_path: Path) -> None:
     path = tmp_path / "broken.json"
     path.write_text(
@@ -310,7 +488,7 @@ async def test_records_path_unwraps_the_array_inside_a_row(
     settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
     person = {
         "bankruptcy": [
-            {"case_number": "А73-7992/2017", "status": "Производство по делу завершено"},
+            {"case_number": "А73-1111/2017", "status": "Производство по делу завершено"},
             {"case_number": "А73-1/2019", "status": "Введена процедура"},
         ],
         "commmon": {"name_or_fio": "Иванов Иван Иванович", "inn": "770912345601"},
@@ -323,7 +501,7 @@ async def test_records_path_unwraps_the_array_inside_a_row(
 
     assert result.status is ProviderStatus.SUCCESS
     cases = [record for record in result.records if isinstance(record, BankruptcyRecord)]
-    assert [record.case_number for record in cases] == ["А73-7992/2017", "А73-1/2019"]
+    assert [record.case_number for record in cases] == ["А73-1111/2017", "А73-1/2019"]
 
 
 @respx.mock
@@ -447,6 +625,31 @@ async def test_one_unreadable_record_fails_the_call_even_if_another_parsed(
     assert result.error_code == "unexpected_schema"
     assert result.records == []
     assert "1 из 2" in (result.error_message or "")
+
+
+@respx.mock
+async def test_notices_that_arrived_as_strings_are_not_an_empty_register(
+    live_settings: Settings, tmp_path: Path, person_subject: SearchSubject
+) -> None:
+    """Тот же счёт потерь до самого статуса источника.
+
+    Массив на месте, тип у него правильный, а внутри — не уведомления, а
+    строки. Раньше провайдер отвечал ``NO_RESULTS``: «в реестре залогов ничего
+    не найдено», плюс к взыскиваемости — при двух найденных уведомлениях.
+    """
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=envelope("pledge_person", data=[{"fnp": ["УВ-1", "УВ-2"]}]),
+        )
+    )
+
+    result = await NewDBPledgeProvider(settings, maps).fetch(person_subject)
+
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "unexpected_schema"
+    assert "2 из 2" in (result.error_message or "")
 
 
 # ---------------------------------------------------------------- not configured
@@ -585,16 +788,22 @@ async def test_bankruptcy_record_carries_the_inn_it_was_searched_by(
     ФИО и ИНН лежат в соседнем блоке ответа, куда плоская карта не дотягивается.
     Запись без единого идентификатора матчер оценил бы как слабое совпадение, и
     настоящее банкротство исчезло бы из отчёта как чужое.
+
+    Контейнер здесь прочитан — ФИО из него приехало, — а ИНН в нём не оказалось:
+    именно этот пробел и закрывает ИНН запроса. Контейнер, из которого не
+    прочиталось НИЧЕГО, — другой случай, и он честно ломает разбор: см.
+    ``test_a_container_without_identity_is_reported_unchecked_not_assumed``.
     """
     settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
     row = {
+        "commmon": {"name_or_fio": "Тестов Андрей Сергеевич"},
         "bankruptcy": [
             {
-                "case_number": "А73-7992/2017",
+                "case_number": "А73-1111/2017",
                 "status": "Производство по делу завершено",
                 "case_url": "/legalcases/7975d0c7",
             }
-        ]
+        ],
     }
     respx.post(NEWDB_URL).mock(
         return_value=httpx.Response(200, json=envelope("bankrot_person", data=[row]))
@@ -870,6 +1079,50 @@ async def test_a_stranger_in_the_participant_list_does_not_make_a_role(
         "participants": {
             "plaintiffs": [{"name": "ПАО Сбербанк"}],
             "defendants": [{"name": "Тестова Мария Сергеевна"}, {"name": "Тестов П.С."}],
+        },
+    }
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("arbitr_person", data=[row]))
+    )
+
+    result = await NewDBArbitrationProvider(settings, maps).fetch(inn_subject)
+
+    record = result.records[0]
+    assert isinstance(record, CourtCase)
+    assert record.role is CourtCaseRole.OTHER
+    assert not record.is_against_debtor
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "defendant",
+    [
+        # Однофамилец с чужим отчеством: раньше это было «коротким совпадением»,
+        # и должник становился ответчиком по чужому иску.
+        "Тестов Андрей Петрович",
+        # Строка, которую нельзя прочитать как имя. КАД так и пишет, когда
+        # адрес и лицо скрыты.
+        "Данные скрыты",
+        # Одна фамилия — это не человек.
+        "Тестов",
+    ],
+)
+async def test_a_participant_who_is_not_our_debtor_does_not_make_a_role(
+    live_settings: Settings, tmp_path: Path, inn_subject: SearchSubject, defendant: str
+) -> None:
+    """Роль назначает доказательство, а не «что угодно, кроме противоречия».
+
+    Проверка была ``compare_names(...) is not NameMatch.NONE``, а ``NONE``
+    возвращалось только при прямом противоречии: нечитаемая строка в списке
+    ответчиков делала должника ответчиком по чужому делу, и −10 в скоринге
+    доставались ему за чужой иск.
+    """
+    settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
+    row = {
+        "case_number": "А57-10442/2025",
+        "participants": {
+            "plaintiffs": [{"name": "ПАО Сбербанк"}],
+            "defendants": [{"name": defendant}],
         },
     }
     respx.post(NEWDB_URL).mock(
@@ -1200,11 +1453,16 @@ def test_shipped_example_map_describes_every_documented_method() -> None:
     assert example.methods == {
         BANKRUPTCY_METHOD,
         ARBITRATION_METHOD,
+        BUSINESS_METHOD,
         PERSON_METHOD,
         VIN_METHOD,
     }
-    # egrul_ip отсутствует намеренно: единственный пример ответа в архивной
-    # документации пустой, а имена ключей строки нигде не названы. Пустая карта
-    # сделала бы источник «подключённым» и заставила его отвечать «ИП не
-    # найдено» про должника, которого никто не разбирал.
-    assert BUSINESS_METHOD not in example.methods
+    # egrul_ip появился 05.09.2026, когда его строки увидели живьём. Раньше его
+    # здесь не было намеренно — архивная документация показывала только пустой
+    # ответ и описывала строку прозой, без единого имени ключа.
+    entry = example.require(BUSINESS_METHOD)
+    assert entry.field_map.records_path == "matches"
+    # Роль закодирована кодом раздела и без словаря становится «иной ролью»:
+    # руководитель ЮЛ, показанный «иной связью», — это потеря смысла находки.
+    assert entry.field_map.value_maps["role"]["upr"] == "руководитель"
+    assert entry.field_map.value_maps["role"]["uchr"] == "учредитель"

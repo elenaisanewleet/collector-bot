@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import AuthStyle
+from app.providers.base import ProviderUnavailableError
 from app.providers.http import RetryPolicy, build_client, request_json
 from app.providers.mapping import FieldMap, RecordDict
 
@@ -84,7 +85,18 @@ class VendorJsonClient:
                 retry=self._retry,
                 provider=self._label,
             )
-        return field_map.map_all(payload), raw
+        records, unreadable = field_map.read_all(payload)
+        if unreadable:
+            # Тот же счёт потерь, что у методов NewDB. Элемент массива записей,
+            # который записью не является, раньше отбрасывался фильтром внутри
+            # карты: ответ из двух таких элементов приходил к провайдеру как
+            # пустой список и печатался как «источник проверен, ничего нет».
+            raise ProviderUnavailableError(
+                "unexpected_schema",
+                f"Карта полей не разобрала {unreadable} из "
+                f"{unreadable + len(records)} записей ответа источника",
+            )
+        return records, raw
 
     def _auth_headers(self) -> dict[str, str]:
         style = self._config.auth_style

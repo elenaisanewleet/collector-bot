@@ -1,0 +1,188 @@
+{
+  "params": {
+    "method": "egrul_ip",
+    "country": "ru",
+    "innfiz": "270311112222"
+  },
+  "method": "",
+  "requestId": "0000000b-0000-4000-8000-00000000000b",
+  "cost": 1,
+  "datecreated": "2026-09-05 01:44:18",
+  "state": "complete",
+  "balance": 93,
+  "tasks": 1,
+  "taskId": "0000000c-0000-4000-8000-00000000000c",
+  "is_repeat": false,
+  "results": {
+    "egrul_ip": {
+      "taskId": "0000000c-0000-4000-8000-00000000000c",
+      "dateupdated": "2026-09-04 22:44:33",
+      "result": {
+        "status": 200,
+        "data": [
+          {
+            "total_items": 3,
+            "matches": [
+              {
+                "section": "ip",
+                "inn": "270311112222",
+                "ogrn": "323270000011111",
+                "name_short": "ПЫЖОВА АННА ПЕТРОВНА",
+                "name_full": null,
+                "status": null,
+                "address": null,
+                "region": null,
+                "registration_date": null,
+                "ogrn_date": "22.11.2023",
+                "okved_code": "47.91.2",
+                "okved_name": "Торговля розничная, осуществляемая непосредственно при помощи информационно-коммуникационной сети Интернет",
+                "bankruptcy_flag": false,
+                "liquidation_flag": false,
+                "invalid_flag": false,
+                "links": {
+                  "business_card": null,
+                  "founding_docs": null,
+                  "gosreg": "https://service.nalog.ru/gosreg/lk-excerpt.html",
+                  "egrul": "token=0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF&inn=270311112222&pdf=vyp"
+                }
+              },
+              {
+                "section": "ip",
+                "inn": "270311112222",
+                "ogrn": "307272011400022",
+                "name_short": "Пыжова Анна Петровна",
+                "name_full": null,
+                "status": null,
+                "address": null,
+                "region": null,
+                "registration_date": null,
+                "ogrn_date": "24.04.2007",
+                "okved_code": "47.5",
+                "okved_name": "Торговля розничная прочими бытовыми изделиями в специализированных магазинах",
+                "bankruptcy_flag": false,
+                "liquidation_flag": false,
+                "invalid_flag": false,
+                "links": {
+                  "business_card": null,
+                  "founding_docs": null,
+                  "gosreg": "https://service.nalog.ru/gosreg/lk-excerpt.html",
+                  "egrul": "token=0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF&inn=270311112222&pdf=vyp"
+                }
+              },
+              {
+                "section": "docip",
+                "inn": "270311112222",
+                "ogrn": "323270000011111",
+                "name_short": "ПЫЖОВА АННА ПЕТРОВНА",
+                "name_full": "ПЫЖОВА АННА ПЕТРОВНА",
+                "status": null,
+                "address": null,
+                "region": null,
+                "registration_date": null,
+                "ogrn_date": null,
+                "okved_code": "",
+                "okved_name": null,
+                "bankruptcy_flag": false,
+                "liquidation_flag": false,
+                "invalid_flag": false,
+                "links": {
+                  "business_card": null,
+                  "founding_docs": null,
+                  "gosreg": null,
+                  "egrul": null
+                }
+              }
+            ],
+            "affiliations": {
+              "registry_sections": {
+                "upr": {
+                  "label": "Руководители юридических лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "uchr": {
+                  "label": "Учредители (участники, акционеры) юридических лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "rdl": {
+                  "label": "Реестр дисквалифицированных лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "addr": {
+                  "label": "Адреса юридических лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "ogrfl": {
+                  "label": "Ограничения участия физических лиц в юридических лицах",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "ogrul": {
+                  "label": "Ограничения участия юридических лиц в юридических лицах",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "docul": {
+                  "label": "Документы на государственную регистрацию юридических лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "docip": {
+                  "label": "Документы на государственную регистрацию ИП",
+                  "items_count": 1,
+                  "row_count": 1,
+                  "has_more": false,
+                  "records": [
+                    {
+                      "section": "docip",
+                      "inn": "270311112222",
+                      "ogrn": "323270000011111",
+                      "name_short": "ПЫЖОВА АННА ПЕТРОВНА",
+                      "name_full": "ПЫЖОВА АННА ПЕТРОВНА",
+                      "status": null,
+                      "address": null,
+                      "region": null,
+                      "registration_date": null,
+                      "ogrn_date": null,
+                      "okved_code": "",
+                      "okved_name": null,
+                      "bankruptcy_flag": false,
+                      "liquidation_flag": false,
+                      "invalid_flag": false,
+                      "links": {
+                        "business_card": null,
+                        "founding_docs": null,
+                        "gosreg": null,
+                        "egrul": null
+                      }
+                    }
+                  ]
+                }
+              },
+              "persons": [],
+              "lookups": [],
+              "companies": []
+            }
+          }
+        ]
+      }
+    }
+  }
+}

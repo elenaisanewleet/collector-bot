@@ -8,9 +8,18 @@ INN, or a VIN the operator themself put in the query — agrees.
 
 The mirror-image failure is just as bad and less obvious: a record that *is* the
 debtor's, scored as somebody else's, vanishes from the report and the score
-rewards its absence. Two guards against it live here — names are compared
-without regard to word order (:func:`app.domain.identity.compare_names`), and an
-exact query VIN carries a record that has no other identifier at all.
+rewards its absence. Three guards against it live here — names are compared
+without regard to word order (:func:`app.domain.identity.compare_names`), an
+exact query VIN carries a record that has no other identifier at all, and every
+identifier a source *does* hand over is read rather than left on the floor.
+
+The third one is not theoretical. ``bankrot_person`` is addressed by ИНН and
+answers with the debtor's ФИО and date of birth in its ``commmon`` block. While
+the date of birth went unread, a woman whose ЕФРСБ record carries her maiden
+name scored 0.0 for the name plus 0.30 for the ИНН the case was found by — a
+weak match, dropped from the report, and the score then paid +10 for "банкротство
+не обнаружено". With the date read, the same record scores 0.60 and survives;
+with a date that disagrees, it is disqualified outright, which is also right.
 """
 
 from __future__ import annotations
@@ -48,6 +57,26 @@ SHORT_NAME_MATCH = 0.45
 # дешевле отсутствующего. Само по себе оно по-прежнему не доводит запись даже до
 # «возможного совпадения» — только вместе с датой рождения или ИНН.
 INITIALS_NAME_MATCH = 0.30
+# «Про ФИО ничего не известно». Это и цена отсутствующего поля, и ПОЛ, ниже
+# которого имя не опускает запись, когда сильный идентификатор — дата рождения
+# или ИНН — сошёлся.
+#
+# Пол нужен потому, что несовпадение имени и отсутствие имени стоили 0.00 и
+# 0.25, и разница в четверть балла была ловушкой: ЗАПОЛНИТЬ поле в карте могло
+# только ухудшить запись. Запись, найденную по точному ИНН, роняло до 0.30 —
+# слабое совпадение, вон из отчёта, плюс к оценке за то, что её не нашли, —
+# любое имя, которое не удалось прочитать нашими правилами.
+#
+# Это не гипотеза о будущем, а свойство сегодняшних источников: ``egrul_ip``
+# отдаёт ``name_short`` у всех секций подряд, а содержимое половины из них
+# (rdl, addr, ogrul, docul) живьём никто не видел — что там стоит вместо ФИО
+# человека, неизвестно. «Имя не совпало» в таком месте означает не «это другой
+# человек», а «источник назвал здесь не то, что мы сравниваем».
+#
+# Пол не выдаётся, когда идентификатор ПРОТИВОРЕЧИТ (ИНН разошёлся, дата
+# рождения разошлась — там ранний выход), и не превращает несовпадение в
+# совпадение: 0.25 + 0.30 = 0.55 — это ровно порог «возможного совпадения»,
+# запись видна и подписана как требующая проверки, но не подтверждена.
 NAME_UNKNOWN = 0.25
 BIRTH_DATE_MATCH_BONUS = 0.30
 INN_MATCH_BONUS = 0.30
@@ -124,12 +153,15 @@ class IdentityMatcher:
         record_inn = _record_inn(record)
         record_phone = _record_phone(record)
 
-        confidence, reasons = self._name_component(subject.name, record_name)
+        name_value, reasons = self._name_component(subject.name, record_name)
+        confidence = name_value
+        identifier_agreed = False
 
         if subject.birth_date and record_birth_date:
             if subject.birth_date == record_birth_date:
                 confidence += BIRTH_DATE_MATCH_BONUS
                 reasons = (*reasons, "совпадает дата рождения")
+                identifier_agreed = True
             else:
                 # A different date of birth is a disqualifier, not a deduction:
                 # no amount of name agreement outweighs it.
@@ -143,6 +175,7 @@ class IdentityMatcher:
             if _digits_equal(subject.inn, record_inn):
                 confidence += INN_MATCH_BONUS
                 reasons = (*reasons, "совпадает ИНН")
+                identifier_agreed = True
             else:
                 confidence += INN_MISMATCH_PENALTY
                 reasons = (*reasons, "ИНН не совпадает")
@@ -151,6 +184,14 @@ class IdentityMatcher:
         if subject.phone and record_phone and _phones_equal(subject.phone, record_phone):
             confidence += PHONE_MATCH_BONUS
             reasons = (*reasons, "совпадает телефон")
+
+        if identifier_agreed and not contradicted and name_value < NAME_UNKNOWN:
+            # Пол под именем, когда идентификатор сошёлся. См. NAME_UNKNOWN.
+            confidence += NAME_UNKNOWN - name_value
+            reasons = (
+                *reasons,
+                "ФИО источника с нашим не сошлось — решает совпавший идентификатор",
+            )
 
         if not contradicted and _vin_from_query_matches(subject, record):
             return MatchAssessment(
@@ -182,6 +223,12 @@ class IdentityMatcher:
                 return SHORT_NAME_MATCH, ("совпадают фамилия и имя",)
             case NameMatch.INITIALS:
                 return INITIALS_NAME_MATCH, ("фамилия совпадает, имя — по инициалам",)
+            case NameMatch.INCONCLUSIVE:
+                # Строку прислали, прочитать её как имя не удалось. Это ровно
+                # столько же знания, сколько в отсутствующем поле, и стоить
+                # должно столько же — иначе источник, дописавший к ФИО дату
+                # рождения, оказывается хуже источника, не приславшего ФИО.
+                return NAME_UNKNOWN, ("ФИО источника не разобрано",)
             case _:
                 return 0.0, ("ФИО не совпадает",)
 
@@ -219,7 +266,10 @@ def _record_name(record: SourcedFact) -> str | None:
     if isinstance(record, CourtCase):
         return record.participant_name
     if isinstance(record, BusinessRelation):
-        return _strip_business_prefix(record.name)
+        # ``person_name`` заполняется провайдером только для строк, которые
+        # описывают человека (секции ip / upr / uchr у ``egrul_ip``). Название
+        # компании в сравнение ФИО по-прежнему не попадает.
+        return record.person_name or _strip_business_prefix(record.name)
     return None
 
 
@@ -241,7 +291,7 @@ def _strip_business_prefix(name: str | None) -> str | None:
 def _record_birth_date(record: SourcedFact) -> date | None:
     if isinstance(record, InternalDebtorRecord):
         return record.birth_date
-    if isinstance(record, EnforcementProceeding):
+    if isinstance(record, (EnforcementProceeding, BankruptcyRecord)):
         return record.debtor_birth_date
     if isinstance(record, PledgeRecord):
         return record.pledgor_birth_date

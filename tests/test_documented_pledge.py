@@ -148,6 +148,36 @@ async def test_documented_pledge_person_response_reaches_the_report(
 
 
 @respx.mock
+async def test_two_notices_the_answer_never_parsed_are_not_silently_dropped(
+    shipped_settings: Settings, shipped_maps: NewDBFieldMaps
+) -> None:
+    """У этого же ответа ``fnp_urls`` длиннее ``fnp``, и разница молчала.
+
+    В примере из документации три ссылки на уведомления и одно разобранное
+    уведомление. Показать одно и промолчать про два — короткий список,
+    неотличимый от полного; ровно то, против чего написан весь этот модуль.
+    Заметили это на живом ответе, где ``fnp`` оказался пустым при тринадцати
+    ссылках, — а лежало оно и здесь, только мягче.
+    """
+    response = documented_response("pledge_person")
+    row = response["results"]["pledge_person"]["result"]["data"][0]
+    assert len(row["fnp"]) == 1 and len(row["fnp_urls"]) == 3
+
+    report = await pledge_report(shipped_settings, shipped_maps, DOCUMENTED_PERSON, response)
+
+    result = report.result_for(ProviderName.PLEDGE)
+    assert result is not None
+    assert result.is_partial
+
+    text = render_report(report)
+    # Разобранное уведомление по-прежнему на месте — неполнота не отменяет находку.
+    assert "2025-012-232030-634" in text
+    assert "Ещё 2 уведомления" in text
+    for url in row["fnp_urls"][1:]:
+        assert url in text
+
+
+@respx.mock
 async def test_documented_pledge_person_lowers_the_score_instead_of_raising_it(
     shipped_settings: Settings, shipped_maps: NewDBFieldMaps
 ) -> None:
@@ -193,6 +223,50 @@ async def test_documented_pledge_vin_response_reaches_the_report(
     assert "Записей в реестре залогов не найдено" not in text
     assert "2015-000-291842-833" in text
     assert "ИНТЕРПРОГРЕССБАНК" in text
+
+
+@respx.mock
+async def test_a_vin_inside_a_list_of_subject_numbers_still_carries_the_record(
+    shipped_settings: Settings, shipped_maps: NewDBFieldMaps
+) -> None:
+    """Предмет залога описан перечнем номеров, а не одним VIN.
+
+    Живая форма поля: «XUS22270280002514, 15218-1, 15274-1» — VIN и заводские
+    номера навесного оборудования одной строкой. Целиком это не VIN ни по
+    длине, ни по алфавиту, ``normalize_vin`` возвращала ``None``, и запись
+    теряла единственный идентификатор: уведомление про ТУ САМУЮ машину, про
+    которую спрашивали, становилось слабым совпадением и уходило из отчёта.
+    """
+    response = copy.deepcopy(documented_response("pledge_vin"))
+    rows = response["results"]["pledge_vin"]["result"]["data"]
+    rows[0]["fnp"][0]["pledge_subject_ids_raw"] = "JTEHD21A850036287, 15218-1, 15274-1"
+
+    report = await pledge_report(shipped_settings, shipped_maps, DOCUMENTED_VIN, response)
+
+    record = pledges_of(report)[0]
+    assert record.vin == "JTEHD21A850036287"
+    assert record.is_usable
+    assert "совпадает VIN, по которому шёл поиск" in record.match_reasons
+
+
+@respx.mock
+async def test_subject_numbers_that_hold_no_vin_are_kept_as_they_came(
+    shipped_settings: Settings, shipped_maps: NewDBFieldMaps
+) -> None:
+    """Перечень без VIN остаётся описанием предмета, а не исчезает.
+
+    Отождествление по VIN на нём не сработает — и не должно; но выбрасывать
+    единственное описание заложенной вещи нельзя.
+    """
+    response = copy.deepcopy(documented_response("pledge_vin"))
+    rows = response["results"]["pledge_vin"]["result"]["data"]
+    rows[0]["fnp"][0]["pledge_subject_ids_raw"] = "15218-1, 15274-1"
+
+    report = await pledge_report(shipped_settings, shipped_maps, DOCUMENTED_VIN, response)
+
+    record = pledges_of(report)[0]
+    assert record.vin == "15218-1, 15274-1"
+    assert "совпадает VIN, по которому шёл поиск" not in record.match_reasons
 
 
 @respx.mock

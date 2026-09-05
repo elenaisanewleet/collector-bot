@@ -274,6 +274,29 @@ def test_a_bankruptcy_of_unknown_state_is_not_rendered_as_completed(
     assert "завершено" not in text
 
 
+def test_an_incomplete_fssp_answer_says_so_in_its_own_block(
+    person_subject: SearchSubject,
+) -> None:
+    """Оговорка источника печатается там же, где вывод из его ответа.
+
+    Раздел ФССП печатал «активных производств не найдено» и ничего больше — то
+    есть под ответом, который сам сообщил, что прислал не всё, стояла подпись
+    «проверено, чисто».
+    """
+    result = ProviderResult(
+        provider=ProviderName.FSSP,
+        status=ProviderStatus.SUCCESS,
+        records=[make_proceeding(active=False)],
+        is_partial=True,
+        notes=("Показаны первые 100 производств из 105, полученных от источника",),
+    )
+    text = render_for(person_subject, [result])
+
+    assert "Активных исполнительных производств не найдено." in text
+    assert "Показаны первые 100 производств из 105" in text
+    assert "⚠ ФССП — ответ неполный" in text
+
+
 def test_court_block_says_what_it_does_not_cover(person_subject: SearchSubject) -> None:
     """«Дел не найдено» без оговорки прочиталось бы как «в суд на него не подавали»."""
     text = render_for(

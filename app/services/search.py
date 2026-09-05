@@ -345,6 +345,8 @@ class SearchService:
                     error_message=row.error_message,
                     duration_ms=row.duration_ms,
                     cache_hit=True,
+                    is_partial=row.is_partial,
+                    notes=_deserialize_notes(row.notes_json),
                 )
             )
 
@@ -356,6 +358,22 @@ class SearchService:
         report.from_cache = True
         report.cached_at = created_at
         return report
+
+
+def _deserialize_notes(payload: str) -> tuple[str, ...]:
+    """Оговорки о неполноте ответа, сохранённые вместе с ним.
+
+    Битое хранилище не должно превращать неполный ответ в полный, поэтому
+    ``is_partial`` читается отдельной колонкой и остаётся верным даже здесь: без
+    текста оговорка станет менее внятной, но не исчезнет.
+    """
+    try:
+        raw: Any = json.loads(payload)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(item) for item in raw)
 
 
 def _deserialize_records(payload: str) -> list[FactRecord]:

@@ -15,6 +15,7 @@ from collections.abc import Iterable
 from app.domain.enums import (
     BANKRUPTCY_STATUS_TITLES,
     BUSINESS_ROLE_TITLES,
+    BUSINESS_STATE_TITLES,
     COURT_CASE_ROLE_TITLES,
     MATCH_LEVEL_TITLES,
     PLEDGE_STATUS_TITLES,
@@ -158,8 +159,16 @@ def _enforcement_block(report: DebtorReport) -> str:
         return f"{header}\n{unanswered}"
 
     active = report.active_proceedings
+    # Оговорки источника печатаются в обеих ветках, и во второй они важнее:
+    # «активных производств не найдено» под ответом, который сам сообщил, что
+    # прислал не всё (сотня производств — не весь список), — это подпись под
+    # неправдой. Отсев по отождествлению здесь по-прежнему оговоркой не
+    # считается: ФССП ищет по ФИО и штатно возвращает однофамильцев.
+    notes = _source_notes(result)
     if not active:
-        return f"{header}\nАктивных исполнительных производств не найдено.\n{_checked_at(result)}"
+        lines = [header, "Активных исполнительных производств не найдено.", *notes]
+        lines.append(_checked_at(result))
+        return "\n".join(lines)
 
     lines = [header, f"Активных производств: {len(active)}"]
     total = report.total_enforcement_amount
@@ -171,6 +180,7 @@ def _enforcement_block(report: DebtorReport) -> str:
     hidden = len(active) - MAX_LISTED_PROCEEDINGS
     if hidden > 0:
         lines.append(f"…и ещё {hidden}")
+    lines.extend(notes)
     lines.append(_checked_at(result))
     return "\n".join(lines)
 
@@ -194,11 +204,14 @@ def _bankruptcy_block(report: DebtorReport) -> str:
 
     usable = [item for item in report.bankruptcies if item.is_usable]
     if not usable:
-        return f"{header}\nНе обнаружено\n{_checked_at(result)}"
+        return _empty_block(
+            header, result, "Не обнаружено", found=len(report.bankruptcies), noun="запись"
+        )
 
     lines = [header]
     for item in usable:
         lines.extend(_bankruptcy_lines(item))
+    lines.extend(_source_notes(result))
     lines.append(_checked_at(result))
     return "\n".join(lines)
 
@@ -229,7 +242,13 @@ def _business_block(report: DebtorReport) -> str:
 
     usable = [item for item in report.business_relations if item.is_usable]
     if not usable:
-        return f"{header}\nСвязей с ИП и юрлицами не найдено.\n{_checked_at(result)}"
+        return _empty_block(
+            header,
+            result,
+            "Связей с ИП и юрлицами не найдено.",
+            found=len(report.business_relations),
+            noun="связь",
+        )
 
     lines = [header]
     for item in usable[:MAX_LISTED_BUSINESSES]:
@@ -237,14 +256,19 @@ def _business_block(report: DebtorReport) -> str:
     hidden = len(usable) - MAX_LISTED_BUSINESSES
     if hidden > 0:
         lines.append(f"…и ещё {hidden}")
+    lines.extend(_source_notes(result))
     lines.append(_checked_at(result))
     return "\n".join(lines)
 
 
 def _business_line(item: BusinessRelation) -> str:
+    # Три состояния, а не два. ``egrul_ip`` не отдаёт статус у строк физлица
+    # вовсе — во всех живых записях ``status: null``, — и печатать это как
+    # «прекращено» значит закрывать действующее ИП должника одним словом.
+    # Отсутствие признака никогда не выводится как прекращение.
+    state = BUSINESS_STATE_TITLES[item.status]
+    name = item.person_name or item.name or item.inn or "—"
     role = BUSINESS_ROLE_TITLES.get(item.role, "связь")
-    state = "действует" if item.is_active else "прекращено"
-    name = item.name or item.inn or "—"
     return f"• {role}: {name} — {state} ({_match_note(item.match_level)})"
 
 
@@ -257,9 +281,13 @@ def _pledge_block(report: DebtorReport) -> str:
 
     usable = [item for item in report.pledges if item.is_usable]
     if not usable:
-        return (
-            f"{header}\nЗаписей в реестре залогов не найдено. "
-            f"{PLEDGE_SCOPE_NOTE}\n{_checked_at(result)}"
+        return _empty_block(
+            header,
+            result,
+            "Записей в реестре залогов не найдено.",
+            found=len(report.pledges),
+            noun="запись",
+            tail=PLEDGE_SCOPE_NOTE,
         )
 
     lines = [header]
@@ -268,6 +296,7 @@ def _pledge_block(report: DebtorReport) -> str:
     hidden = len(usable) - MAX_LISTED_PLEDGES
     if hidden > 0:
         lines.append(f"…и ещё {hidden}")
+    lines.extend(_source_notes(result))
     lines.append(PLEDGE_SCOPE_NOTE)
     lines.append(_checked_at(result))
     return "\n".join(lines)
@@ -303,9 +332,13 @@ def _court_block(report: DebtorReport) -> str:
 
     usable = [item for item in report.court_cases if item.is_usable]
     if not usable:
-        return (
-            f"{header}\nАрбитражных дел не найдено. "
-            f"Суды общей юрисдикции этот источник не покрывает.\n{_checked_at(result)}"
+        return _empty_block(
+            header,
+            result,
+            "Арбитражных дел не найдено.",
+            found=len(report.court_cases),
+            noun="дело",
+            tail="Суды общей юрисдикции этот источник не покрывает.",
         )
 
     lines = [header]
@@ -314,6 +347,7 @@ def _court_block(report: DebtorReport) -> str:
     hidden = len(usable) - MAX_LISTED_CASES
     if hidden > 0:
         lines.append(f"…и ещё {hidden}")
+    lines.extend(_source_notes(result))
     lines.append("Суды общей юрисдикции этот источник не покрывает.")
     lines.append(_checked_at(result))
     return "\n".join(lines)
@@ -386,6 +420,10 @@ def _sources_block(report: DebtorReport) -> str:
 
 def _source_line(result: ProviderResult) -> str:
     title = PROVIDER_TITLES.get(result.provider, result.provider.value)
+    if result.is_partial and result.is_answered:
+        # «Проверено, записей нет» про источник, который сам сообщил, что
+        # прислал не всё, — это подпись под неправдой в списке источников.
+        return f"⚠ {title} — ответ неполный, {len(result.records)} зап."
     match result.status:
         case ProviderStatus.SUCCESS:
             return f"✓ {title} — {len(result.records)} зап."
@@ -402,6 +440,70 @@ def _source_line(result: ProviderResult) -> str:
 
 
 # ---------------------------------------------------------------- helpers
+
+
+def _empty_block(
+    header: str,
+    result: ProviderResult | None,
+    empty_line: str,
+    *,
+    found: int,
+    noun: str,
+    tail: str = "",
+) -> str:
+    """Секция без единой показанной записи — и точный ответ, почему.
+
+    «Ничего не найдено» здесь имеет право быть напечатанным ровно в одном
+    случае: источник ответил, ответил целиком, и в ответе действительно ничего
+    не было. Остальные два случая выглядят так же — ноль строк на экране, — и
+    оба означают обратное:
+
+    *   источник сказал, что нашёл больше, чем прислал (``is_partial``: ФНП с
+        тринадцатью несопоставленными уведомлениями, арбитраж с десятью делами
+        из сорока);
+    *   записи пришли, но ни одна не сопоставлена с должником настолько, чтобы
+        её показывать. Найденное дело, отсеянное как чужое, — это повод для
+        ручной проверки, а не повод написать «не обнаружено» и начислить плюс.
+
+    ``tail`` — оговорка о границах самого источника: что он покрывает, а что
+    нет. Печатается во всех трёх случаях, потому что говорит о другом — о том,
+    чего этот источник не знает в принципе, независимо от полноты ответа.
+    """
+    lines = [header]
+    notes = _source_notes(result)
+    if notes:
+        lines.extend(notes)
+    elif found:
+        word = pluralize_ru(found, noun, _plural_noun(noun), _genitive_noun(noun))
+        lines.append(
+            f"Источник вернул {found} {word}, но сопоставить с должником не удалось "
+            "ни одну — требуется ручная проверка."
+        )
+    else:
+        lines.append(empty_line)
+    lines.append(tail)
+    lines.append(_checked_at(result))
+    return "\n".join(line for line in lines if line)
+
+
+_NOUN_FORMS: dict[str, tuple[str, str]] = {
+    "запись": ("записи", "записей"),
+    "связь": ("связи", "связей"),
+    "дело": ("дела", "дел"),
+}
+
+
+def _plural_noun(noun: str) -> str:
+    return _NOUN_FORMS[noun][0]
+
+
+def _genitive_noun(noun: str) -> str:
+    return _NOUN_FORMS[noun][1]
+
+
+def _source_notes(result: ProviderResult | None) -> list[str]:
+    """То, что источник сказал о полноте собственного ответа."""
+    return list(result.notes) if result is not None else []
 
 
 def _unanswered_line(result: ProviderResult | None) -> str | None:

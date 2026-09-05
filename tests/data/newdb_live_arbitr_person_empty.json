@@ -1,0 +1,26 @@
+{
+  "params": {
+    "method": "arbitr_person",
+    "country": "ru",
+    "innfiz": "770000000001"
+  },
+  "method": "",
+  "requestId": "0000001f-0000-4000-8000-00000000001f",
+  "cost": 1,
+  "datecreated": "2026-09-05 01:47:44",
+  "state": "complete",
+  "balance": 88,
+  "tasks": 1,
+  "taskId": "00000020-0000-4000-8000-000000000020",
+  "is_repeat": false,
+  "results": {
+    "arbitr_person": {
+      "result": {
+        "status": 200,
+        "data": []
+      },
+      "taskId": "00000020-0000-4000-8000-000000000020",
+      "dateupdated": "2026-09-05 01:48:01"
+    }
+  }
+}

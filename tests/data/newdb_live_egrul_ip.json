@@ -1,0 +1,325 @@
+{
+  "params": {
+    "method": "egrul_ip",
+    "country": "ru",
+    "innfiz": "770600011111"
+  },
+  "method": "",
+  "requestId": "00000009-0000-4000-8000-000000000009",
+  "cost": 1,
+  "datecreated": "2026-09-05 01:50:57",
+  "state": "complete",
+  "balance": 83,
+  "tasks": 1,
+  "taskId": "0000000a-0000-4000-8000-00000000000a",
+  "is_repeat": false,
+  "results": {
+    "egrul_ip": {
+      "taskId": "0000000a-0000-4000-8000-00000000000a",
+      "dateupdated": "2026-09-05 01:52:06",
+      "result": {
+        "status": 200,
+        "data": [
+          {
+            "total_items": 3,
+            "matches": [
+              {
+                "section": "upr",
+                "inn": "770600011111",
+                "ogrn": "",
+                "name_short": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                "name_full": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                "status": null,
+                "address": null,
+                "region": null,
+                "registration_date": null,
+                "ogrn_date": null,
+                "okved_code": "",
+                "okved_name": null,
+                "bankruptcy_flag": false,
+                "liquidation_flag": false,
+                "invalid_flag": false,
+                "links": {
+                  "business_card": null,
+                  "founding_docs": null,
+                  "gosreg": null,
+                  "egrul": null
+                }
+              },
+              {
+                "section": "ip",
+                "inn": "770600011111",
+                "ogrn": "320774600311111",
+                "name_short": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                "name_full": null,
+                "status": null,
+                "address": null,
+                "region": null,
+                "registration_date": null,
+                "ogrn_date": "15.09.2020",
+                "okved_code": "45.11",
+                "okved_name": "Торговля легковыми автомобилями и грузовыми автомобилями малой грузоподъемности",
+                "bankruptcy_flag": true,
+                "liquidation_flag": false,
+                "invalid_flag": false,
+                "links": {
+                  "business_card": null,
+                  "founding_docs": null,
+                  "gosreg": "https://service.nalog.ru/gosreg/lk-excerpt.html",
+                  "egrul": "token=0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF&inn=770600011111&pdf=vyp"
+                }
+              },
+              {
+                "section": "uchr",
+                "inn": "770600011111",
+                "ogrn": "",
+                "name_short": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                "name_full": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                "status": null,
+                "address": null,
+                "region": null,
+                "registration_date": null,
+                "ogrn_date": null,
+                "okved_code": "",
+                "okved_name": null,
+                "bankruptcy_flag": false,
+                "liquidation_flag": false,
+                "invalid_flag": false,
+                "links": {
+                  "business_card": null,
+                  "founding_docs": null,
+                  "gosreg": null,
+                  "egrul": null
+                }
+              }
+            ],
+            "affiliations": {
+              "registry_sections": {
+                "upr": {
+                  "label": "Руководители юридических лиц",
+                  "items_count": 1,
+                  "row_count": 1,
+                  "has_more": false,
+                  "records": [
+                    {
+                      "section": "upr",
+                      "inn": "770600011111",
+                      "ogrn": "",
+                      "name_short": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                      "name_full": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                      "status": null,
+                      "address": null,
+                      "region": null,
+                      "registration_date": null,
+                      "ogrn_date": null,
+                      "okved_code": "",
+                      "okved_name": null,
+                      "bankruptcy_flag": false,
+                      "liquidation_flag": false,
+                      "invalid_flag": false,
+                      "links": {
+                        "business_card": null,
+                        "founding_docs": null,
+                        "gosreg": null,
+                        "egrul": null
+                      }
+                    }
+                  ]
+                },
+                "uchr": {
+                  "label": "Учредители (участники, акционеры) юридических лиц",
+                  "items_count": 1,
+                  "row_count": 1,
+                  "has_more": false,
+                  "records": [
+                    {
+                      "section": "uchr",
+                      "inn": "770600011111",
+                      "ogrn": "",
+                      "name_short": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                      "name_full": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                      "status": null,
+                      "address": null,
+                      "region": null,
+                      "registration_date": null,
+                      "ogrn_date": null,
+                      "okved_code": "",
+                      "okved_name": null,
+                      "bankruptcy_flag": false,
+                      "liquidation_flag": false,
+                      "invalid_flag": false,
+                      "links": {
+                        "business_card": null,
+                        "founding_docs": null,
+                        "gosreg": null,
+                        "egrul": null
+                      }
+                    }
+                  ]
+                },
+                "rdl": {
+                  "label": "Реестр дисквалифицированных лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "addr": {
+                  "label": "Адреса юридических лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "ogrfl": {
+                  "label": "Ограничения участия физических лиц в юридических лицах",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "ogrul": {
+                  "label": "Ограничения участия юридических лиц в юридических лицах",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "docul": {
+                  "label": "Документы на государственную регистрацию юридических лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "docip": {
+                  "label": "Документы на государственную регистрацию ИП",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                }
+              },
+              "persons": [
+                {
+                  "role": "director",
+                  "section": "upr",
+                  "name": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                  "inn": "770600011111",
+                  "companies_count": 1,
+                  "token": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+                  "query": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ"
+                },
+                {
+                  "role": "founder",
+                  "section": "uchr",
+                  "name": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                  "inn": "770600011111",
+                  "companies_count": 1,
+                  "token": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+                  "query": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ"
+                }
+              ],
+              "lookups": [
+                {
+                  "person": {
+                    "role": "director",
+                    "section": "upr",
+                    "name": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                    "inn": "770600011111",
+                    "companies_count": 1,
+                    "token": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+                    "query": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ"
+                  },
+                  "companies_total": 1,
+                  "has_more": false,
+                  "companies": [
+                    {
+                      "section": "ul",
+                      "inn": "9728011111",
+                      "ogrn": "1207700311111",
+                      "name_short": "ООО \"СТАЛЬНОЙ КЛЮЧ\"",
+                      "name_full": "ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ \"СТАЛЬНОЙ КЛЮЧ\"",
+                      "status": "Действующая организация",
+                      "address": null,
+                      "region": "МОСКВА Г.",
+                      "registration_date": "15.09.2020",
+                      "ogrn_date": "15.09.2020",
+                      "okved_code": "45.11",
+                      "okved_name": "Торговля легковыми автомобилями и грузовыми автомобилями малой грузоподъемности",
+                      "bankruptcy_flag": true,
+                      "liquidation_flag": false,
+                      "invalid_flag": false,
+                      "links": {
+                        "business_card": "https://bo.nalog.gov.ru/organizations-card/11400000",
+                        "founding_docs": "https://service.nalog.ru/puchdoc/?o=0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+                        "gosreg": "https://service.nalog.ru/gosreg/lk-excerpt.html",
+                        "egrul": "token=0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF&inn=9728011111&pdf=vyp"
+                      },
+                      "roles": [
+                        "director"
+                      ],
+                      "persons": [
+                        {
+                          "name": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                          "inn": "770600011111"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "person": {
+                    "role": "founder",
+                    "section": "uchr",
+                    "name": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                    "inn": "770600011111",
+                    "companies_count": 1,
+                    "token": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+                    "query": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ"
+                  },
+                  "error": "Locator.wait_for: Timeout 10000ms exceeded.\nCall log:\n  - waiting for locator(\"#resultuchr div.pb-card.pb-card--clickable[data-token='0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF']\").first to be visible\n",
+                  "companies": []
+                }
+              ],
+              "companies": [
+                {
+                  "section": "ul",
+                  "inn": "9728011111",
+                  "ogrn": "1207700311111",
+                  "name_short": "ООО \"СТАЛЬНОЙ КЛЮЧ\"",
+                  "name_full": "ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ \"СТАЛЬНОЙ КЛЮЧ\"",
+                  "status": "Действующая организация",
+                  "address": null,
+                  "region": "МОСКВА Г.",
+                  "registration_date": "15.09.2020",
+                  "ogrn_date": "15.09.2020",
+                  "okved_code": "45.11",
+                  "okved_name": "Торговля легковыми автомобилями и грузовыми автомобилями малой грузоподъемности",
+                  "bankruptcy_flag": true,
+                  "liquidation_flag": false,
+                  "invalid_flag": false,
+                  "links": {
+                    "business_card": "https://bo.nalog.gov.ru/organizations-card/11400000",
+                    "founding_docs": "https://service.nalog.ru/puchdoc/?o=0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+                    "gosreg": "https://service.nalog.ru/gosreg/lk-excerpt.html",
+                    "egrul": "token=0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF&inn=9728011111&pdf=vyp"
+                  },
+                  "roles": [
+                    "director"
+                  ],
+                  "persons": [
+                    {
+                      "name": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
+                      "inn": "770600011111"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

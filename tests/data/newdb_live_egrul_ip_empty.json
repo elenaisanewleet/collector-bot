@@ -1,0 +1,94 @@
+{
+  "params": {
+    "method": "egrul_ip",
+    "country": "ru",
+    "innfiz": "770000000001"
+  },
+  "method": "",
+  "requestId": "0000000d-0000-4000-8000-00000000000d",
+  "cost": 1,
+  "datecreated": "2026-09-05 01:47:15",
+  "state": "complete",
+  "balance": 89,
+  "tasks": 1,
+  "taskId": "0000000e-0000-4000-8000-00000000000e",
+  "is_repeat": false,
+  "results": {
+    "egrul_ip": {
+      "taskId": "0000000e-0000-4000-8000-00000000000e",
+      "dateupdated": "2026-09-05 01:47:40",
+      "result": {
+        "status": 200,
+        "data": [
+          {
+            "total_items": 0,
+            "matches": [],
+            "affiliations": {
+              "registry_sections": {
+                "upr": {
+                  "label": "Руководители юридических лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "uchr": {
+                  "label": "Учредители (участники, акционеры) юридических лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "rdl": {
+                  "label": "Реестр дисквалифицированных лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "addr": {
+                  "label": "Адреса юридических лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "ogrfl": {
+                  "label": "Ограничения участия физических лиц в юридических лицах",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "ogrul": {
+                  "label": "Ограничения участия юридических лиц в юридических лицах",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "docul": {
+                  "label": "Документы на государственную регистрацию юридических лиц",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                },
+                "docip": {
+                  "label": "Документы на государственную регистрацию ИП",
+                  "items_count": 0,
+                  "row_count": 0,
+                  "has_more": false,
+                  "records": []
+                }
+              },
+              "persons": [],
+              "lookups": [],
+              "companies": []
+            }
+          }
+        ]
+      }
+    }
+  }
+}
