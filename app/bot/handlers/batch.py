@@ -62,12 +62,31 @@ def render_estimate(estimate: BatchEstimate) -> str:
         )
     else:
         lines.append("Внешние источники не подключены — проверка пройдёт по внутренней базе.")
+    lines.extend(_bridge_lines(estimate))
     if estimate.capped:
         lines.append("")
         lines.append("Прогон ограничен настройкой BATCH_MAX_DEBTORS.")
     lines.append("")
     lines.append("Запросы к платным источникам списываются с вашего баланса.")
     return "\n".join(lines)
+
+
+def _bridge_lines(estimate: BatchEstimate) -> list[str]:
+    """Мост «паспорт → ИНН» в смете — отдельной строкой, а не в общем числе.
+
+    Молчаливый ноль читался бы как «бесплатно и работает», тогда как значит он
+    обратное: паспортов в выгрузке нет, и три источника по этим должникам не
+    будут проверены вовсе. Поэтому вместо ноля печатается контр-строка.
+    """
+    if estimate.bridge_calls > 0:
+        return [f"ИНН по паспорту (ФНС): {estimate.bridge_calls} вызовов — по одному на должника"]
+    if estimate.without_inn > 0:
+        return [
+            "ИНН по паспорту: 0 вызовов — паспорта в выгрузке не хранятся. "
+            f"У {estimate.without_inn} должников ИНН неизвестен: банкротство, "
+            "статус ИП и арбитраж по ним проверены НЕ будут."
+        ]
+    return []
 
 
 def render_progress(progress: BatchProgress) -> str:

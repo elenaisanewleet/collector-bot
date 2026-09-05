@@ -58,9 +58,9 @@ DOC_RESPONSE = Path(__file__).parent / "data" / "newdb_bankruptcy_response.json"
 DOCUMENTED_PERSON = SearchSubject(
     search_type=SearchType.PERSON.value,
     name=PersonName(last_name="Иванов", first_name="Иван", middle_name="Иванович"),
-    inn="000000000605",
+    inn="270311112222",
 )
-DOCUMENTED_CASE = "А00-0000/2017"
+DOCUMENTED_CASE = "А73-1111/2017"
 STRANGERS_CASE = "А40-500100/2024"
 
 
@@ -135,7 +135,7 @@ async def test_the_documented_case_reaches_the_report_with_its_own_identity(
 
     record = case(report, DOCUMENTED_CASE)
     assert record.debtor_name == "Иванов Иван Иванович"
-    assert record.inn == "000000000605"
+    assert record.inn == "270311112222"
     assert record.status is BankruptcyStatus.COMPLETED
     assert record.match_level is MatchLevel.CONFIRMED
 
@@ -244,25 +244,33 @@ async def test_a_second_subject_in_the_answer_keeps_its_own_cases(
 
 
 @respx.mock
-async def test_the_debtors_own_case_is_still_found_without_an_inn_of_its_own(
+async def test_a_container_without_identity_is_reported_unchecked_not_assumed(
     shipped_settings: Settings, shipped_maps: NewDBFieldMaps
 ) -> None:
-    """Обратная сторона: сузить нельзя настолько, чтобы потерять своё дело.
+    """Дела есть, а чьи они — не прочитано. Это «не проверено», а не «его».
 
-    Если ``commmon`` в ответе не окажется — а живого ответа никто не видел, —
-    запись остаётся без единого идентификатора, и её по-прежнему держит ИНН
-    запроса. Иначе настоящее банкротство, найденное по ИНН самого должника,
-    выпало бы из отчёта как чужое.
+    Опечатка вендора (``commmon`` с тремя «m») — часть контракта ровно до того
+    дня, когда её починят. Пока карта дотягивалась до блока, ФИО, ИНН и дата
+    рождения приезжали из ответа; после переименования все три пути промахнутся
+    молча, и код припишет делам ИНН, по которому шёл поиск, — в ответе с двумя
+    субъектами это отдаёт дела второго первому.
+
+    Раньше этот тест требовал обратного: считать такие дела делами должника.
+    Тогда живого ответа никто не видел; теперь он есть, ``commmon`` в нём стоит
+    у каждой непустой строки, и пропажа всего блока перестала быть нормой,
+    которую нужно переживать молча.
     """
     response = copy.deepcopy(documented_response())
     del subjects_of(response)[0]["commmon"]
 
     report = await bankruptcy_report(shipped_settings, shipped_maps, response)
 
-    record = case(report, DOCUMENTED_CASE)
-    assert record.inn == "000000000605"
-    assert record.debtor_name is None
-    assert record.is_usable
+    result = report.provider_results[0]
+    assert not result.status.is_answered
+    assert result.error_code == "unexpected_schema"
+    assert not report.bankruptcies
+    # И никакого «банкротство не обнаружено» в оценке.
+    assert "no_bankruptcy" not in factor_names(report)
 
 
 @respx.mock
@@ -282,7 +290,7 @@ async def test_no_date_is_printed_for_dates_the_source_never_sent(
     assert record.procedure is None
     assert record.started_at is None and record.completed_at is None
     assert record.source_url == (
-        "https://fedresurs.ru/legalcases/6af58462-0000-0000-0000-5e4abfbc2d6e"
+        "https://fedresurs.ru/legalcases/11111111-2222-4333-8444-555555555555"
     )
 
     text = render_report(report)

@@ -15,6 +15,7 @@ import pytest
 
 from app.domain.enums import (
     BankruptcyStatus,
+    CourtCaseRole,
     PledgeStatus,
     ProviderName,
     ProviderStatus,
@@ -449,6 +450,37 @@ def test_a_decided_case_is_not_a_live_claim(
     score = score_engine.evaluate(report)
 
     assert not any(factor.name == "claims_against_debtor" for factor in score.factors)
+
+
+def test_a_case_with_an_undetermined_role_does_not_earn_the_clean_bonus(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Дело есть, роль должника в нём не определена — это не «исков нет».
+
+    У КАД плоского поля роли нет, а карточку с участниками вендор разбирает не
+    у каждого дела: «Подробно разобрано 1 из текущих 1» — его собственные
+    слова. Дело с ролью OTHER печатается в отчёте, и плюс «действующих исков к
+    должнику не найдено» опровергал бы этот самый отчёт строкой ниже.
+    """
+    case = make_court_case()
+    case.role = CourtCaseRole.OTHER
+    report = build_report(person_subject, court=(ProviderStatus.SUCCESS, [case]))
+    score = score_engine.evaluate(report)
+
+    assert not any(factor.name == "no_court_claims" for factor in score.factors)
+    assert not any(factor.name == "claims_against_debtor" for factor in score.factors)
+
+
+def test_a_decided_case_with_an_undetermined_role_still_earns_the_bonus(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Оговорка касается действующих дел. Рассмотренное делу не конкурент."""
+    case = make_court_case(closed=True)
+    case.role = CourtCaseRole.OTHER
+    report = build_report(person_subject, court=(ProviderStatus.SUCCESS, [case]))
+    score = score_engine.evaluate(report)
+
+    assert any(factor.name == "no_court_claims" for factor in score.factors)
 
 
 @pytest.mark.parametrize(

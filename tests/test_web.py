@@ -435,8 +435,21 @@ def test_enforcement_total_is_not_zero_when_amounts_are_unknown(
 
 
 def test_filtered_out_records_are_counted_not_dropped(person_subject: SearchSubject) -> None:
-    """Отфильтрованное молча превращалось в отсутствующее."""
-    weak = make_proceeding(number="2/26/77001-ИП", name="Другов Пётр Иванович", confidence=0.2)
+    """Отфильтрованное молча превращалось в отсутствующее.
+
+    ``birth_date=None`` здесь обязателен и означает ровно то, что написано:
+    источник не дал ни одного уточняющего идентификатора. С совпавшей датой
+    рождения запись теперь набирает 0.55 и остаётся в отчёте подписанной как
+    «возможное совпадение» — это намеренное правило матчера, а не утечка мимо
+    фильтра. Слабой запись делает именно отсутствие идентификаторов, и только
+    такую имеет смысл считать скрытой.
+    """
+    weak = make_proceeding(
+        number="2/26/77001-ИП",
+        name="Другов Пётр Иванович",
+        birth_date=None,
+        confidence=0.2,
+    )
     report = _report_for(
         person_subject, [provider_result(ProviderName.FSSP, ProviderStatus.SUCCESS, [weak])]
     )

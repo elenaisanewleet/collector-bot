@@ -19,6 +19,8 @@ from decimal import Decimal
 from app.domain.enums import (
     PROVIDER_TITLES,
     BankruptcyStatus,
+    BusinessStatus,
+    CourtCaseRole,
     PledgeStatus,
     ProviderName,
 )
@@ -145,6 +147,9 @@ def _bankruptcy_factors(report: DebtorReport) -> list[ScoreFactor]:
             )
         ]
 
+    if _incomplete_answer(result, unmatched=_unmatched(report.bankruptcies)):
+        return []
+
     return [
         ScoreFactor(
             name="no_bankruptcy",
@@ -153,6 +158,47 @@ def _bankruptcy_factors(report: DebtorReport) -> list[ScoreFactor]:
             source=ProviderName.FEDRESURS,
         )
     ]
+
+
+def _incomplete_answer(result: ProviderResult, *, unmatched: int) -> bool:
+    """Заслужен ли плюс «мы посмотрели и ничего не нашли».
+
+    Он заслужен, только если посмотрели всё. Не заслужен в двух случаях, и оба
+    выглядят как пустая выдача:
+
+    *   источник сам сообщил, что прислал не всё (``is_partial``);
+    *   записи пришли, но ни одна не сопоставлена с должником. Отсев по
+        отождествлению — это «мы не уверены, что это он», а не «этого нет»;
+        начислять за такое бонус значит платить должнику за то, что источник
+        записал его фамилию иначе. Это верно для источников, которые
+        адресуются точным идентификатором — ИНН или VIN, — то есть для всех,
+        кто зовёт эту функцию; у ФССП, ищущей по ФИО, вопрос другой, и там
+        учитывается только ``is_partial`` (см. ``_enforcement_factors``).
+
+    Ни штрафа, ни бонуса: неизвестность — не факт. Причина попадает в
+    «Ограничения оценки» через :func:`_confidence`.
+    """
+    return result.is_partial or unmatched > 0
+
+
+def _unmatched(records: Sequence[object]) -> int:
+    """Сколько записей источник прислал, а отождествление не пропустило."""
+    return sum(1 for item in records if not getattr(item, "is_usable", False))
+
+
+def _cases_with_unknown_role(report: DebtorReport) -> bool:
+    """Есть ли действующее дело, роль должника в котором не определена.
+
+    ``is_against_debtor`` требует роли ответчика, и дело с ролью OTHER не
+    попадает ни в иски к должнику, ни куда-либо ещё, — то есть молча
+    засчитывается в пользу должника. Роль остаётся неопределённой у дела,
+    которое вендор не разобрал подробно, и у дела, где стороной записано ЮЛ, а
+    не человек: и то и другое живьём встречается.
+    """
+    return any(
+        item.is_usable and item.is_active and item.role is CourtCaseRole.OTHER
+        for item in report.court_cases
+    )
 
 
 # ---------------------------------------------------------------- enforcement
@@ -165,6 +211,15 @@ def _enforcement_factors(report: DebtorReport) -> list[ScoreFactor]:
 
     active = report.active_proceedings
     if not active:
+        if result.is_partial:
+            return []
+        # Несопоставленная запись здесь бонус НЕ отменяет, в отличие от
+        # остальных источников, и разница не в осторожности, а в вопросе.
+        # ФССП ищется по ФИО с датой рождения, то есть возвращает в том числе
+        # однофамильцев: их производства — не «наши, но неузнанные», а чужие, и
+        # молчать из-за них о чистой ФССП значило бы наказывать должника за
+        # тёзку. Банкротство, арбитраж и залоги адресуются точным
+        # идентификатором — там несовпавшее ФИО означает ровно обратное.
         return [
             ScoreFactor(
                 name="no_enforcement",
@@ -244,7 +299,11 @@ def _business_factors(report: DebtorReport) -> list[ScoreFactor]:
             )
         )
 
-    terminated = [item for item in usable if not item.is_active]
+    # Только явно прекращённые. ``not is_active`` сваливало сюда и UNKNOWN, а
+    # живой ``egrul_ip`` не отдаёт статус у строк физлица вовсе: должник с
+    # действующим ИП и двумя ролями в ЮЛ получал штраф за «3 прекращённых
+    # бизнес-связи». Знак фактора был обратен факту.
+    terminated = [item for item in usable if item.status is BusinessStatus.TERMINATED]
     if terminated:
         penalty = max(
             TERMINATED_BUSINESS_PENALTY * len(terminated),
@@ -297,6 +356,11 @@ def _pledge_factors(report: DebtorReport) -> list[ScoreFactor]:
         ]
         if unknown:
             return []
+        if _incomplete_answer(result, unmatched=_unmatched(report.pledges)):
+            # Тринадцать уведомлений ФНП, ни одно не сопоставленное по дате
+            # рождения, — это не чистый реестр. Плюс здесь означал бы, что мы
+            # посмотрели и не увидели ничего, что могло бы действовать.
+            return []
         # Названо ровно тем, что проверено. Ответ pledge_* несёт две ветки, а
         # карта полей читает одну — ФНП; ипотеки и лизинга здесь нет вовсе.
         # «Имущество не обременено» было бы выводом обо всём имуществе на
@@ -336,6 +400,17 @@ def _court_factors(report: DebtorReport) -> list[ScoreFactor]:
 
     claims = report.claims_against_debtor
     if not claims:
+        if _incomplete_answer(result, unmatched=_unmatched(report.court_cases)):
+            # Десять дел из сорока — не повод утверждать, что исков нет.
+            return []
+        if _cases_with_unknown_role(report):
+            # Дело есть, а на какой должник в нём стороне — неизвестно: у КАД
+            # плоского поля роли нет, участники лежат в карточке, а карточку
+            # вендор разбирает не у каждого дела. Такое дело печатается в
+            # отчёте, и печатать рядом «исков к должнику не найдено» значит
+            # опровергать собственный отчёт строкой ниже. Ни бонуса, ни штрафа:
+            # «иная роль» — это не «истец».
+            return []
         return [
             ScoreFactor(
                 name="no_court_claims",
@@ -416,6 +491,12 @@ def _confidence(report: DebtorReport) -> tuple[float, list[str]]:
             continue
         if result is not None and result.is_answered:
             answered_weight += weight
+            if result.is_partial:
+                # Источник ответил — вес засчитан, — но ответил не полностью, и
+                # «Ограничения оценки» обязаны это назвать: иначе неполный
+                # ответ неотличим от исчерпывающего.
+                title = PROVIDER_TITLES.get(provider, provider.value)
+                notes.append(f"{title}: источник прислал не всё, что нашёл")
         else:
             notes.append(_unanswered_note(provider, result))
 

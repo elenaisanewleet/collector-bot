@@ -65,6 +65,51 @@ async def test_estimate_on_an_empty_base(container: Container) -> None:
     assert estimate.requests == 0
 
 
+async def test_the_bridge_adds_no_calls_to_a_batch_today(loaded: Container) -> None:
+    """T-32/T-33. Паспортов в выгрузке нет — значит нет и вызовов моста.
+
+    И это должно быть видно, а не молчаливо: у всех шести должников ИНН
+    неизвестен, то есть банкротство, статус ИП и арбитраж по ним не будут
+    проверены вовсе. Смета обязана сказать это до запуска.
+    """
+    from app.bot.handlers.batch import render_estimate
+
+    estimate = await loaded.batch_service.estimate()
+
+    assert estimate.bridge_calls == 0
+    assert estimate.without_inn == 6
+    # Мост не множитель: providers_per_debtor от него не изменился.
+    assert estimate.providers_per_debtor == 5
+    assert estimate.requests == 30
+
+    text = render_estimate(estimate)
+    assert "ИНН по паспорту: 0 вызовов" in text
+    assert "проверены НЕ будут" in text
+
+
+async def test_the_bridge_shows_up_as_its_own_line_when_it_will_fire(
+    loaded: Container,
+) -> None:
+    """Смета печатает мост отдельной строкой, а не растворяет его в общем числе."""
+    from app.bot.handlers.batch import render_estimate
+    from app.services.batch import BatchEstimate
+
+    estimate = BatchEstimate(
+        debtors=800,
+        cached=0,
+        to_query=800,
+        providers_per_debtor=5,
+        capped=False,
+        bridge_enabled=True,
+        bridge_calls=800,
+        without_inn=800,
+    )
+    text = render_estimate(estimate)
+
+    assert estimate.requests == 800 * 5 + 800
+    assert "ИНН по паспорту (ФНС): 800 вызовов — по одному на должника" in text
+
+
 # ---------------------------------------------------------------- run
 
 

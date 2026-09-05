@@ -32,6 +32,7 @@ from app.domain.enums import SearchType
 from app.domain.identity import NameParseError, SearchSubject, parse_fio
 from app.domain.verdict import VERDICT_ORDER, Verdict, VerdictDecision
 from app.logging_setup import get_logger
+from app.providers.newdb import individual_inn
 from app.services.search import SearchService, build_query_hash
 from app.services.verdict import VerdictEngine
 
@@ -50,10 +51,26 @@ class BatchEstimate:
     to_query: int
     providers_per_debtor: int
     capped: bool
+    # Мост «паспорт → ИНН» — отдельный терм, а не множитель: он стоит один вызов
+    # на должника, а не один на источник, и включается собственным флагом.
+    bridge_enabled: bool = False
+    bridge_calls: int = 0
+    # Должники, по которым банкротство, статус ИП и арбитраж не будут проверены
+    # вовсе: у них нет ИНН физлица, а взять его неоткуда.
+    without_inn: int = 0
 
     @property
     def requests(self) -> int:
-        return self.to_query * self.providers_per_debtor
+        return self.to_query * self.providers_per_debtor + self.bridge_calls
+
+
+@dataclass(frozen=True, slots=True)
+class _Scan:
+    """Итоги одного прохода по выгрузке, нужные смете."""
+
+    cached: int
+    without_inn: int
+    bridge_calls: int
 
 
 @dataclass(slots=True)
@@ -180,23 +197,36 @@ class BatchService:
             total = await DebtorRepository(session).count()
         debtors = min(total, cap)
 
-        cached = await self._count_cached(debtors)
+        scan = await self._scan(debtors)
         providers = len(self._search.registry.configured_names)
+        bridge = self._search.registry.inn_bridge
         return BatchEstimate(
             debtors=debtors,
-            cached=cached,
-            to_query=max(debtors - cached, 0),
+            cached=scan.cached,
+            to_query=max(debtors - scan.cached, 0),
             providers_per_debtor=providers,
             capped=total > cap,
+            bridge_enabled=bridge is not None and bridge.is_configured,
+            bridge_calls=scan.bridge_calls,
+            without_inn=scan.without_inn,
         )
 
-    async def _count_cached(self, limit: int) -> int:
-        """Сколько должников уже проверялось внутри окна кэша."""
-        if not self._settings.cache_enabled:
-            return 0
+    async def _scan(self, limit: int) -> _Scan:
+        """Один проход по выгрузке: кэш, отсутствие ИНН и вызовы моста.
+
+        ``bridge_calls`` считается честно — по тому, дошло бы дело до платного
+        вызова, — а не подставляется нулём. Сегодня он всё равно выходит нулевым:
+        у ``Debtor`` нет паспортной колонки, ``_subject_for`` паспорт не
+        заполняет, и брать его в массовом прогоне неоткуда. Захардкоженный ноль
+        стал бы враньём в тот день, когда колонка появится; посчитанный —
+        просто изменится.
+        """
         from app.db.repository import SearchRepository
 
+        bridge = self._search.registry.inn_bridge
         cached = 0
+        without_inn = 0
+        bridge_calls = 0
         async with self._database.session() as session:
             debtor_repo = DebtorRepository(session)
             search_repo = SearchRepository(session)
@@ -208,13 +238,20 @@ class BatchService:
                     subject = _subject_for(row)
                     if subject is None:
                         continue
-                    found = await search_repo.find_cached_request(
-                        build_query_hash(subject),
-                        ttl_hours=self._settings.cache_ttl_hours,
-                    )
-                    if found is not None:
+                    if individual_inn(subject) is None:
+                        without_inn += 1
+                    is_cached = False
+                    if self._settings.cache_enabled:
+                        found = await search_repo.find_cached_request(
+                            build_query_hash(subject),
+                            ttl_hours=self._settings.cache_ttl_hours,
+                        )
+                        is_cached = found is not None
+                    if is_cached:
                         cached += 1
-        return cached
+                    elif bridge is not None and bridge.will_query(subject):
+                        bridge_calls += 1
+        return _Scan(cached=cached, without_inn=without_inn, bridge_calls=bridge_calls)
 
     # ------------------------------------------------------------- run
 

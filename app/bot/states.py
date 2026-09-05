@@ -14,6 +14,10 @@ class PersonSearch(StatesGroup):
     waiting_birth_date = State()
     waiting_phone = State()
     waiting_region = State()
+    # Последним шагом и только при INN_BRIDGE_ENABLED. Порядок не случайный: к
+    # этому моменту все прочие данные уже собраны, поэтому паспорт не попадает в
+    # state.update_data вовсе — он идёт прямо в SearchSubject.
+    waiting_passport = State()
 
 
 class ContractSearch(StatesGroup):

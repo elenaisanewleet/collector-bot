@@ -22,10 +22,17 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.domain.enums import CourtCaseRole, ProviderName, ProviderStatus
-from app.domain.identity import NameMatch, PersonName, SearchSubject, compare_names
+from app.domain.identity import PersonName, SearchSubject, compare_names, is_name_evidence
 from app.domain.models import CourtCase, ProviderResult
 from app.providers.mapping import as_text, dig
-from app.providers.newdb import NewDBMethodProvider, individual_inn, inn_params
+from app.providers.newdb import (
+    MappedRows,
+    NewDBMethodProvider,
+    container_flag,
+    container_int,
+    individual_inn,
+    inn_params,
+)
 from app.utils.dates import parse_date, utcnow
 from app.utils.money import parse_amount
 
@@ -78,22 +85,57 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
                 "поиск по одному ФИО дал бы чужие дела"
             )
 
-        rows, raw = await self.rows_for(NEWDB_METHOD, inn_params(inn))
+        mapped, raw = await self.mapped_for(NEWDB_METHOD, inn_params(inn))
         name_key = self.option(
             NEWDB_METHOD, PARTICIPANT_NAME_KEY_OPTION, DEFAULT_PARTICIPANT_NAME_KEY
         )
+        rows = mapped.records
         parsed = [
             case
             for row in rows[:MAX_RECORDS]
             if (case := _to_case(row, subject=subject, searched_inn=inn, name_key=name_key))
             is not None
         ]
+        notes = _completeness_notes(mapped, shown=len(rows))
+        if len(rows) > MAX_RECORDS:
+            notes.append(
+                f"Показаны первые {MAX_RECORDS} дел из {len(rows)}, полученных от источника"
+            )
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.SUCCESS if parsed else ProviderStatus.NO_RESULTS,
             records=list(parsed),
+            is_partial=bool(notes),
+            notes=tuple(notes),
             raw_response=self.raw_for(raw),
         )
+
+
+def _completeness_notes(mapped: MappedRows, *, shown: int) -> list[str]:
+    """Всё ли дела прислал источник — по его же счётчикам.
+
+    Живая строка ``data`` у этого метода — не дело, а обёртка на запрос, и в
+    ней вендор сам говорит, сколько дел нашёл (``total_count``) и сколько
+    отдал (``pagination.limit`` = 10, ``pagination.has_more``). У должника с
+    сорока делами придут десять, карта разберёт десять, ``unreadable`` будет
+    ноль — и отчёт напечатает десять дел как всё, что есть, тем увереннее
+    ошибаясь, чем хуже должник. Здесь это становится сказанным вслух.
+
+    ``found: true`` при пустом ``cases[]`` — тот же случай с другой стороны:
+    источник нашёл и не отдал, а нулевые записи прочитались бы как «дел нет».
+    """
+    notes: list[str] = []
+    total = container_int(mapped.containers, "total_count")
+    if total is not None and total > shown:
+        notes.append(
+            f"Источник нашёл {total} арбитражных дел, а прислал {shown}: "
+            "ответ обрезан постранично, список неполный"
+        )
+    elif container_flag(mapped.containers, "has_more"):
+        notes.append("Источник отдал не все арбитражные дела (has_more) — список неполный")
+    if not shown and container_flag(mapped.containers, "found"):
+        notes.append("Источник сообщил, что дела найдены, но не прислал ни одного")
+    return notes
 
 
 def _to_case(
@@ -147,9 +189,21 @@ def _role_of(record: Mapping[str, Any], subject: SearchSubject, name_key: str) -
         return CourtCaseRole.OTHER
     # Должник-банкрот стоит в обоих списках сразу — он и заявитель, и лицо, к
     # которому предъявлены требования. Для взыскания весомее второе.
+    #
+    # Списки участников лежат внутри разобранной карточки дела, а карточку
+    # вендор делает не для каждого дела: живой ответ прямо пишет «Подробно
+    # разобрано 1 из текущих 1». У дела без карточки списков нет, роль осталась
+    # бы OTHER, дело не попало бы в иски к должнику — и скоринг начислил бы
+    # плюс «действующих исков не найдено», напечатав это самое дело строкой
+    # выше. Поэтому запасной источник роли — плоские ``respondent`` и
+    # ``plaintiff`` строки дела, которые есть всегда.
     if _names_include(record.get("participants_defendants"), subject.name, name_key):
         return CourtCaseRole.DEFENDANT
     if _names_include(record.get("participants_plaintiffs"), subject.name, name_key):
+        return CourtCaseRole.PLAINTIFF
+    if _names_include(record.get("respondent_name"), subject.name, name_key):
+        return CourtCaseRole.DEFENDANT
+    if _names_include(record.get("plaintiff_name"), subject.name, name_key):
         return CourtCaseRole.PLAINTIFF
     return CourtCaseRole.OTHER
 
@@ -168,12 +222,27 @@ def _names_include(participants: Any, name: PersonName, name_key: str) -> bool:
     вернулось по ИНН должника, и вопрос стоит не «его ли это дело», а «на какой
     он в нём стороне». Кем считать однофамильца с теми же инициалами в чужом
     деле, этот код не решает — такое дело сюда не попадает.
+
+    Достаточно — но именно доказательства, а не «чего угодно, кроме
+    противоречия». Проверка была ``is not NameMatch.NONE``, то есть роль
+    назначало и нечитаемое имя: строка «Данные скрыты» в списке ответчиков или
+    одна фамилия без имени делали должника ответчиком по чужому иску, а
+    «Леликов Андрей Петрович» при должнике Андрее Сергеевиче — тем более. См.
+    :func:`app.domain.identity.is_name_evidence`.
+
+    Одиночная строка принимается наравне со списком: у КАД сторона дела
+    приходит и списком объектов (``card.participants.defendants``), и плоской
+    строкой (``respondent``). Раньше строка отбрасывалась вместе с байтами —
+    ``«Иванов Андрей Викторович»`` давал False, — и запасной путь к роли,
+    единственный у дела без разобранной карточки, не работал бы вовсе.
     """
-    if not isinstance(participants, Sequence) or isinstance(participants, (str, bytes)):
+    if isinstance(participants, str):
+        participants = [participants]
+    if not isinstance(participants, Sequence) or isinstance(participants, bytes):
         return False
     for item in participants:
         raw = dig(item, name_key) if isinstance(item, Mapping) else item
-        if compare_names(name, as_text(raw)) is not NameMatch.NONE:
+        if is_name_evidence(compare_names(name, as_text(raw))):
             return True
     return False
 

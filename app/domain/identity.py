@@ -25,6 +25,20 @@ _SOLE_PROPRIETOR_PREFIXES: tuple[tuple[str, ...], ...] = (
     ("ип",),
     ("индивидуальный", "предприниматель"),
 )
+# Хвосты, которыми реестры дополняют ФИО. Все пять форм ниже — живые:
+# «Тестов Андрей Сергеевич, 15.03.1980 г.р.» (ФНП и ЕГРЮЛ печатают дату
+# рождения прямо в строке лица), «ТЕСТОВ АНДРЕЙ СЕРГЕЕВИЧ (ИНН 770...)» (КАД,
+# участник с идентификатором), «Тестов Андрей Сергеевич ИП» (ЕГРИП, форма
+# записи в конце, а не в начале). Убираются ДО разбиения на слова, а не после:
+# «15.03.1980 г.р.» распадается на слова «г» и «р», и выбрасывать одиночные
+# буквы после разбиения значило бы сломать сравнение по инициалам, где «Г.» —
+# это инициал.
+_LEGAL_FORM_ANYWHERE = re.compile(r"\b(?:ип|индивидуальный\s+предприниматель)\b")
+_IDENTIFIER_TAIL = re.compile(r"\b(?:инн|огрнип|огрн|снилс|кпп|паспорт)\b[\s:№n°-]*\d*")
+# «г.р.» вырезается только следом за датой: одиночные «г» и «р» бывают и
+# инициалами («Тестов Г.Р.»), и терять их вслепую нельзя.
+_BIRTH_DATE_MARKER = re.compile(r"(?<=\d)\s*г\s*\.?\s*р\s*\.?|\b(?:года|дата)\s+рожд\w*")
+_PARENTHESIZED = re.compile(r"\(([^)]*)\)")
 
 FIO_MIN_PARTS = 2
 FIO_MAX_PARTS = 3
@@ -93,6 +107,16 @@ class PersonName(BaseModel):
         omit the patronymic."""
         return normalize_token(f"{self.last_name} {self.first_name}")
 
+    @property
+    def has_middle_name(self) -> bool:
+        """Есть ли отчество.
+
+        Нужно мосту «паспорт → ИНН»: ФНС по ФИО без отчества штатно возвращает
+        пусто, и такой ответ обязан объясняться отдельно, а не читаться как
+        «ИНН у человека нет».
+        """
+        return bool(self.middle_name)
+
 
 def parse_fio(raw: str) -> PersonName:
     """Parse ``Фамилия Имя [Отчество]``.
@@ -124,14 +148,48 @@ def _capitalize_name(part: str) -> str:
 
 
 class NameMatch(Enum):
-    """How strongly a free-form name agrees with a parsed one."""
+    """How strongly a free-form name agrees with a parsed one.
+
+    Пять уровней, а не четыре, и пятый — самый важный. ``NONE`` означает
+    ПРОТИВОРЕЧИЕ: строка прочитана, и в ней стоит другой человек.
+    ``INCONCLUSIVE`` означает, что читать было нечего: пустая строка, одна
+    фамилия, хвост из слов, который не удалось разобрать. Пока эти два ответа
+    были одним, добавление поля в карту могло только спрятать запись — источник,
+    приславший «Тестов Андрей Сергеевич, 15.03.1980 г.р.», выглядел
+    свидетельством против нас, тогда как отсутствие поля вовсе не стоило ничего
+    (:data:`app.services.identity.NAME_UNKNOWN`).
+    """
 
     NONE = "none"
+    #: Сравнивать было нечего: доказательства нет ни за, ни против.
+    INCONCLUSIVE = "inconclusive"
     #: Фамилия совпала, имя и отчество сошлись только инициалами.
     INITIALS = "initials"
     #: Фамилия и имя совпали, отчество сравнить не с чем.
     SHORT = "short"
     FULL = "full"
+
+
+#: Насколько ответ благоприятен для записи. Нужен ровно там, где одну и ту же
+#: строку можно прочитать двумя способами (см. скобки в ``_comparable_variants``)
+#: и надо выбрать лучшее прочтение.
+_MATCH_STRENGTH: dict[NameMatch, int] = {
+    NameMatch.NONE: 0,
+    NameMatch.INCONCLUSIVE: 1,
+    NameMatch.INITIALS: 2,
+    NameMatch.SHORT: 3,
+    NameMatch.FULL: 4,
+}
+
+
+def is_name_evidence(match: NameMatch) -> bool:
+    """Подтверждает ли ответ, что это тот самый человек.
+
+    ``INCONCLUSIVE`` — не подтверждает: «мы не смогли прочитать» не должно
+    работать как «совпало». Отдельная функция, потому что проверка ``is not
+    NameMatch.NONE`` читается как то же самое и им не является.
+    """
+    return match in {NameMatch.FULL, NameMatch.SHORT, NameMatch.INITIALS}
 
 
 def compare_names(name: PersonName, raw: str | None) -> NameMatch:
@@ -150,11 +208,15 @@ def compare_names(name: PersonName, raw: str | None) -> NameMatch:
     exactly one word and stay two different people, which is the whole reason a
     name alone never reaches the confirmed band anyway.
 
-    Two concessions, both of them named in the result rather than hidden in it:
+    Три уступки, и каждая названа в ответе, а не спрятана в нём:
 
     :attr:`NameMatch.SHORT` is the concession the positional comparison already
     made — when one side carries no patronymic, a surname and a given name are
-    all there is to compare, and one unmatched extra word is tolerated.
+    all there is to compare. Лишние слова СВЕРХ нашего имени она тоже терпит:
+    реестры дописывают к ФИО что угодно, вплоть до «Алиев Рашид Мамед оглы».
+    Чего она больше не терпит — ЧУЖОГО отчества на месте нашего: «Леликов Андрей
+    Петрович» при нашем «Леликов Андрей Сергеевич» это другой человек, и
+    выдавать его за должника нельзя (см. :func:`_patronymic_verdict`).
 
     :attr:`NameMatch.INITIALS` is for the sources that abbreviate. КАД prints
     half of its participants as «Бычков Д.Ю.» and «ИП Иванов И.И.», and against
@@ -162,18 +224,120 @@ def compare_names(name: PersonName, raw: str | None) -> NameMatch:
     called them strangers. A surname plus initials is genuinely weaker evidence
     than a name — it is returned as its own level so that each caller can decide
     what it is worth, and no caller has to guess from a boolean.
+
+    :attr:`NameMatch.INCONCLUSIVE` — третий ответ, и он же ответ по умолчанию для
+    всего, что не прочиталось: пустой строки, одной фамилии, хвоста из двух и
+    более неопознанных слов. Раньше всё это возвращало ``NONE``, то есть
+    противоречие, — и «ТЕСТОВ АНДРЕЙ СЕРГЕЕВИЧ (ИНН 770…)» стоил записи дороже,
+    чем полное отсутствие ФИО в ответе.
     """
-    other = _name_words(raw)
-    if not other:
-        return NameMatch.NONE
-    counted = Counter(other)
-    if counted == Counter(_name_words(name.full)):
+    variants = _comparable_variants(raw)
+    if not variants:
+        # Строки нет вовсе, либо в ней не осталось ни одного слова-имени.
+        return NameMatch.INCONCLUSIVE
+    return max(
+        (_compare_words(name, words) for words in variants),
+        key=lambda match: _MATCH_STRENGTH[match],
+    )
+
+
+def _compare_words(name: PersonName, words: list[str]) -> NameMatch:
+    counted = Counter(words)
+    mine_full = Counter(_name_words(name.full))
+    mine_short = Counter(_name_words(name.normalized_short))
+    if counted == mine_full:
         return NameMatch.FULL
-    if Counter(_name_words(name.normalized_short)) <= counted and len(other) <= FIO_MAX_PARTS:
+    if mine_full <= counted:
+        # Наше имя целиком внутри строки, остальное — приписка источника.
         return NameMatch.SHORT
-    if _initials_match(name, other):
+    if mine_short <= counted:
+        # Фамилия и имя на месте, нашего отчества нет. Всё решает то, что
+        # стоит вместо него.
+        return _patronymic_verdict(name, counted - mine_short)
+    if _initials_match(name, words):
         return NameMatch.INITIALS
+    if _surname_alone(name, counted):
+        return NameMatch.INCONCLUSIVE
     return NameMatch.NONE
+
+
+def _patronymic_verdict(name: PersonName, surplus: Counter[str]) -> NameMatch:
+    """Нашего отчества в строке нет. Что стоит на его месте?
+
+    Ничего — сравнивать нечего, это давняя уступка :attr:`NameMatch.SHORT`.
+
+    Одна буква — инициал: совпал с нашим, значит то же отчество записано
+    коротко; не совпал — это другой человек, ровно как в :func:`_initials_match`.
+
+    Одно слово — чужое отчество на месте нашего, то есть противоречие. Именно
+    этот случай раньше давал ``SHORT``: КАД возвращал дело по ИНН должника,
+    ответчиком в нём стоял однофамилец с другим отчеством, и код записывал
+    должника в ответчики по чужому делу.
+
+    Два и более слов — хвост, который мы не прочитали, а не отчество. Это не
+    доказательство ни за, ни против: ``INCONCLUSIVE``.
+    """
+    if not surplus:
+        return NameMatch.SHORT
+    words = list(surplus.elements())
+    middle = normalize_token(name.middle_name)
+    if all(len(word) == 1 for word in words):
+        return (
+            NameMatch.SHORT
+            if middle and all(word == middle[0] for word in words)
+            else NameMatch.NONE
+        )
+    if len(words) == 1:
+        return NameMatch.NONE
+    return NameMatch.INCONCLUSIVE
+
+
+def _surname_alone(name: PersonName, counted: Counter[str]) -> bool:
+    """В строке нет ничего, кроме нашей фамилии.
+
+    «Тестов» — это не «другой Тестов», это отсутствие имени. Противоречием
+    такую строку считать нельзя, доказательством — тем более.
+    """
+    surname = normalize_token(name.last_name)
+    return bool(counted[surname]) and sum(counted.values()) == counted[surname]
+
+
+def _comparable_variants(raw: str | None) -> list[list[str]]:
+    """Прочтения строки, из которых берётся лучшее.
+
+    Скобки — единственное место, где прочтений честно два. «Иванова (Петрова)
+    Мария» — это либо Иванова с девичьей Петровой, либо Петрова с девичьей
+    Ивановой, и какая из них наша, знает только наш собственный список слов.
+    Поэтому сравниваются оба варианта: со скобочной вставкой и без неё.
+    """
+    text = _without_registry_noise(normalize_token(raw))
+    if not text:
+        return []
+    readings = [_PARENTHESIZED.sub(" ", text)]
+    if _PARENTHESIZED.search(text):
+        readings.append(text.replace("(", " ").replace(")", " "))
+    variants: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for reading in readings:
+        words = _name_words(reading)
+        key = tuple(sorted(words))
+        if words and key not in seen:
+            seen.add(key)
+            variants.append(words)
+    return variants
+
+
+def _without_registry_noise(text: str) -> str:
+    """Убрать из уже нормализованной строки всё, что не является именем.
+
+    Живые формы, на которых сравнение молча давало ноль: «Тестов Андрей
+    Сергеевич, 15.03.1980 г.р.», «ТЕСТОВ АНДРЕЙ СЕРГЕЕВИЧ (ИНН 770…)», «Тестов
+    Андрей Сергеевич ИП». Ни одна из них не про другого человека — все три про
+    нашего, с припиской.
+    """
+    for pattern in (_IDENTIFIER_TAIL, _BIRTH_DATE_MARKER, _LEGAL_FORM_ANYWHERE):
+        text = pattern.sub(" ", text)
+    return " ".join(text.split())
 
 
 def _name_words(raw: str | None) -> list[str]:

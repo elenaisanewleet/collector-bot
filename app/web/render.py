@@ -57,6 +57,7 @@ from app.services.reporting import (
     PLEDGE_SCOPE_NOTE,
     SourceState,
     SourceStateCode,
+    empty_reason,
     source_state,
     unanswered_line,
 )
@@ -277,6 +278,10 @@ def state_tag(state: SourceState) -> str:
 def _answered_tone(state: SourceState) -> str:
     # Найденные записи не красятся зелёным: для взыскателя пять производств в
     # ФССП — плохая новость, а зелёный на странице значит «можно взыскать».
+    if state.code is SourceStateCode.PARTIAL:
+        # Ответ есть, но источник сам сказал, что прислал не всё: приглушённый
+        # чип прочитался бы как «всё спокойно».
+        return "warn"
     return "plain" if state.code is SourceStateCode.FOUND else "mute"
 
 
@@ -560,7 +565,7 @@ def _hidden_note(total: int, shown: int) -> str:
 def bankruptcy_section(report: DebtorReport) -> str:
     result = report.result_for(ProviderName.FEDRESURS)
     state = source_state(result)
-    unchecked = _unchecked(result)
+    unchecked = _unchecked(result, report.result_for(ProviderName.INN_BRIDGE))
     if unchecked:
         return section("bankruptcy", "Банкротство", unchecked, state=state)
 
@@ -569,9 +574,7 @@ def bankruptcy_section(report: DebtorReport) -> str:
         return section(
             "bankruptcy",
             "Банкротство",
-            '<p class="empty">Не обнаружено.</p>'
-            + _hidden_note(len(report.bankruptcies), 0)
-            + _checked_note(result),
+            _empty_body(result, "Не обнаружено.", found=len(report.bankruptcies), noun="запись"),
             state=state,
         )
 
@@ -613,7 +616,7 @@ def _bankruptcy_status(status: BankruptcyStatus) -> str:
 def business_section(report: DebtorReport) -> str:
     result = report.result_for(ProviderName.FNS)
     state = source_state(result)
-    unchecked = _unchecked(result)
+    unchecked = _unchecked(result, report.result_for(ProviderName.INN_BRIDGE))
     if unchecked:
         return section("business", "Бизнес", unchecked, state=state)
 
@@ -622,7 +625,12 @@ def business_section(report: DebtorReport) -> str:
         return section(
             "business",
             "Бизнес",
-            '<p class="empty">Связей с ИП и юрлицами не найдено.</p>' + _checked_note(result),
+            _empty_body(
+                result,
+                "Связей с ИП и юрлицами не найдено.",
+                found=len(report.business_relations),
+                noun="связь",
+            ),
             state=state,
         )
 
@@ -653,7 +661,7 @@ def _business_status(status: BusinessStatus) -> str:
         BusinessStatus.TERMINATED: "mute",
         BusinessStatus.UNKNOWN: "warn",
     }.get(status, "warn")
-    title = BUSINESS_STATUS_TITLES.get(status, "состояние не определено")
+    title = BUSINESS_STATUS_TITLES[status]
     return f'<span class="tag {tone}">{e(title)}</span>'
 
 
@@ -677,9 +685,13 @@ def pledge_section(report: DebtorReport) -> str:
         return section(
             "pledge",
             "Залоги",
-            '<p class="empty">Записей в реестре залогов не найдено.</p>'
-            + scope
-            + _checked_note(result),
+            _empty_body(
+                result,
+                "Записей в реестре залогов не найдено.",
+                found=len(report.pledges),
+                noun="запись",
+                scope=scope,
+            ),
             state=state,
         )
 
@@ -701,8 +713,7 @@ def pledge_section(report: DebtorReport) -> str:
             ("Предмет", "Состояние", "Залогодержатель", "VIN", "Уведомление", "Совпадение"),
             rows,
         )
-        + scope
-        + _checked_note(result),
+        + _checked_note(result, scope=scope),
         state=state,
     )
 
@@ -722,7 +733,7 @@ def court_section(report: DebtorReport) -> str:
     result = report.result_for(ProviderName.COURT)
     state = source_state(result)
     scope = f'<p class="note scope">{e(COURT_SCOPE_NOTE)}</p>'
-    unchecked = _unchecked(result)
+    unchecked = _unchecked(result, report.result_for(ProviderName.INN_BRIDGE))
     if unchecked:
         return section("court", "Суды", unchecked + scope, state=state)
 
@@ -731,7 +742,13 @@ def court_section(report: DebtorReport) -> str:
         return section(
             "court",
             "Суды",
-            '<p class="empty">Арбитражных дел не найдено.</p>' + scope + _checked_note(result),
+            _empty_body(
+                result,
+                "Арбитражных дел не найдено.",
+                found=len(report.court_cases),
+                noun="дело",
+                scope=scope,
+            ),
             state=state,
         )
 
@@ -750,8 +767,7 @@ def court_section(report: DebtorReport) -> str:
         "court",
         "Суды",
         table(("Дело", "Роль", "Сумма", "Категория", "Суд", "Совпадение"), rows)
-        + scope
-        + _checked_note(result),
+        + _checked_note(result, scope=scope),
         state=state,
     )
 
@@ -1001,22 +1017,66 @@ def _facts_grid(rows: Iterable[tuple[str, str, str, str]]) -> str:
     return f'<div class="facts">{cells}</div>'
 
 
-def _unchecked(result: ProviderResult | None) -> str:
+def _unchecked(result: ProviderResult | None, bridge: ProviderResult | None = None) -> str:
     """Разметка для источника, который не ответил.
 
     Отдельная ветка, а не пустой список: «не проверено» и «ничего не найдено» —
     разные утверждения, и подменять одно другим здесь нельзя. Текст берётся из
     :func:`app.services.reporting.unanswered_line`, чтобы веб и чат описывали
     состояние источника одними и теми же словами.
+
+    ``bridge`` передают три раздела, которые ищут только по ИНН: страница
+    обязана объяснять «нужен ИНН физлица» тем же уточнением, что и текст бота,
+    иначе один и тот же должник получит два разных объяснения — а лист со
+    страницы уходит в дело.
     """
-    line = unanswered_line(result)
+    line = unanswered_line(result, bridge=bridge)
     return f'<p class="empty unchecked">{e(line)}</p>' if line else ""
 
 
-def _checked_note(result: ProviderResult | None) -> str:
+def _empty_body(
+    result: ProviderResult | None,
+    empty_line: str,
+    *,
+    found: int,
+    noun: str,
+    scope: str = "",
+) -> str:
+    """Пустой раздел с точной причиной пустоты.
+
+    Слова берутся из :func:`app.services.reporting.empty_reason` — той же
+    функции, что печатает их в чат. Голое «не найдено» здесь имело бы право
+    стоять только в одном случае из трёх, а печаталось во всех: запись,
+    отсеянная по отождествлению, исчезала со страницы под подписью «не
+    найдено», и оценка ещё начисляла за это плюс.
+    """
+    lines = empty_reason(result, found=found, noun=noun, empty_line=empty_line)
+    body = "".join(f'<p class="empty">{e(line)}</p>' for line in lines)
+    return body + _checked_note(result, scope=scope, notes=False)
+
+
+def _checked_note(result: ProviderResult | None, *, scope: str = "", notes: bool = True) -> str:
+    """Подвал раздела: что источник сказал о полноте ответа, оговорка охвата,
+    отметка о проверке.
+
+    ``result.notes`` печатаются здесь, а не в каждой секции по отдельности, и
+    печатаются всегда — ровно как в текстовом отчёте (``_source_notes``).
+    Страница, промолчавшая о том, что ФССП прислала 100 производств из 105,
+    подписывает «производств не найдено» под ответом, который сам сообщил
+    обратное; а именно этот лист уходит в дело.
+
+    ``scope`` — оговорка о границах самого источника. Идёт после оговорок
+    ответа и перед отметкой о проверке: тот же порядок, что в чате.
+
+    ``notes=False`` ставят пустые разделы: там оговорки источника уже напечатаны
+    как САМА причина пустоты (:func:`empty_reason`), и второй раз они бы только
+    задвоились.
+    """
     if result is None:
-        return ""
-    return f'<p class="note">Проверено: {e(format_datetime(result.fetched_at))}.</p>'
+        return scope
+    head = "".join(f'<p class="note">{e(note)}</p>' for note in result.notes) if notes else ""
+    checked = f'<p class="note">Проверено: {e(format_datetime(result.fetched_at))}.</p>'
+    return head + scope + checked
 
 
 __all__ = [

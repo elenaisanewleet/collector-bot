@@ -8,24 +8,28 @@ configuration change.
 A business relation is a *hint* about ability to pay, never a conclusion. An
 active sole proprietorship means the person is registered, not that they earn.
 
-``FNS_PROVIDER=newdb`` serves ЕГРИП through the NewDB ``egrul_ip`` method on the
-key already configured for ФССП. That method answers about sole proprietors
-only: a person with no ИП registered has no ЕГРЮЛ roles reported here, and the
-report must not read that as "no business ties at all".
+``FNS_PROVIDER=newdb`` serves this through the NewDB ``egrul_ip`` method on the
+key already configured for ФССП.
 
-``egrul_ip`` is nonetheless the one method the shipped example map leaves out.
-The archived documentation shows a single response for it and that response is
-empty (``"data": []``); everything about the contents of a row is prose — "в
-блоке search.matches[] обычно возвращаются ИНН, ОГРНИП, ... статус" — without a
-single key name, and the ``egrul`` page it refers to is not in the snapshot. A
-guessed map here would be the worst of both worlds: the method reads as
-connected and answers "ИП не найдено" about a debtor nobody parsed. Until a live
-response is captured, no entry means "не подключено", which is true.
+**Что этот метод отдаёт на самом деле.** Его имя и архивная документация
+обещают ЕГРИП и только его — «ролей в юрлицах не возвращает». Живой ответ от
+05.09.2026 это опровергает: ``matches[]`` — плоское объединение регистраций ИП
+и всех разделов реестра ФНС, и в нём приходят ``section: "upr"`` (руководитель
+ЮЛ) и ``section: "uchr"`` (учредитель) наравне с ``section: "ip"``. См.
+``tests/data/newdb_live_egrul_ip.json``: три записи на одного человека — ИП,
+руководитель и учредитель.
+
+Чего он всё равно не отдаёт в ``matches[]`` — того, к какому юрлицу относится
+роль: в строке ``upr``/``uchr`` стоят ИНН и ФИО ЧЕЛОВЕКА, а ОГРН пустой.
+Название и ИНН компании живут отдельно, в ``affiliations.companies[]``, и один
+``records_path`` на метод их не достаёт. Поэтому строка отчёта «руководитель ЮЛ:
+Иванов И.И.» называет человека, а не компанию, и отсутствие компании в отчёте —
+предел механизма карты, а не ответ источника.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from app.config import FNSBackend, Settings
@@ -41,7 +45,14 @@ from app.domain.models import BusinessRelation, ProviderResult
 from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import as_text
-from app.providers.newdb import NewDBMethodProvider, individual_inn, inn_params
+from app.providers.newdb import (
+    MappedRows,
+    NewDBMethodProvider,
+    container_flag,
+    container_int,
+    individual_inn,
+    inn_params,
+)
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
 from app.utils.dates import parse_date, utcnow
 
@@ -126,6 +137,13 @@ def _to_relation(record: Mapping[str, Any]) -> BusinessRelation:
         inn=as_text(record.get("inn")),
         ogrn=as_text(record.get("ogrn")),
         name=as_text(record.get("name")),
+        # Заполняется только там, где строка источника описывает человека, а не
+        # компанию. У ``egrul_ip`` это все живые секции: ip, docip, upr, uchr —
+        # в ``name_short`` там ФИО. Без этого поля сопоставление шло вслепую:
+        # ``_strip_business_prefix`` отдаёт ФИО лишь у имён с приставкой «ИП »,
+        # а живое ``name_short`` приходит голым, и полное совпадение ФИО
+        # выбрасывалось — запись держалась на одном ИНН.
+        person_name=as_text(record.get("person_name")),
         entity_type=(
             EntityType.SOLE_PROPRIETOR
             if role is BusinessRole.SOLE_PROPRIETOR
@@ -160,7 +178,7 @@ def _parse_status(record: Mapping[str, Any]) -> BusinessStatus:
 
 
 class NewDBBusinessProvider(NewDBMethodProvider):
-    """Статус ИП через метод NewDB ``egrul_ip``."""
+    """Регистрации ИП и роли в юрлицах через метод NewDB ``egrul_ip``."""
 
     name = ProviderName.FNS
     title = "ФНС"
@@ -177,11 +195,65 @@ class NewDBBusinessProvider(NewDBMethodProvider):
                 "Для проверки ИП нужен ИНН физлица (12 цифр) — источник ищет только по нему"
             )
 
-        records, raw = await self.rows_for(NEWDB_METHOD, inn_params(inn))
-        parsed = [_to_relation(record) for record in records[:MAX_RECORDS]]
+        mapped, raw = await self.mapped_for(NEWDB_METHOD, inn_params(inn))
+        parsed = _dedupe(_to_relation(record) for record in mapped.records[:MAX_RECORDS])
+        notes = _truncation_notes(mapped, shown=len(mapped.records))
+        if len(mapped.records) > MAX_RECORDS:
+            # Срез — тоже потеря, и тихой она быть не должна.
+            notes.append(
+                f"Показаны первые {MAX_RECORDS} связей из {len(mapped.records)}, "
+                "полученных от источника"
+            )
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.SUCCESS if parsed else ProviderStatus.NO_RESULTS,
             records=list(parsed),
+            is_partial=bool(notes),
+            notes=tuple(notes),
             raw_response=self.raw_for(raw),
         )
+
+
+def _truncation_notes(mapped: MappedRows, *, shown: int) -> list[str]:
+    """Сказал ли источник, что нашёл больше, чем прислал.
+
+    ``total_items`` живого ответа считает записи ``matches[]``, а ``has_more``
+    стоит у каждого раздела реестра. На всех живых ответах они сходятся
+    (3 = 3, has_more везде false), но поля существуют — а укороченный
+    ``matches[]`` от полного ничем не отличается, и недостающая роль просто не
+    появится в отчёте.
+    """
+    notes: list[str] = []
+    total = container_int(mapped.containers, "total_items")
+    if total is not None and total > shown:
+        notes.append(
+            f"ФНС сообщила о {total} записях реестра, разобрано {shown} — список ролей неполный"
+        )
+    if container_flag(mapped.containers, "has_more"):
+        notes.append("ФНС отдала не все записи реестра (has_more) — список ролей неполный")
+    return notes
+
+
+def _dedupe(relations: Iterable[BusinessRelation]) -> list[BusinessRelation]:
+    """Одна регистрация, названная дважды, — это одна регистрация.
+
+    ``matches[]`` — плоское объединение регистраций ИП и разделов реестра, и
+    одно и то же ОГРНИП приходит в нём и строкой ``ip``, и строкой ``docip``
+    («документы на государственную регистрацию ИП»). Проверено на живом ответе:
+    ``total_items: 3`` = две регистрации ИП + её же документ. Без склейки отчёт
+    печатает два одинаковых ИП, а скоринг считает их за две связи.
+    """
+    seen: set[tuple[str, str, str, str]] = set()
+    unique: list[BusinessRelation] = []
+    for relation in relations:
+        key = (
+            relation.role.value,
+            (relation.ogrn or "").strip(),
+            (relation.inn or "").strip(),
+            (relation.name or "").strip().casefold(),
+        )
+        if any(part for part in key[1:]) and key in seen:
+            continue
+        seen.add(key)
+        unique.append(relation)
+    return unique

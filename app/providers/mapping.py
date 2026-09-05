@@ -69,15 +69,38 @@ class FieldMap:
             value_maps=payload.get("value_maps", {}),
         )
 
-    def extract_records(self, payload: Any) -> list[RecordDict]:
+    def record_nodes(self, payload: Any) -> list[Any]:
+        """The items of the record array *as they arrived*, nothing filtered out.
+
+        Separate from :meth:`extract_records` because the two answer different
+        questions: what can be read, and what was there to read. Only the caller
+        that knows both can tell "the array was empty" from "the array held two
+        things this map cannot describe".
+        """
         node = dig(payload, self.records_path) if self.records_path else payload
         if node is None:
             return []
-        if isinstance(node, dict):
-            node = [node]
+        if isinstance(node, Mapping):
+            return [node]
         if not isinstance(node, list):
             return []
-        return [item for item in node if isinstance(item, dict)]
+        return list(node)
+
+    def read_records(self, payload: Any) -> tuple[list[RecordDict], int]:
+        """Records the map could read, and how many items of the array it could not.
+
+        The count is the whole point. ``{"fnp": ["УВ-1", "УВ-2"]}`` — a register
+        answering with two notices as bare strings instead of objects — used to
+        come out as zero records and nothing unreadable, which reads as "no
+        pledges" and pays a bonus for it. Two notices found, two notices lost,
+        and not one word about it anywhere.
+        """
+        nodes = self.record_nodes(payload)
+        records = [dict(item) for item in nodes if isinstance(item, Mapping)]
+        return records, len(nodes) - len(records)
+
+    def extract_records(self, payload: Any) -> list[RecordDict]:
+        return self.read_records(payload)[0]
 
     def apply(self, record: Mapping[str, Any]) -> RecordDict:
         out: RecordDict = {}
@@ -89,7 +112,17 @@ class FieldMap:
         return out
 
     def map_all(self, payload: Any) -> list[RecordDict]:
-        return [self.apply(record) for record in self.extract_records(payload)]
+        return self.read_all(payload)[0]
+
+    def read_all(self, payload: Any) -> tuple[list[RecordDict], int]:
+        """Mapped records, and the count of array items that were not records.
+
+        The count exists for the same reason it does in :meth:`read_records`:
+        the caller has to be able to tell "the source sent nothing" from "the
+        source sent something this map cannot read", and only a number can.
+        """
+        records, unreadable = self.read_records(payload)
+        return [self.apply(record) for record in records], unreadable
 
 
 def dig(payload: Any, path: str) -> Any:

@@ -129,6 +129,12 @@ class BankruptcyRecord(SourcedFact):
 
     debtor_name: str | None = None
     debtor_type: EntityType = EntityType.INDIVIDUAL
+    # Дата рождения должника из блока ``commmon`` живого ответа
+    # ``bankrot_person``. Нужна ровно для одного — отождествления: дело
+    # адресовано по ИНН, а ФИО в ЕФРСБ может быть девичьим или записанным
+    # иначе, и без даты рождения несовпадение фамилии обнуляло сопоставление.
+    # В отчёт и в логи не попадает: это персональные данные, а не факт о долге.
+    debtor_birth_date: date | None = None
     inn: str | None = None
     case_number: str | None = None
     procedure: str | None = None
@@ -151,6 +157,12 @@ class BusinessRelation(SourcedFact):
     inn: str | None = None
     ogrn: str | None = None
     name: str | None = None
+    # ФИО связанного физлица, когда строка источника описывает не компанию, а
+    # человека в реестре: ``egrul_ip`` отдаёт секции ip / upr / uchr, и в них
+    # ``name_short`` — это ФИО должника, а не название ЮЛ. Отдельным полем, а не
+    # через ``name``, потому что сопоставлять ФИО с названием компании нельзя:
+    # так изготавливаются совпадения, которых нет.
+    person_name: str | None = None
     entity_type: EntityType = EntityType.LEGAL_ENTITY
     status: BusinessStatus = BusinessStatus.UNKNOWN
     role: BusinessRole = BusinessRole.OTHER
@@ -284,6 +296,19 @@ class ProviderResult(BaseModel):
     # Only populated when STORE_RAW_RESPONSES is enabled; otherwise dropped as
     # soon as parsing is done.
     raw_response: str | None = None
+    # «Источник ответил, но не всё». Между «проверено, чисто» и «не проверено»
+    # есть третий ответ, и до появления этих двух полей его негде было сказать:
+    # арбитраж отдаёт десять дел из сорока (``pagination.has_more``), ФНП
+    # находит тринадцать уведомлений и ни одного не сопоставляет по дате
+    # рождения (``fnp_urls`` при пустом ``fnp``). В обоих случаях записей
+    # приходит меньше, чем нашёл источник, и молчание об этом — то самое
+    # «найдено, показано как не найдено».
+    #
+    # ``is_partial`` снимает положительные факторы скоринга («залогов нет»,
+    # «исков нет»): их смысл — «мы посмотрели и ничего не увидели», а здесь
+    # посмотрели не всё. ``notes`` — то, что об этом обязан сказать отчёт.
+    is_partial: bool = False
+    notes: tuple[str, ...] = Field(default_factory=tuple)
 
     @property
     def is_answered(self) -> bool:

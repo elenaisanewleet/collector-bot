@@ -25,7 +25,7 @@ from app.domain.models import BankruptcyRecord, EnforcementProceeding, ProviderR
 from app.providers.base import StubProvider
 from app.providers.fedresurs import FedresursProvider
 from app.providers.fns import FNSProvider
-from app.providers.fssp import FSSPProvider
+from app.providers.fssp import MAX_PROCEEDINGS, FSSPProvider
 from app.providers.http import RetryPolicy, build_client, request_json
 from app.providers.vehicle import UnconfiguredVehicleProvider
 
@@ -281,6 +281,74 @@ async def test_fssp_reports_no_results_when_the_source_is_empty(
     result = await FSSPProvider(fssp_settings).fetch(person_subject)
     assert result.status is ProviderStatus.NO_RESULTS
     assert result.records == []
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "row",
+    [
+        # Строка ответа не объектом — раньше просто пропускалась.
+        "88442/25/66049-ИП",
+        # Объект без номера производства: показать его нечем, и раньше он
+        # исчезал так же тихо.
+        {"Debtor": "ИВАНОВ ИВАН ИВАНОВИЧ", "SubjectAndDebtAmount": "Сумма долга: 30000.00 руб."},
+        {"EnforcementProceeding": ""},
+    ],
+)
+async def test_fssp_rows_it_cannot_read_are_never_an_empty_register(
+    fssp_settings: Settings, person_subject: SearchSubject, row: Any
+) -> None:
+    """Общее правило счёта потерь распространяется и на ФССП.
+
+    Это самый вероятно включённый источник и единственный, чьи ключи забиты в
+    код. Пока непрочитанная строка молча выбрасывалась, ответ из одной такой
+    строки давал ноль производств — то есть «активных исполнительных
+    производств не найдено» в отчёте и плюс к взыскиваемости в оценке.
+    """
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=newdb_envelope(data=[row])))
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "unexpected_schema"
+    assert not result.status.is_answered
+
+
+@respx.mock
+async def test_one_unreadable_fssp_row_fails_the_call_even_if_another_parsed(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """Показать одно производство из двух — значит показать неполный список."""
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            200, json=newdb_envelope(data=[PROCEEDING_ROW, {"Debtor": "ИВАНОВ ИВАН ИВАНОВИЧ"}])
+        )
+    )
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.error_code == "unexpected_schema"
+    assert result.records == []
+    assert "1 из 2" in (result.error_message or "")
+
+
+@respx.mock
+async def test_fssp_says_so_when_it_shows_only_the_first_hundred(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """Обрезка списка — неполнота, и о ней обязан сказать сам ответ."""
+    rows = [
+        {**PROCEEDING_ROW, "EnforcementProceeding": f"{index}/25/66049-ИП от 09.09.2025"}
+        for index in range(MAX_PROCEEDINGS + 5)
+    ]
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=newdb_envelope(data=rows)))
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.SUCCESS
+    assert len(result.records) == MAX_PROCEEDINGS
+    assert result.is_partial
+    assert any(str(MAX_PROCEEDINGS + 5) in note for note in result.notes)
 
 
 @respx.mock
@@ -727,6 +795,37 @@ async def test_fedresurs_generic_backend_parses_records(
     record = only_record(result, BankruptcyRecord)
     assert record.case_number == "А40-1/2026"
     assert record.is_active
+
+
+@respx.mock
+async def test_generic_backend_items_that_are_not_records_are_not_an_empty_register(
+    live_settings: Settings, person_subject: SearchSubject, field_map_file: Path
+) -> None:
+    """Массив на месте, а внутри — не записи. Это «не разобрано», не «чисто».
+
+    Фильтр «оставить только объекты» живёт внутри карты полей, и до сих пор он
+    молча съедал такие элементы: ответ из двух строк вместо двух дел доезжал до
+    провайдера пустым списком и печатался как проверенный чистый реестр.
+    """
+    settings = live_settings.model_copy(
+        update={
+            "fedresurs_backend": FedresursBackend.GENERIC_JSON,
+            "fedresurs_base_url": BASE_URL,
+            "fedresurs_search_path": "/bankruptcy",
+            "fedresurs_api_key": "key",
+            "fedresurs_auth_style": AuthStyle.BEARER,
+            "fedresurs_field_map": field_map_file,
+        }
+    )
+    respx.get(f"{BASE_URL}/bankruptcy").mock(
+        return_value=httpx.Response(200, json={"items": ["А40-1/2026", "А40-2/2026"]})
+    )
+
+    result = await FedresursProvider(settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "unexpected_schema"
+    assert not result.status.is_answered
 
 
 @respx.mock
