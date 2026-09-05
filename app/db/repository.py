@@ -272,6 +272,11 @@ class SearchRepository:
                     error_message=result.error_message,
                     duration_ms=result.duration_ms,
                     cache_hit=result.cache_hit,
+                    # Не под флагом хранения: это не данные о должнике, а то,
+                    # чего в ответе не хватало. Потеряв это, кэш пересоберёт
+                    # неполный ответ как исчерпывающий.
+                    is_partial=result.is_partial,
+                    notes_json=json.dumps(list(result.notes), ensure_ascii=False),
                 )
             )
         await self._session.flush()

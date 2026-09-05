@@ -149,9 +149,23 @@ BUSINESS_ROLE_TITLES: dict[BusinessRole, str] = {
 
 
 class BusinessStatus(StrEnum):
+    """Состояние регистрации ИП или связи с юрлицом.
+
+    ``UNKNOWN`` — источник о состоянии не сказал. Это не «прекращено»: живой
+    ``egrul_ip`` не отдаёт статус у строк физлица вообще, и должник с
+    действующим ИП приходит именно так.
+    """
+
     ACTIVE = "active"
     TERMINATED = "terminated"
     UNKNOWN = "unknown"
+
+
+BUSINESS_STATE_TITLES: dict[BusinessStatus, str] = {
+    BusinessStatus.ACTIVE: "действует",
+    BusinessStatus.TERMINATED: "прекращено",
+    BusinessStatus.UNKNOWN: "состояние не указано источником",
+}
 
 
 class BankruptcyStatus(StrEnum):

@@ -1,0 +1,48 @@
+{
+  "params": {
+    "method": "pledge_person",
+    "country": "ru",
+    "lastname": "Петров",
+    "firstname": "Сергей",
+    "secondname": "Андреевич",
+    "datebirth": "1985-05-10"
+  },
+  "method": "",
+  "requestId": "00000021-0000-4000-8000-000000000021",
+  "cost": 1,
+  "datecreated": "2026-09-05 01:45:15",
+  "state": "complete",
+  "balance": 91,
+  "tasks": 1,
+  "taskId": "00000022-0000-4000-8000-000000000022",
+  "is_repeat": false,
+  "results": {
+    "pledge_person": {
+      "result": {
+        "status": 200,
+        "data": [
+          {
+            "fnp": [],
+            "fedresurs": [],
+            "fnp_urls": [
+              "https://www.reestr-zalogov.ru/search/notification/00000023-0000-4000-8000-000000000023",
+              "https://www.reestr-zalogov.ru/search/notification/00000024-0000-4000-8000-000000000024",
+              "https://www.reestr-zalogov.ru/search/notification/00000025-0000-4000-8000-000000000025",
+              "https://www.reestr-zalogov.ru/search/notification/00000026-0000-4000-8000-000000000026",
+              "https://www.reestr-zalogov.ru/search/notification/00000027-0000-4000-8000-000000000027",
+              "https://www.reestr-zalogov.ru/search/notification/00000028-0000-4000-8000-000000000028",
+              "https://www.reestr-zalogov.ru/search/notification/00000029-0000-4000-8000-000000000029",
+              "https://www.reestr-zalogov.ru/search/notification/0000002a-0000-4000-8000-00000000002a",
+              "https://www.reestr-zalogov.ru/search/notification/0000002b-0000-4000-8000-00000000002b",
+              "https://www.reestr-zalogov.ru/search/notification/0000002c-0000-4000-8000-00000000002c",
+              "https://www.reestr-zalogov.ru/search/notification/0000002d-0000-4000-8000-00000000002d",
+              "https://www.reestr-zalogov.ru/search/notification/0000002e-0000-4000-8000-00000000002e",
+              "https://www.reestr-zalogov.ru/search/notification/0000002f-0000-4000-8000-00000000002f"
+            ]
+          }
+        ]
+      },
+      "dateupdated": "2026-09-05 01:45:54"
+    }
+  }
+}

@@ -244,25 +244,33 @@ async def test_a_second_subject_in_the_answer_keeps_its_own_cases(
 
 
 @respx.mock
-async def test_the_debtors_own_case_is_still_found_without_an_inn_of_its_own(
+async def test_a_container_without_identity_is_reported_unchecked_not_assumed(
     shipped_settings: Settings, shipped_maps: NewDBFieldMaps
 ) -> None:
-    """Обратная сторона: сузить нельзя настолько, чтобы потерять своё дело.
+    """Дела есть, а чьи они — не прочитано. Это «не проверено», а не «его».
 
-    Если ``commmon`` в ответе не окажется — а живого ответа никто не видел, —
-    запись остаётся без единого идентификатора, и её по-прежнему держит ИНН
-    запроса. Иначе настоящее банкротство, найденное по ИНН самого должника,
-    выпало бы из отчёта как чужое.
+    Опечатка вендора (``commmon`` с тремя «m») — часть контракта ровно до того
+    дня, когда её починят. Пока карта дотягивалась до блока, ФИО, ИНН и дата
+    рождения приезжали из ответа; после переименования все три пути промахнутся
+    молча, и код припишет делам ИНН, по которому шёл поиск, — в ответе с двумя
+    субъектами это отдаёт дела второго первому.
+
+    Раньше этот тест требовал обратного: считать такие дела делами должника.
+    Тогда живого ответа никто не видел; теперь он есть, ``commmon`` в нём стоит
+    у каждой непустой строки, и пропажа всего блока перестала быть нормой,
+    которую нужно переживать молча.
     """
     response = copy.deepcopy(documented_response())
     del subjects_of(response)[0]["commmon"]
 
     report = await bankruptcy_report(shipped_settings, shipped_maps, response)
 
-    record = case(report, DOCUMENTED_CASE)
-    assert record.inn == "270392288605"
-    assert record.debtor_name is None
-    assert record.is_usable
+    result = report.provider_results[0]
+    assert not result.status.is_answered
+    assert result.error_code == "unexpected_schema"
+    assert not report.bankruptcies
+    # И никакого «банкротство не обнаружено» в оценке.
+    assert "no_bankruptcy" not in factor_names(report)
 
 
 @respx.mock

@@ -109,6 +109,14 @@ class SearchResult(Base):
     error_message: Mapped[str | None] = mapped_column(String(512))
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    # «Источник ответил, но прислал не всё» — и чем именно неполон ответ.
+    #
+    # Хранится, потому что отчёт может быть собран заново из кэша, а без этих
+    # двух колонок пересобранный отчёт терял бы оговорку и печатал «залогов не
+    # найдено» там, где сутки назад честно писал «найдено 13, сопоставлено 0».
+    # Кэш не имеет права быть добрее исходного ответа.
+    is_partial: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes_json: Mapped[str] = mapped_column(Text, default="[]")
 
     request: Mapped[SearchRequest] = relationship(back_populates="results")
 

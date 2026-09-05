@@ -1,0 +1,33 @@
+{
+  "params": {
+    "method": "bankrot_person",
+    "country": "ru",
+    "innfiz": "732817727300"
+  },
+  "method": "",
+  "requestId": "00000007-0000-4000-8000-000000000007",
+  "cost": 1,
+  "datecreated": "2026-09-05 01:46:23",
+  "state": "complete",
+  "balance": 90,
+  "tasks": 1,
+  "taskId": "00000008-0000-4000-8000-000000000008",
+  "is_repeat": false,
+  "results": {
+    "bankrot_person": {
+      "result": {
+        "status": 200,
+        "data": [
+          {
+            "bankruptcy": [],
+            "commmon": {},
+            "encumbrances": [],
+            "publications": []
+          }
+        ]
+      },
+      "taskId": "00000008-0000-4000-8000-000000000008",
+      "dateupdated": "2026-09-05 01:47:08"
+    }
+  }
+}

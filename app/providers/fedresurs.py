@@ -36,12 +36,25 @@ from app.providers.newdb import NewDBMethodProvider, individual_inn, inn_params
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
 from app.utils.dates import parse_date, utcnow
 
-_ACTIVE_TOKENS = frozenset(
-    {"active", "открыто", "введена", "в процедуре", "процедура", "действующее"}
-)
-_COMPLETED_TOKENS = frozenset(
-    {"completed", "closed", "завершено", "завершена", "прекращено", "окончено"}
-)
+# Состояние дела приходит одной свободной строкой, и словарь ниже — эвристика
+# над текстом, который пишем не мы. Живьём (05.09.2026, tests/data/
+# newdb_live_bankrot_person.json) наблюдалось РОВНО ОДНО значение:
+#
+#     "Производство по делу завершено"
+#
+# Оно и закреплено тестом, который читает строку прямо из сохранённого тела, а
+# не из литерала в тесте. Всё остальное здесь — формы тех же слов, а не новые
+# слова: словарь ищется подстрокой, поэтому хранятся ОСНОВЫ («заверш» покрывает
+# «завершено», «завершена», «завершён»), и «расширить словарь» не значит
+# «придумать, как ещё вендор мог бы это назвать».
+#
+# Цена промаха — не −10, а −35: незнакомая формулировка оставляет запись в
+# ``UNKNOWN``, а UNKNOWN стоит столько же, сколько активная процедура (см.
+# ``UNKNOWN_BANKRUPTCY_STATE_PENALTY``). Это сделано намеренно и означает
+# ровно одно: пополнять эти множества можно только по живому ответу, в котором
+# формулировка действительно встретилась.
+_ACTIVE_TOKENS = frozenset({"active", "открыт", "введен", "процедур", "действующ"})
+_COMPLETED_TOKENS = frozenset({"completed", "closed", "заверш", "прекращ", "оконч"})
 _INDIVIDUAL_TOKENS = frozenset({"individual", "фл", "физическое лицо", "гражданин"})
 _SOLE_PROPRIETOR_TOKENS = frozenset({"ip", "ип", "sole_proprietor"})
 MAX_RECORDS = 50
@@ -51,10 +64,12 @@ MAX_RECORDS = 50
 # API его отвергает, а в примере ОТВЕТА на той же странице и params.method, и
 # секция results названы ``bankrot_person``. Прав код — чинить обратно не надо.
 NEWDB_METHOD = "bankrot_person"
-# Хост для относительных ссылок вида '/legalcases/<guid>'. Взят не с потолка:
-# в том же снимке документации ссылки, которые вендор отдаёт абсолютными
-# (message_url у залогов), стоят на голом fedresurs.ru. Раньше здесь был
-# bankrot.fedresurs.ru — правдоподобная догадка, но именно догадка.
+# Хост для относительных ссылок вида '/legalcases/<guid>'. Живой ответ от
+# 05.09.2026 отдаёт case_url уже абсолютным и на этом самом хосте
+# (`https://fedresurs.ru/legalcases/<guid>`), так что догадка подтвердилась, а
+# склейка ниже стала запасным путём для формы из архивной документации — там
+# ссылки относительные. Оставлена намеренно: обе формы приводят к рабочей
+# ссылке, а выбросить её значило бы сломать деплой со старым ответом.
 FEDRESURS_BANKRUPTCY_HOST = "https://fedresurs.ru"
 
 
@@ -122,6 +137,10 @@ def _to_bankruptcy(record: Mapping[str, Any]) -> BankruptcyRecord:
     return BankruptcyRecord(
         debtor_name=as_text(record.get("debtor_name")),
         debtor_type=_parse_entity_type(record.get("debtor_type")),
+        # Из ``commmon.birth_date`` живого ответа, формат «27.01.1980».
+        # Единственное её назначение — отождествление: см. комментарий у поля
+        # модели и ``_record_birth_date`` в app/services/identity.py.
+        debtor_birth_date=parse_date(as_text(record.get("debtor_birth_date"))),
         inn=as_text(record.get("inn")),
         case_number=as_text(record.get("case_number")),
         procedure=as_text(record.get("procedure")),
@@ -222,9 +241,10 @@ def _searched_by_inn(record: BankruptcyRecord, inn: str) -> BankruptcyRecord:
 def _absolute_url(url: str) -> str:
     """``/legalcases/<guid>`` -> a link that can actually be clicked.
 
-    The vendor returns Федресурс paths, not URLs. The host is taken from the
-    absolute links the same vendor returns elsewhere in the same snapshot and is
-    still not verified against a live one; a wrong host and a bare path are
-    equally broken, and a working link is worth the inference.
+    A no-op against the live service, which returns absolute links — verified
+    05.09.2026, see ``tests/data/newdb_live_bankrot_person.json``. It stays for
+    the shape the archived documentation shows, where the same field is a bare
+    path: a wrong host and a bare path are equally broken, and the host has now
+    been confirmed by the live answer rather than inferred from a neighbour.
     """
     return f"{FEDRESURS_BANKRUPTCY_HOST}{url}" if url.startswith("/") else url

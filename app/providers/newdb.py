@@ -28,15 +28,21 @@ https://newdb.net/swagger/openapi.json:
     mapped to an error status, and a ``complete`` envelope without the expected
     result path is ``unexpected_schema``, never ``NO_RESULTS``.
 
-**Not verified, and therefore configuration** — the shape of the rows each
-method returns. Only ``fssp_person`` has been read against a real response. The
-rows of the other methods are described in ``config/field_maps/example_newdb.json``
-from the vendor's own documentation, recovered from a web-archive snapshot of
-07.02.2026 (the live docs site is gone); that is a good deal better than
-invented names and still not the same thing as a response. So the row schema
-comes from a field map (``NEWDB_FIELD_MAP``), the same mechanism the ЕФРСБ and
-ФНС vendor adapters already use, and a method with no entry in that map stays
-``NOT_CONFIGURED``.
+**Configuration, and now mostly verified too** — the shape of the rows each
+method returns. On 05.09.2026 a key was obtained and five methods were called
+for real: ``fssp_person``, ``bankrot_person``, ``egrul_ip``, ``arbitr_person``
+and ``pledge_person`` / ``pledge_vin``. The captured answers are in
+``tests/data/newdb_live_*.json`` and the shipped map
+(``config/field_maps/example_newdb.json``) now describes what they actually
+contain; where the archived documentation disagreed with the live service, the
+live service won, and one of those disagreements — ``arbitr_person`` wrapping
+its cases in a per-query container — meant the archived paths read nothing at
+all. What is still archive-only is listed in the map's own header.
+
+The row schema nevertheless stays in a field map (``NEWDB_FIELD_MAP``) rather
+than in this code: the same mechanism the ЕФРСБ and ФНС vendor adapters use, a
+deployment whose contract differs edits a file, and a method with no entry in
+that map stays ``NOT_CONFIGURED`` instead of guessing.
 """
 
 from __future__ import annotations
@@ -57,6 +63,7 @@ from app.logging_setup import get_logger
 from app.providers.base import BaseProvider, ProviderError, ProviderUnavailableError
 from app.providers.http import RetryPolicy, build_client, request_json
 from app.providers.mapping import FieldMap, FieldMapError, RecordDict, as_text, dig
+from app.utils.masking import redact_sensitive_json
 
 logger = get_logger(__name__)
 
@@ -268,10 +275,19 @@ class MappedRows:
     Keeping the two apart is the whole point: "the source answered with
     nothing" and "the map read nothing in the answer" both come out as zero
     records, and they mean opposite things.
+
+    ``containers`` is the third of those answers. It holds ``row_fields`` read
+    from each row of ``data`` **whether or not the nested array had anything in
+    it** — which is exactly the case the first two cannot express: ФНП answers
+    ``"fnp": []`` while ``fnp_urls`` lists thirteen notices, арбитраж answers
+    ten cases with ``total_count: 40``. Zero records, nothing unreadable, and
+    the source plainly said it found more. Adapters that know what their
+    container counts mean compare the two and report the answer as incomplete.
     """
 
     records: list[RecordDict]
     unreadable: int
+    containers: list[RecordDict] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,29 +324,64 @@ class MethodMap:
 
         Counting is per record, not per row: a container whose second notice the
         map could not read must not be covered up by the first one it could.
+
+        The container is read even when the nested array is empty, and that is
+        not a detail. ``pledge_person`` answered live with ``"fnp": []`` beside
+        thirteen ``fnp_urls``: the register found thirteen notices and filtered
+        all of them out by date of birth. Reading the container only when there
+        were records to attach it to made that answer indistinguishable from an
+        empty register — nought records, nought unreadable, "залогов нет".
+
+        Считается и то, что лежало в массиве, но записью не оказалось. Массив из
+        двух строк вместо двух объектов давал ноль записей и ноль потерь: тип
+        самого массива в порядке, а его содержимое никто не пересчитывал. Это
+        худший вид пропажи — «найдено два, показано ноль, сказано ничего», —
+        поэтому здесь сравнивается длина сырого массива с числом прочитанных из
+        него записей (:meth:`app.providers.mapping.FieldMap.read_records`).
+
+        Контейнер, у которого не прочиталось НИ ОДНО поле, тоже потеря, и она
+        тише прочих. ``row_fields`` держат личность записей — ФИО, ИНН и дату
+        рождения должника из ``data[].commmon``; стоит вендору починить свою
+        опечатку (``commmon`` -> ``common``), как все три пути промахнутся, дела
+        останутся без личности, и код проставит на них ИНН, по которому шёл
+        поиск, — то есть отдаст дела второго субъекта первому и не скажет ни
+        слова. Считается только у строки, в которой ЕСТЬ записи: пустой ответ
+        живьём приходит с ``commmon: {}``, и там приписывать нечего.
         """
         records: list[RecordDict] = []
+        containers: list[RecordDict] = []
         unreadable = 0
         for row in rows:
             if not isinstance(row, Mapping):
                 unreadable += 1
                 continue
-            nested = self.field_map.extract_records(row)
+            owner = self.row_map.apply(row) if self.row_map is not None else {}
+            if owner:
+                containers.append(owner)
+            nested, dropped = self.field_map.read_records(row)
+            # Элементы массива, которые записями не являются: их не покажешь и
+            # не сосчитаешь как «ничего не найдено».
+            unreadable += dropped
             if not nested:
                 # Пустой массив — это ответ («уведомлений нет»). Массив,
                 # которого нет или который пришёл не массивом, — это про карту.
                 unreadable += int(self._records_path_unreadable(row))
                 continue
-            owner = self.row_map.apply(row) if self.row_map is not None else {}
+            if self.row_map is not None and not _has_any_value(owner):
+                # Записи есть, а чьи они — неизвестно. Приписать их субъекту
+                # запроса значит угадать; отдать без личности — значит дать
+                # отождествлению угадать за нас.
+                unreadable += len(nested)
+                continue
             for item in nested:
                 record = self.field_map.apply(item)
                 if _has_any_value(record):
-                    records.append({**owner, **record})
+                    records.append(_merged(owner, record))
                 else:
                     # Строки внутри есть, но карта не нашла в них ни одного
                     # поля: «не разобрано», а не «ничего не найдено».
                     unreadable += 1
-        return MappedRows(records=records, unreadable=unreadable)
+        return MappedRows(records=records, unreadable=unreadable, containers=containers)
 
     def _records_path_unreadable(self, row: Mapping[str, Any]) -> bool:
         """A named array that is absent — or present as something that is not one.
@@ -343,6 +394,72 @@ class MethodMap:
         """
         path = self.field_map.records_path
         return bool(path) and not isinstance(dig(row, path), (list, Mapping))
+
+
+def _merged(owner: RecordDict, record: RecordDict) -> RecordDict:
+    """Record over container — but a path that missed does not erase a value.
+
+    ``FieldMap.apply`` writes every key it was given, ``None`` included, so a
+    plain ``{**owner, **record}`` let a *missed path in the record* overwrite a
+    value the container had. The two maps do not share a key in the shipped
+    file, which is the only reason that never lied; the trap is laid exactly
+    where someone would want to use it, because the obvious use of
+    ``row_fields`` is "take it from the container when the record has none".
+
+    Пустая строка затирает ровно так же, как ``None``, и приходит она чаще:
+    живой ``bankrot_person`` присылает ``commmon.address: ""``. Поэтому
+    побеждает не «непустое над непустым», а «есть значение над его
+    отсутствием», и пустой строкой значение контейнера не заменяется.
+    """
+    merged = dict(owner)
+    for key, value in record.items():
+        if value not in (None, "") or key not in merged:
+            merged[key] = value
+    return merged
+
+
+def container_int(containers: Iterable[RecordDict], key: str) -> int | None:
+    """Сумма числового поля контейнеров — например, сколько всего нашёл источник.
+
+    ``None``, когда поля нет ни в одном контейнере или оно пришло не числом:
+    «источник не сказал» и «источник сказал ноль» — разные ответы, и второй
+    нельзя изобретать из первого.
+    """
+    total: int | None = None
+    for container in containers:
+        value = container.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            continue
+        try:
+            number = int(str(value).strip())
+        except ValueError:
+            continue
+        total = number if total is None else total + number
+    return total
+
+
+def container_flag(containers: Iterable[RecordDict], key: str) -> bool:
+    """Взведён ли булев признак контейнера хотя бы в одной строке ``data``."""
+    return any(_is_true(container.get(key)) for container in containers)
+
+
+def container_list(containers: Iterable[RecordDict], key: str) -> list[str]:
+    """Список строк из поля контейнера — ссылки, которые источник вернул отдельно."""
+    values: list[str] = []
+    for container in containers:
+        node = container.get(key)
+        if isinstance(node, str):
+            node = [node]
+        if not isinstance(node, list):
+            continue
+        values.extend(text for item in node if (text := as_text(item)))
+    return values
+
+
+def _is_true(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, str) and value.strip().lower() in {"true", "1", "да"}
 
 
 def _has_any_value(record: Mapping[str, Any]) -> bool:
@@ -581,6 +698,17 @@ class NewDBMethodProvider(BaseProvider):
     ) -> tuple[list[RecordDict], str]:
         """Run one mapped method and return its rows as flat domain-key dicts.
 
+        For adapters that do not need to know what the container said about its
+        own completeness. The ones that do call :meth:`mapped_for`.
+        """
+        mapped, raw = await self.mapped_for(method, *param_sets)
+        return mapped.records, raw
+
+    async def mapped_for(
+        self, method: str, *param_sets: Mapping[str, Any]
+    ) -> tuple[MappedRows, str]:
+        """Run one mapped method: records, container fields and the raw body.
+
         ``extra_params`` from the map wins over the subject-derived parameters:
         it exists precisely for a deployment whose contract wants something
         different from what this code would send.
@@ -618,7 +746,7 @@ class NewDBMethodProvider(BaseProvider):
                 f"Карта полей не разобрала {mapped.unreadable} из "
                 f"{mapped.unreadable + len(mapped.records)} записей ответа NewDB ({method})",
             )
-        return mapped.records, response.raw
+        return mapped, response.raw
 
     def option(self, method: str, key: str, default: str) -> str:
         """Настройка разбора из карты полей — та, что не является путём к полю.
@@ -631,7 +759,18 @@ class NewDBMethodProvider(BaseProvider):
         return str(value) if value not in (None, "") else default
 
     def raw_for(self, raw: str) -> str | None:
-        return raw if self._settings.store_raw_responses else None
+        """The body to store — with the vendor's stray personal data cut out.
+
+        ``STORE_RAW_RESPONSES`` decides whether a body is kept at all. What it
+        must never decide is whether somebody else's СНИЛС is kept with it: the
+        live ``bankrot_person`` answer carries ``commmon.snils``,
+        ``birth_place`` and ``residential_address``, no field map points at any
+        of them, and the README tells the operator to run the first debtor with
+        this flag on. See :func:`app.utils.masking.redact_sensitive_json`.
+        """
+        if not self._settings.store_raw_responses:
+            return None
+        return redact_sensitive_json(raw)
 
 
 __all__ = [
@@ -643,6 +782,9 @@ __all__ = [
     "NewDBFieldMaps",
     "NewDBMethodProvider",
     "NewDBResponse",
+    "container_flag",
+    "container_int",
+    "container_list",
     "individual_inn",
     "inn_params",
     "person_params",

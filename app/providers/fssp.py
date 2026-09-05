@@ -34,10 +34,11 @@ from app.domain.enums import (
 from app.domain.identity import SearchSubject
 from app.domain.models import EnforcementProceeding, ProviderResult
 from app.logging_setup import get_logger
-from app.providers.base import BaseProvider
+from app.providers.base import BaseProvider, ProviderUnavailableError
 from app.providers.mapping import as_text
 from app.providers.newdb import NewDBClient, person_params
 from app.utils.dates import parse_date, utcnow
+from app.utils.masking import redact_sensitive_json
 from app.utils.money import parse_amount
 
 logger = get_logger(__name__)
@@ -101,29 +102,72 @@ class FSSPProvider(BaseProvider):
         param_sets = [{**base, "regioncode": code} for code in _region_codes(subject.regions)]
 
         response = await self._client.call(NEWDB_METHOD, *param_sets)
-        records = _parse_proceedings(response.rows)
-        unique = _dedupe(records)[:MAX_PROCEEDINGS]
+        records, unreadable = _parse_proceedings(response.rows)
+        if unreadable:
+            # Тот же счёт потерь, что и у методов с картой полей, и по той же
+            # причине. Ключи здесь захардкожены, потому что их читали с живого
+            # ответа, — но «прочитано однажды» не значит «не изменится», а строка
+            # ответа, которую не удалось разобрать, молча уходила в пропасть:
+            # ноль производств у самого вероятного включённого источника — это
+            # +5 к взыскиваемости и «активных производств не найдено» в отчёте.
+            logger.warning("fssp.unreadable_rows", unreadable=unreadable, parsed=len(records))
+            raise ProviderUnavailableError(
+                "unexpected_schema",
+                f"Не удалось разобрать {unreadable} из {unreadable + len(records)} "
+                "строк ответа ФССП",
+            )
+        unique = _dedupe(records)
+        notes: tuple[str, ...] = ()
+        if len(unique) > MAX_PROCEEDINGS:
+            # Обрезка списка — тоже неполнота, и признаваться в ней обязан сам
+            # ответ: иначе сотое производство отличалось бы от их отсутствия
+            # только тем, что о нём никто не узнал.
+            notes = (
+                f"Показаны первые {MAX_PROCEEDINGS} производств из {len(unique)}, "
+                "полученных от источника",
+            )
+            unique = unique[:MAX_PROCEEDINGS]
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.SUCCESS if unique else ProviderStatus.NO_RESULTS,
             records=list(unique),
-            raw_response=response.raw if self._settings.store_raw_responses else None,
+            is_partial=bool(notes),
+            notes=notes,
+            # Тот же фильтр персданных, что у остальных методов NewDB: сырое
+            # тело хранится без чужих СНИЛСов и адресов проживания, каким бы ни
+            # был флаг. См. app/utils/masking.py.
+            raw_response=(
+                redact_sensitive_json(response.raw) if self._settings.store_raw_responses else None
+            ),
         )
 
 
 # ---------------------------------------------------------------- rows
 
 
-def _parse_proceedings(rows: list[Any]) -> list[EnforcementProceeding]:
+def _parse_proceedings(rows: list[Any]) -> tuple[list[EnforcementProceeding], int]:
+    """Производства и число строк, которые прочитать не удалось.
+
+    Второе значение и есть смысл функции. Строка не-объект и строка без номера
+    производства раньше просто пропускались: список получался короче ответа, и
+    ничто ниже по течению не могло об этом узнать — отчёт печатал «активных
+    исполнительных производств не найдено», а скоринг добавлял за это плюс.
+    Номер производства — единственное, чем производство можно показать и
+    проверить, поэтому строка без него не запись, а потеря.
+    """
     fetched_at = utcnow()
     proceedings: list[EnforcementProceeding] = []
+    unreadable = 0
     for row in rows:
         if not isinstance(row, Mapping):
+            unreadable += 1
             continue
         record = _to_proceeding(row, fetched_at)
-        if record is not None:
-            proceedings.append(record)
-    return proceedings
+        if record is None:
+            unreadable += 1
+            continue
+        proceedings.append(record)
+    return proceedings, unreadable
 
 
 def _to_proceeding(row: Mapping[str, Any], fetched_at: datetime) -> EnforcementProceeding | None:

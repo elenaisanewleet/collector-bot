@@ -27,6 +27,12 @@ _SENSITIVE_KEYS = frozenset(
         "secret",
         "phone",
         "passport",
+        # Приезжают в ответе о банкротстве (блок ``commmon``), не читаются ни
+        # одним полем домена и вырезаются из сохраняемого тела. Здесь — на
+        # случай, если что-то из этого попадёт в лог отладочной строкой.
+        "snils",
+        "birth_place",
+        "residential_address",
     }
 )
 _REDACTED = "<redacted>"

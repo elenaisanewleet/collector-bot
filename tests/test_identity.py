@@ -102,8 +102,8 @@ def test_word_order_does_not_decide_who_a_person_is(raw: str) -> None:
         # Тот же набор слов минус отчество, в любом порядке.
         "Тестов Андрей",
         "Андрей Тестов",
-        # Отчество есть, но чужое: сравнить его не с чем — только фамилия и имя.
-        "Андрей Петрович Тестов",
+        # Отчество сокращено до инициала, и инициал наш.
+        "Тестов Андрей С.",
     ],
 )
 def test_a_name_without_a_comparable_patronymic_is_only_a_short_match(raw: str) -> None:
@@ -123,13 +123,83 @@ def test_a_name_without_a_comparable_patronymic_is_only_a_short_match(raw: str) 
         "Тестов Сергеевич",
         # Родительный падеж: после нормализации это просто другие слова.
         "Тестова Андрея Сергеевича",
-        "",
     ],
 )
 def test_a_shared_word_is_not_a_shared_identity(raw: str) -> None:
     """Мультимножество — это ТО ЖЕ множество слов, а не пересечение."""
     name = PersonName(last_name="Тестов", first_name="Андрей", middle_name="Сергеевич")
     assert compare_names(name, raw) is NameMatch.NONE
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # Отчество есть, и оно чужое. Раньше это давало SHORT — «сравнить не с
+        # чем», — и однофамилец с другим отчеством становился должником.
+        "Андрей Петрович Тестов",
+        "Тестов Андрей Петрович",
+        # Инициал отчества чужой: та же ошибка, записанная короче.
+        "Тестов Андрей П.",
+    ],
+)
+def test_a_foreign_patronymic_is_a_contradiction_not_a_short_match(raw: str) -> None:
+    """Живой случай из КАД: дело вернулось по ИНН должника, ответчиком в нём
+    стоит однофамилец «Леликов Андрей Петрович», а должник — Андрей Сергеевич.
+
+    Пока это было «коротким совпадением», роль по делу назначалась ему, и
+    чужой иск печатался как иск к должнику.
+    """
+    name = PersonName(last_name="Тестов", first_name="Андрей", middle_name="Сергеевич")
+    assert compare_names(name, raw) is NameMatch.NONE
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # Пустая строка — это не «другой человек».
+        "",
+        None,
+        # Одна фамилия: имени нет вовсе, сравнивать нечего.
+        "Тестов",
+        # Хвост из слов, который не прочитан ни как отчество, ни как приписка.
+        "Тестов Андрей неизвестное лицо",
+    ],
+)
+def test_an_unreadable_name_is_no_evidence_either_way(raw: str | None) -> None:
+    """«Не прочитано» — не «не совпало».
+
+    Разница стоит четверти балла и решает судьбу записи: несовпадение ФИО стоит
+    0.00, отсутствие ФИО — 0.25, и пока строка «Тестов» считалась несовпадением,
+    ЗАПОЛНЕНИЕ поля в карте полей могло только спрятать находку.
+    """
+    name = PersonName(last_name="Тестов", first_name="Андрей", middle_name="Сергеевич")
+    assert compare_names(name, raw) is NameMatch.INCONCLUSIVE
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # Дата рождения дописана в ту же строку — ФНП и ЕГРЮЛ так и печатают.
+        ("Тестов Андрей Сергеевич, 15.03.1980 г.р.", NameMatch.FULL),
+        ("ТЕСТОВ АНДРЕЙ СЕРГЕЕВИЧ 15.03.1980 года рождения", NameMatch.FULL),
+        # Идентификатор в скобках — форма участника в КАД.
+        ("ТЕСТОВ АНДРЕЙ СЕРГЕЕВИЧ (ИНН 770123456789)", NameMatch.FULL),
+        # Организационная форма в конце строки, а не в начале.
+        ("Тестов Андрей Сергеевич ИП", NameMatch.FULL),
+        # Девичья фамилия в скобках: оба прочтения проверяются, берётся лучшее.
+        ("Тестов (Петров) Андрей", NameMatch.SHORT),
+    ],
+)
+def test_registry_tails_do_not_turn_a_name_into_a_stranger(raw: str, expected: NameMatch) -> None:
+    """Живые форматы реестров, на которых сравнение молча давало ноль."""
+    name = PersonName(last_name="Тестов", first_name="Андрей", middle_name="Сергеевич")
+    assert compare_names(name, raw) is expected
+
+
+def test_a_name_our_own_is_a_prefix_of_survives_extra_words() -> None:
+    """«Алиев Рашид Мамед оглы»: наше имя целиком внутри строки, плюс частица."""
+    name = PersonName(last_name="Алиев", first_name="Рашид", middle_name="Мамед")
+    assert compare_names(name, "Алиев Рашид Мамед оглы") is NameMatch.SHORT
 
 
 def test_a_reordered_name_matches_through_the_matcher(matcher: IdentityMatcher) -> None:
@@ -155,6 +225,70 @@ def test_a_namesake_without_a_discriminator_is_still_not_the_debtor(
 
     assert "ФИО не совпадает" in assessment.reasons
     assert match_level_for(assessment.confidence) is MatchLevel.WEAK
+
+
+# ------------------------------------------- пол под именем при совпавшем ИНН
+
+
+def test_a_matching_inn_is_not_undone_by_a_name_that_is_not_a_person(
+    matcher: IdentityMatcher,
+) -> None:
+    """Строка вернулась по ИНН должника, а названа в ней компания.
+
+    ``egrul_ip`` кладёт ``name_short`` во все секции подряд, и что стоит в этом
+    поле у секций, которых живьём никто не видел (rdl, addr, ogrul, docul), —
+    неизвестно. «ФИО не совпало» стоило 0.00, вместе с ИНН выходило 0.30 —
+    слабое совпадение, запись выпадала из отчёта, и скоринг платил бонус за
+    «связей не найдено». Идентификатор здесь весомее строки.
+    """
+    record = make_business(confidence=0.0)
+    record.name = 'ООО "Ромашка"'
+    record.person_name = 'ООО "Ромашка"'
+    assessment = matcher.assess(subject_for(inn="770912345601"), record)
+
+    assert "ФИО не совпадает" in assessment.reasons
+    assert "совпадает ИНН" in assessment.reasons
+    assert match_level_for(assessment.confidence) is MatchLevel.PROBABLE
+
+
+def test_the_floor_does_not_apply_when_the_identifier_contradicts(
+    matcher: IdentityMatcher,
+) -> None:
+    """Пол выдаёт совпавший идентификатор, а не сам факт нечитаемого имени."""
+    record = make_business(confidence=0.0)
+    record.name = 'ООО "Ромашка"'
+    record.person_name = 'ООО "Ромашка"'
+    assessment = matcher.assess(subject_for(inn="500100732259"), record)
+
+    assert "ИНН не совпадает" in assessment.reasons
+    assert match_level_for(assessment.confidence) is MatchLevel.WEAK
+
+
+def test_adding_a_name_to_the_map_can_no_longer_lower_a_record(
+    matcher: IdentityMatcher,
+) -> None:
+    """Заполненное поле ФИО не должно стоить записи дешевле пустого.
+
+    Именно эта разница — 0.00 против 0.25 — делала карту полей ловушкой:
+    дописать в неё путь к имени можно было только себе в убыток.
+    """
+    subject = subject_for(inn="770912345601")
+
+    without_name = make_business(confidence=0.0)
+    without_name.name = None
+    without_name.person_name = None
+
+    with_unparsed_name = make_business(confidence=0.0)
+    with_unparsed_name.name = "Тестов Андрей Сергеевич, 15.03.1980 г.р."
+    with_unparsed_name.person_name = "Тестов Андрей Сергеевич, 15.03.1980 г.р."
+
+    with_foreign_name = make_business(confidence=0.0)
+    with_foreign_name.name = 'ООО "Ромашка"'
+    with_foreign_name.person_name = 'ООО "Ромашка"'
+
+    baseline = matcher.assess(subject, without_name).confidence
+    assert matcher.assess(subject, with_unparsed_name).confidence >= baseline
+    assert matcher.assess(subject, with_foreign_name).confidence >= baseline
 
 
 # ------------------------------------------------------------------ инициалы
@@ -188,8 +322,6 @@ def test_a_surname_with_initials_is_recognized_as_such(raw: str) -> None:
         "Тестов С.",
         # Фамилия чужая.
         "Петров А.С.",
-        # Одна фамилия — это не человек.
-        "Тестов",
         # Инициалов больше, чем частей имени.
         "Тестов А.С.П.",
         # Не инициалы, а сокращённая организация.

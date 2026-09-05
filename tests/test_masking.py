@@ -6,6 +6,8 @@ history.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.services.search import describe_subject, redact_subject
@@ -16,7 +18,9 @@ from app.utils.masking import (
     mask_passport,
     mask_phone,
     mask_secret,
+    mask_snils,
     mask_vin,
+    redact_sensitive_json,
 )
 
 
@@ -128,3 +132,87 @@ def test_redaction_survives_a_round_trip(person_subject) -> None:  # type: ignor
     assert restored is not None
     assert restored.name == subject.name
     assert restored.phone is None
+
+
+# --------------------------------------------------- сырые ответы вендоров
+
+
+def test_snils_masking_keeps_only_the_check_digits() -> None:
+    masked = mask_snils("106-556-061 42")
+    assert masked == "***-***-*** 42"
+    assert "106" not in masked
+    assert "556" not in masked
+
+
+@pytest.mark.parametrize("raw", [None, "", "   "])
+def test_snils_masking_of_nothing(raw: str | None) -> None:
+    assert mask_snils(raw) is None
+
+
+def test_a_stored_vendor_body_carries_no_snils() -> None:
+    """СНИЛС вырезается из сырого тела до всякого хранения.
+
+    Живой ответ ``bankrot_person`` привозит его в ``commmon`` вместе с местом
+    рождения и адресом проживания. Ни одно из трёх не нужно ни отчёту, ни
+    скорингу, ни одному пути карты полей — а ``STORE_RAW_RESPONSES`` включают,
+    чтобы сверить карту, а не чтобы собрать чужие персональные данные.
+    """
+    body = json.dumps(
+        {
+            "results": {
+                "bankrot_person": {
+                    "result": {
+                        "data": [
+                            {
+                                "commmon": {
+                                    "name_or_fio": "Пыжова Анна Петровна",
+                                    "inn": "270311112222",
+                                    "snils": "111-222-333 44",
+                                    "birth_date": "14.03.1979",
+                                    "birth_place": "гор. Приморск",
+                                    "residential_address": "680000, г. Приморск",
+                                },
+                                "bankruptcy": [{"case_number": "А73-1111/2017"}],
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        ensure_ascii=False,
+    )
+
+    redacted = redact_sensitive_json(body)
+
+    assert redacted is not None
+    assert "111-222-333 44" not in redacted
+    assert "Приморск" not in redacted
+    # Всё остальное сохраняется дословно: тело хранят ради сверки карты.
+    assert "А73-1111/2017" in redacted
+    assert "Пыжова Анна Петровна" in redacted
+    common = json.loads(redacted)["results"]["bankrot_person"]["result"]["data"][0]["commmon"]
+    # Дата рождения остаётся: её читает сопоставление личности.
+    assert common["birth_date"] == "14.03.1979"
+    # Ключа нет вовсе, а не ``null``: «вендор ничего не прислал» — другое
+    # утверждение, и оно было бы неправдой.
+    assert "snils" not in common
+    assert common["_redacted_fields"] == ["birth_place", "residential_address", "snils"]
+
+
+def test_several_bodies_on_separate_lines_are_all_redacted() -> None:
+    """Провайдер залогов склеивает два ответа через перевод строки."""
+    first = json.dumps({"commmon": {"snils": "111-222-333 44"}}, ensure_ascii=False)
+    second = json.dumps({"commmon": {"snils": "555-666-777 88"}}, ensure_ascii=False)
+
+    redacted = redact_sensitive_json(f"{first}\n{second}")
+
+    assert redacted is not None
+    assert "111-222-333 44" not in redacted
+    assert "555-666-777 88" not in redacted
+    assert len(redacted.split("\n")) == 2
+
+
+def test_a_body_that_is_not_json_is_left_alone() -> None:
+    """Полу-вырезанный блоб хуже честного: регексп по неизвестному формату — нет."""
+    assert redact_sensitive_json("<html>503</html>") == "<html>503</html>"
+    assert redact_sensitive_json(None) is None

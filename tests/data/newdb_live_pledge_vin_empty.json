@@ -1,0 +1,31 @@
+{
+  "params": {
+    "method": "pledge_vin",
+    "country": "ru",
+    "vin": "XTA210990S1234567"
+  },
+  "method": "",
+  "requestId": "00000030-0000-4000-8000-000000000030",
+  "cost": 1,
+  "datecreated": "2026-09-05 01:36:12",
+  "state": "complete",
+  "balance": 99,
+  "tasks": 1,
+  "taskId": "00000031-0000-4000-8000-000000000031",
+  "is_repeat": false,
+  "results": {
+    "pledge_vin": {
+      "result": {
+        "status": 200,
+        "data": [
+          {
+            "fnp": [],
+            "fedresurs": [],
+            "fnp_urls": []
+          }
+        ]
+      },
+      "dateupdated": "2026-09-05 01:36:40"
+    }
+  }
+}

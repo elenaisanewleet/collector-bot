@@ -15,6 +15,7 @@ from app.domain.enums import ProviderName, ProviderStatus, Region, ScoreCategory
 from app.domain.identity import SearchSubject, VehicleDescriptor, parse_fio
 from app.domain.models import ProviderResult
 from app.providers.base import BaseProvider
+from app.services.reporting import render_report
 from app.services.search import build_query_hash
 
 OPERATOR_ID = 111
@@ -155,6 +156,47 @@ async def test_cache_preserves_the_score(container: Container) -> None:
 
     assert cached.recovery_score is not None
     assert cached.recovery_score.score == first.recovery_score.score  # type: ignore[union-attr]
+
+
+async def test_the_cache_is_never_kinder_than_the_answer_it_stores(
+    container: Container,
+) -> None:
+    """Неполный ответ остаётся неполным и на следующий день.
+
+    ФНП находит тринадцать уведомлений и не сопоставляет ни одного; отчёт
+    говорит об этом, а скоринг не даёт плюса «залогов не найдено». Отчёт живёт в
+    кэше сутки и пересобирается из базы — и если бы признак неполноты туда не
+    попадал, пересобранный отчёт напечатал бы «залогов не найдено» и вернул
+    снятый плюс. Тихая инверсия с отсрочкой в один запрос.
+    """
+    subject = subject_for("Тестов Андрей Сергеевич", date(1985, 3, 12))
+    await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+
+    async with container.database.session() as session:
+        repo = SearchRepository(session)
+        request = await repo.find_cached_request(build_query_hash(subject), ttl_hours=24)
+        assert request is not None
+        stored = await repo.results_for_request(request.id)
+        row = next(row for row in stored if row.provider == ProviderName.PLEDGE.value)
+        row.is_partial = True
+        row.notes_json = '["В реестре ФНП найдено 13 уведомлений на это ФИО"]'
+        await session.commit()
+
+    cached = await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+
+    assert cached.from_cache
+    result = cached.result_for(ProviderName.PLEDGE)
+    assert result is not None
+    assert result.is_partial
+    assert result.notes == ("В реестре ФНП найдено 13 уведомлений на это ФИО",)
+
+    text = render_report(cached)
+    assert "Записей в реестре залогов не найдено" not in text
+    assert "13 уведомлений" in text
+
+    score = cached.recovery_score
+    assert score is not None
+    assert "no_pledges" not in {factor.name for factor in score.factors}
 
 
 async def test_expired_cache_is_not_used(container: Container) -> None:
