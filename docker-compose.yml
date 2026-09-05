@@ -10,6 +10,12 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    # Куда публиковать веб-отчёты. По умолчанию только на петлевой адрес: на
+    # рабочей машине наружу торчать незачем. На сервере значение задаётся в
+    # .env (WEB_BIND=0.0.0.0:80), и правка живёт там же, где остальные
+    # настройки, — иначе следующий rsync снова снесёт проброс порта.
+    ports:
+      - "${WEB_BIND:-127.0.0.1:8080}:8080"
     environment:
       # Keep the database on the mounted volume rather than in the container.
       DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/var/collector_bot.db}
