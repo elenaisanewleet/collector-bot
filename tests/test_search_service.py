@@ -16,7 +16,7 @@ from app.domain.identity import SearchSubject, VehicleDescriptor, parse_fio
 from app.domain.models import ProviderResult
 from app.providers.base import BaseProvider
 from app.services.reporting import render_report
-from app.services.search import build_query_hash
+from app.services.search import _enrich_from_internal, build_query_hash
 
 OPERATOR_ID = 111
 
@@ -407,3 +407,38 @@ async def test_vehicle_and_address_searches_report_unconnected_sources(
     vehicle_result = report.result_for(ProviderName.VEHICLE)
     assert vehicle_result is not None
     assert vehicle_result.status is ProviderStatus.NOT_CONFIGURED
+
+
+async def test_a_phone_pulls_the_name_from_our_export(container: Container) -> None:
+    """Оператор помнит только номер — и этого должно хватить.
+
+    Заказчик ведёт должников в 1С, в выгрузке рядом с телефоном лежат ФИО и
+    дата рождения. Без переноса их в запрос ФССП и залоги отвечали бы
+    «недостаточно данных» о человеке, которого мы только что нашли у себя.
+    """
+    from app.domain.enums import SearchType
+
+    only_phone = SearchSubject(search_type=SearchType.PERSON.value, phone="+7 (999) 123-45-01")
+    records, result, exact = await container.search_service.lookup_internal_result(only_phone)
+
+    assert result.status is ProviderStatus.SUCCESS
+    assert exact, "телефон — точный идентификатор, а не совпадение по имени"
+
+    enriched = _enrich_from_internal(only_phone, records, exact=exact)
+    assert enriched.name is not None, "ФИО должно подтянуться из выгрузки"
+    assert enriched.birth_date is not None, "дата рождения тоже: без неё ФССП не ищет"
+
+
+async def test_a_namesake_hit_does_not_borrow_a_birth_date(container: Container) -> None:
+    """Совпадение по одному имени датой рождения не дополняется.
+
+    Подставив дату однофамильца, мы получили бы чужие производства, показанные
+    как производства должника, и не отличили бы их потом ничем.
+    """
+    from app.domain.identity import parse_fio
+
+    by_name = SearchSubject(search_type="person", name=parse_fio("Тестов Андрей Сергеевич"))
+    records, _result, exact = await container.search_service.lookup_internal_result(by_name)
+
+    assert not exact, "поиск по имени — не точный идентификатор"
+    assert _enrich_from_internal(by_name, records, exact=exact).birth_date is None
