@@ -28,7 +28,7 @@ from app.domain.enums import (
     PledgeStatus,
     ProviderStatus,
 )
-from app.domain.identity import SearchSubject, VehicleDescriptor
+from app.domain.identity import PersonName, SearchSubject, VehicleDescriptor
 from app.domain.models import BankruptcyRecord, BusinessRelation, CourtCase, PledgeRecord
 from app.providers.court import NewDBArbitrationProvider
 from app.providers.fedresurs import NewDBBankruptcyProvider
@@ -923,6 +923,80 @@ async def test_arbitration_without_inn_is_not_searched_by_name(
 
     assert result.error_code == "insufficient_query"
     assert not result.status.is_answered
+
+
+# ------------------------------------------------- чего именно не хватило
+
+
+async def test_the_three_inn_only_methods_name_the_inn_as_missing(
+    newdb_settings: Settings, maps: NewDBFieldMaps, person_subject: SearchSubject
+) -> None:
+    """Банкротство, ИП и арбитраж ищут только по ИНН — и говорят это машинно.
+
+    Без этого поля карточка не смогла бы свести их в одну строку «ЕФРСБ, ФНС,
+    Суды — нужен ИНН физлица», а три отдельные строки про одно и то же читаются
+    как три разные проблемы.
+    """
+    providers = (
+        NewDBBankruptcyProvider(newdb_settings, maps),
+        NewDBBusinessProvider(newdb_settings, maps),
+        NewDBArbitrationProvider(newdb_settings, maps),
+    )
+
+    for provider in providers:
+        result = await provider.fetch(person_subject)
+        assert result.error_code == "insufficient_query", provider.name
+        assert result.missing_input == ("inn",), provider.name
+
+
+async def test_pledges_ask_for_the_birth_date_they_actually_need(
+    newdb_settings: Settings, maps: NewDBFieldMaps, person_subject: SearchSubject
+) -> None:
+    """VIN в ответе не называется: у поиска по человеку его нет и быть не должно.
+
+    Сообщение по-прежнему называет оба законных пути; отправлять оператора за
+    VIN там, где он его не найдёт, — не подсказка, а тупик.
+    """
+    provider = NewDBPledgeProvider(newdb_settings, maps)
+
+    without_date = await provider.fetch(person_subject.model_copy(update={"birth_date": None}))
+    without_anything = await provider.fetch(
+        SearchSubject(search_type="contract", contract_number="EV-1")
+    )
+
+    assert without_date.missing_input == ("birth_date",)
+    assert without_anything.missing_input == ("name", "birth_date")
+
+
+async def test_the_bridge_names_the_field_it_is_waiting_for(live_settings: Settings) -> None:
+    """Текст и поле у моста идут по одной лестнице проверок и разойтись не могут."""
+    from app.providers.identity_bridge import PassportInnProvider
+
+    settings = live_settings.model_copy(
+        update={
+            "newdb_api_key": "test-key",
+            "newdb_base_url": BASE_URL,
+            "inn_bridge_enabled": True,
+        }
+    )
+    provider = PassportInnProvider(settings)
+    named = SearchSubject(
+        search_type="person",
+        name=PersonName(last_name="Тестов", first_name="Андрей"),
+        birth_date=date(1985, 3, 12),
+    )
+
+    no_passport = await provider.fetch(named)
+    no_name = await provider.fetch(
+        named.model_copy(update={"name": None, "passport": "4509123456"})
+    )
+    no_date = await provider.fetch(
+        named.model_copy(update={"birth_date": None, "passport": "4509123456"})
+    )
+
+    assert no_passport.missing_input == ("passport",)
+    assert no_name.missing_input == ("name",)
+    assert no_date.missing_input == ("birth_date",)
 
 
 @respx.mock

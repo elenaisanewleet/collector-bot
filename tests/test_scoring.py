@@ -22,7 +22,7 @@ from app.domain.enums import (
     ScoreCategory,
 )
 from app.domain.identity import SearchSubject
-from app.domain.models import BankruptcyRecord, DebtorReport, FactRecord
+from app.domain.models import BankruptcyRecord, DebtorReport, FactRecord, ProviderResult
 from app.domain.scoring import ACTIVE_BANKRUPTCY_PENALTY, BASE_SCORE
 from app.services.scoring import RecoveryScoreEngine
 from tests.conftest import (
@@ -220,6 +220,144 @@ def test_confidence_notes_name_the_missing_sources(
     # Формулировка приходит из общей таблицы состояний источника, а не из
     # собственного набора слов в скоринге.
     assert any("ФССП: не подключено" in note for note in score.confidence_notes)
+
+
+def test_an_unqueried_source_is_not_called_an_error(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """«Ошибка обращения к источнику» там, где обращения не было, — ложь.
+
+    Она ещё и вредная: оператор читает её как сбой и жмёт «Обновить», хотя
+    источнику просто нечего было послать. Текст берётся у провайдера, поэтому
+    разойтись с отчётом ему негде.
+    """
+    report = build_report(person_subject)
+    report.provider_results.append(
+        ProviderResult(
+            provider=ProviderName.FEDRESURS,
+            status=ProviderStatus.ERROR,
+            error_code="insufficient_query",
+            error_message="Для проверки банкротства нужен ИНН физлица (12 цифр)",
+            missing_input=("inn",),
+        )
+    )
+
+    notes = score_engine.evaluate(report).confidence_notes
+
+    assert any("нужен ИНН физлица" in note for note in notes)
+    assert not any("ошибка обращения" in note for note in notes)
+
+
+def test_sources_that_could_not_be_asked_earn_no_positive_factors(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Субъект с одним ФИО: три источника нечем спросить — и ни одного плюса.
+
+    Это и есть тот способ соврать, который открывается вместе с упрощением
+    ввода: бодрый отчёт по трём источникам из шести, в котором не видно, что
+    три остальных просто нечем было спросить.
+    """
+    name_only = person_subject.model_copy(update={"birth_date": None, "regions": ()})
+    report = build_report(name_only)
+    for provider in (ProviderName.FEDRESURS, ProviderName.FNS, ProviderName.COURT):
+        report.provider_results.append(
+            ProviderResult(
+                provider=provider,
+                status=ProviderStatus.ERROR,
+                error_code="insufficient_query",
+                error_message="нужен ИНН физлица (12 цифр)",
+                missing_input=("inn",),
+            )
+        )
+    for provider in (ProviderName.FSSP, ProviderName.PLEDGE):
+        report.provider_results.append(
+            ProviderResult(
+                provider=provider,
+                status=ProviderStatus.ERROR,
+                error_code="insufficient_query",
+                error_message="нужна дата рождения",
+                missing_input=("birth_date",),
+            )
+        )
+
+    score = score_engine.evaluate(report)
+
+    assert score.score == BASE_SCORE
+    assert not any(factor.delta > 0 for factor in score.factors)
+    assert score.confidence <= 0.2
+
+
+def test_an_unsearchable_internal_base_says_so(
+    score_engine: RecoveryScoreEngine,
+) -> None:
+    """«Не нашли» и «нечем было искать» — разные утверждения.
+
+    Поиск по одному ИНН во внутренней базе не реализован вовсе, поэтому такой
+    субъект приходит в оценку с пустым результатом, которого никто не получал.
+    """
+    by_inn = SearchSubject(search_type="person", inn="770912345601")
+
+    notes = score_engine.evaluate(build_report(by_inn)).confidence_notes
+
+    assert any("искать было нечем" in note for note in notes)
+
+
+def test_a_searchable_internal_base_still_says_nothing_found(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    notes = score_engine.evaluate(build_report(person_subject)).confidence_notes
+
+    assert any(note == "нет данных во внутренней базе" for note in notes)
+
+
+def test_a_broken_internal_base_is_not_called_empty(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Упавшая база и база без совпадений — разные вещи, и путать их нельзя.
+
+    Записей нет в обоих случаях, поэтому по одному ``internal_records`` их не
+    отличить: решает состояние источника. «Нет данных во внутренней базе» на
+    упавшей базе — это ровно «не проверено», показанное как «ничего не
+    найдено», и оно ещё и разошлось бы со строкой «недоступно» в списке
+    источников на той же странице.
+    """
+    report = build_report(person_subject)
+    report.provider_results.append(
+        ProviderResult(
+            provider=ProviderName.INTERNAL,
+            status=ProviderStatus.ERROR,
+            error_code="internal_source_failed",
+        )
+    )
+
+    notes = score_engine.evaluate(report).confidence_notes
+
+    assert not any("нет данных во внутренней базе" in note for note in notes)
+    assert any("internal_source_failed" in note for note in notes)
+
+
+def test_an_honest_empty_internal_answer_counts_as_coverage(
+    person_subject: SearchSubject, score_engine: RecoveryScoreEngine
+) -> None:
+    """Пустой ответ — тоже ответ: источник проверен, и вес обязан засчитаться."""
+    answered = build_report(person_subject)
+    answered.provider_results.append(
+        ProviderResult(provider=ProviderName.INTERNAL, status=ProviderStatus.NO_RESULTS)
+    )
+    broken = build_report(person_subject)
+    broken.provider_results.append(
+        ProviderResult(
+            provider=ProviderName.INTERNAL,
+            status=ProviderStatus.ERROR,
+            error_code="internal_source_failed",
+        )
+    )
+
+    assert score_engine.evaluate(answered).confidence > score_engine.evaluate(broken).confidence
+    assert any(
+        note == "нет данных во внутренней базе"
+        for note in score_engine.evaluate(answered).confidence_notes
+    )
 
 
 def test_search_without_birth_date_lowers_confidence(

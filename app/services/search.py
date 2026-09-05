@@ -48,7 +48,7 @@ from app.services.identity import IdentityMatcher
 from app.services.scoring import RecoveryScoreEngine
 from app.utils.dates import iso_or_none
 from app.utils.hashing import stable_hash
-from app.utils.masking import mask_name, mask_passport, mask_phone
+from app.utils.masking import mask_inn, mask_name, mask_passport, mask_phone
 
 logger = get_logger(__name__)
 
@@ -602,6 +602,10 @@ def describe_subject(subject: SearchSubject) -> str:
     parts = [mask_name(subject.name.full) if subject.name else None]
     if subject.birth_date:
         parts.append(str(subject.birth_date.year))
+    if subject.inn:
+        # Поиск по одному ИНН иначе попадал бы в историю как «—»: ФИО у него
+        # нет, а вернуться к такой строке потом невозможно.
+        parts.append(mask_inn(subject.inn))
     if subject.phone:
         parts.append(mask_phone(subject.phone))
     label = ", ".join(part for part in parts if part)

@@ -60,6 +60,33 @@ PROVIDER_TITLES: dict[ProviderName, str] = {
 }
 
 
+class MissingInput(StrEnum):
+    """Чего не хватило источнику, чтобы его вообще можно было спросить.
+
+    Машинный ответ на вопрос «почему тут пусто». Текстом это делать нельзя:
+    карточка группирует источники по общей причине («ФССП, Залоги — нужна дата
+    рождения»), а группировка по подстроке сообщения развалится от первой же
+    правки формулировки. Значения персистятся в ``ProviderResult`` только в
+    памяти прогона — колонки в БД у них нет, и на кэш-хите отчёт откатывается на
+    текст сообщения провайдера.
+    """
+
+    NAME = "name"
+    BIRTH_DATE = "birth_date"
+    INN = "inn"
+    PASSPORT = "passport"
+    VIN = "vin"
+
+
+MISSING_INPUT_TITLES: dict[MissingInput, str] = {
+    MissingInput.NAME: "нужно ФИО",
+    MissingInput.BIRTH_DATE: "нужна дата рождения",
+    MissingInput.INN: "нужен ИНН физлица (12 цифр)",
+    MissingInput.PASSPORT: "нужны серия и номер паспорта",
+    MissingInput.VIN: "нужен VIN",
+}
+
+
 class SearchType(StrEnum):
     PERSON = "person"
     VEHICLE_PLATE = "vehicle_plate"

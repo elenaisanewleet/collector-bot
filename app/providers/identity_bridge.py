@@ -47,7 +47,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.config import Settings
-from app.domain.enums import PROVIDER_TITLES, ProviderName, ProviderStatus
+from app.domain.enums import PROVIDER_TITLES, MissingInput, ProviderName, ProviderStatus
 from app.domain.identity import (
     INN_INDIVIDUAL_LENGTH,
     SearchSubject,
@@ -152,7 +152,7 @@ class PassportInnProvider(InnBridgeProvider):
         missing = missing_bridge_input(subject)
         if missing is not None:
             logger.info("inn_bridge.done", outcome="insufficient_query")
-            return self.insufficient_query(missing)
+            return self.insufficient_query(missing, missing=missing_bridge_fields(subject))
 
         passport = normalize_passport(subject.passport)
         assert passport is not None  # проверено в missing_bridge_input
@@ -182,12 +182,24 @@ def missing_bridge_input(subject: SearchSubject) -> str | None:
     делает ни одного вызова, так что обещание «паспорт не передаётся во внешние
     источники» на том экране остаётся правдой.
     """
+    gap = _bridge_gap(subject)
+    return gap[1] if gap else None
+
+
+def missing_bridge_fields(subject: SearchSubject) -> tuple[MissingInput, ...]:
+    """То же самое поле, но машинно — для группировки строк «нечем спросить»."""
+    gap = _bridge_gap(subject)
+    return (gap[0],) if gap else ()
+
+
+def _bridge_gap(subject: SearchSubject) -> tuple[MissingInput, str] | None:
+    """Единственная лестница проверок: текст и поле обязаны совпадать всегда."""
     if normalize_passport(subject.passport) is None:
-        return NO_PASSPORT
+        return MissingInput.PASSPORT, NO_PASSPORT
     if subject.name is None:
-        return NO_NAME
+        return MissingInput.NAME, NO_NAME
     if subject.birth_date is None:
-        return NO_BIRTH_DATE
+        return MissingInput.BIRTH_DATE, NO_BIRTH_DATE
     return None
 
 
@@ -273,5 +285,6 @@ __all__ = [
     "InnBridgeProvider",
     "InnBridgeResult",
     "PassportInnProvider",
+    "missing_bridge_fields",
     "missing_bridge_input",
 ]

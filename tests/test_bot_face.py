@@ -283,14 +283,26 @@ async def test_new_search_button_clears_a_half_finished_dialog(
 
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
 
-    # Состояние сброшено: ФИО больше никто не ждёт.
-    assert not sent.contains("Дата рождения")
+    # Состояние сброшено: брошенный шаг ввода ФИО строку не подхватывает.
+    # Проверка при этом идёт — свободный ввод и есть запрос, — но как новый,
+    # с эхом разбора, а не как продолжение прерванного диалога.
+    assert not sent.contains("Дата рождения в формате")
+    assert sent.contains("Принял")
 
 
 def test_report_button_and_handler_share_one_payload() -> None:
-    from app.bot.keyboards import BACK_CALLBACK, report_keyboard
+    # report_keyboard переехала в report_actions: в keyboards оставался дубль,
+    # и main его убрал. Тест сторожит связку кнопки и обработчика, а не место.
+    from app.bot.keyboards import BACK_CALLBACK
+    from app.bot.report_actions import report_keyboard
+    from app.domain.identity import SearchSubject, parse_fio
 
-    markup = report_keyboard(url="https://example.test/r/1")
+    markup = report_keyboard(
+        url="https://example.test/r/1",
+        refresh_token=None,
+        subject=SearchSubject(search_type="person", name=parse_fio("Тестов Андрей Сергеевич")),
+        bridge=None,
+    )
     assert markup is not None
     payloads = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert BACK_CALLBACK in payloads

@@ -216,7 +216,9 @@ async def test_a_typed_label_without_the_emoji_is_not_a_press(
     assert not sent.contains("Массовая проверка")
     assert not sent.contains("Внутренняя база пуста")
     # Ввод достался шагу ФИО и увёл диалог дальше, а не кнопке.
-    assert sent.contains("Дата рождения")
+    # Свободный ввод не блокирует проверку ради полноты: строка ушла в поиск,
+    # а не кнопке, и бот сразу сказал, что принял и чего не хватает.
+    assert sent.contains("Проверяю")
 
 
 async def test_a_contract_number_that_reads_like_a_button_still_searches(
@@ -282,5 +284,10 @@ async def test_starting_buttons_reset_a_half_finished_search(
 
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
 
-    assert not sent.contains("Дата рождения")
-    assert not sent.contains("RECOVERY SCORE")
+    # Отчёт здесь появиться ОБЯЗАН, и это не регрессия: со свободным вводом
+    # набранная строка сама по себе есть запрос проверки. Сторожим другое —
+    # что она обработана как новый запрос, а не как продолжение брошенного
+    # диалога: бот заново говорит, что принял, вместо молчаливого доигрывания
+    # забытого шага.
+    assert sent.contains("Принял")
+    assert not sent.contains("Дата рождения в формате")

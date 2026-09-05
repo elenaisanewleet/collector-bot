@@ -222,42 +222,6 @@ def history_keyboard(tokens: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     )
 
 
-def report_keyboard(
-    *,
-    url: str | None,
-    refresh_token: str | None = None,
-    text_url: str | None = None,
-    print_url: str | None = None,
-) -> InlineKeyboardMarkup | None:
-    """Кнопки под карточкой отчёта.
-
-    Ссылка — первой и отдельной строкой: за ней вся таблица, и это главное
-    действие. Выгрузка стоит рядом: отчёт чаще печатают и подшивают, чем
-    дочитывают до конца. Эмодзи здесь работает как иконка, помогая выцепить
-    кнопку взглядом; в тексте отчёта их нет.
-    """
-    rows: list[list[InlineKeyboardButton]] = []
-    if url:
-        rows.append([InlineKeyboardButton(text="📄 Полный отчёт по человеку", url=url)])
-    export: list[InlineKeyboardButton] = []
-    if print_url:
-        export.append(InlineKeyboardButton(text="🖨 PDF / печать", url=print_url))
-    if text_url:
-        export.append(InlineKeyboardButton(text="⬇️ Текстом", url=text_url))
-    if export:
-        rows.append(export)
-    if refresh_token:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🔄 Обновить", callback_data=f"{REFRESH_PREFIX}:{refresh_token}"
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(text="🔍 Новая проверка", callback_data=BACK_CALLBACK)])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def access_decision_keyboard(user_id: int) -> InlineKeyboardMarkup:
     """Две кнопки под заявкой на доступ, в чате владельца.
 

@@ -185,19 +185,6 @@ def unanswered_line(
             return f"Не проверено: ошибка обращения к источнику ({code})."
 
 
-def unchecked_titles(report: DebtorReport) -> list[str]:
-    """Названия источников, которые не ответили.
-
-    Одна функция на чат, страницу и печать: список непроверенного обязан
-    совпадать везде, где рядом стоит вердикт.
-    """
-    return [
-        PROVIDER_TITLES.get(result.provider, result.provider.value)
-        for result in report.provider_results
-        if not result.is_answered
-    ]
-
-
 def answered_count(report: DebtorReport) -> tuple[int, int]:
     """Сколько источников ответило из скольких опрошенных."""
     total = len(report.provider_results)

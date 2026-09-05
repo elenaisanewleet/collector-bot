@@ -74,27 +74,49 @@ async def test_outsider_cannot_start_a_search(
 
 
 # ---------------------------------------------------------------- person flow
+#
+# Жалоба, из-за которой этот флоу переписан, звучала дословно: «много требует»,
+# «это указать, это указать, раз уж можно пропустить — зачем это спрашивать».
+# Поэтому тесты здесь считают не только результат, но и НАЖАТИЯ: сценарий,
+# который снова начнёт спрашивать телефон или регион, обязан упасть.
+
+FULL_LINE = "Тестов Андрей Сергеевич 12.03.1985"
 
 
-async def test_person_search_end_to_end(
+def buttons(sent: SentMessages) -> list[str]:
+    """Тексты всех кнопок, которые бот показал за прогон."""
+    return [
+        button.text
+        for markup in sent.markups
+        if markup is not None and getattr(markup, "inline_keyboard", None)
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+
+
+def callbacks(sent: SentMessages) -> list[str]:
+    return [
+        button.callback_data
+        for markup in sent.markups
+        if markup is not None and getattr(markup, "inline_keyboard", None)
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+
+
+async def test_free_line_runs_without_a_single_button(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
-    """The full flow: menu -> ФИО -> дата -> телефон -> регион -> отчёт."""
+    """Типичный случай: одна строка, ноль нажатий, отчёт.
+
+    Ни ``/start``, ни меню — оператор просто пишет то, что у него есть. Раньше
+    здесь было семь взаимодействий: меню, ФИО, дата, «пропустить» телефон,
+    регион.
+    """
     from app.db.repository import SearchRepository
 
-    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
-    assert sent.contains("Введите ФИО")
-
-    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    assert sent.contains("Дата рождения")
-
-    await feed(dispatcher, bot, message=make_message("12.03.1985"))
-    assert sent.contains("Телефон")
-
-    await feed(dispatcher, bot, callback_query=make_callback("skip"))
-    assert sent.contains("Выберите регион")
-
-    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
 
     assert sent.contains("RECOVERY SCORE")
     assert sent.contains("Тестов Андрей Сергеевич")
@@ -106,26 +128,149 @@ async def test_person_search_end_to_end(
     assert len(history) == 1
 
 
-async def test_malformed_name_is_rejected_without_guessing(
+async def test_the_card_echoes_what_was_understood(
+    linked_dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Бот угадывает по форме — и обязан показать, что именно угадал."""
+    await feed(linked_dispatcher, bot, message=make_message(FULL_LINE))
+
+    assert sent.contains("Принял:")
+    assert sent.contains("дата рождения 12.03.1985")
+
+
+async def test_menu_person_asks_for_one_line_and_offers_no_skipping(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
     await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
+
+    assert sent.contains("одной строкой")
+    assert "Пропустить" not in buttons(sent)
+
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
+    assert sent.contains("RECOVERY SCORE")
+
+
+async def test_region_is_never_asked_and_defaults_to_all(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Пустой ``regions`` уже означает «все регионы» — шага для этого не нужно."""
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
+
+    assert not sent.contains("Выберите регион")
+    subject = next(iter(container.subject_store._items.values()))[0]
+    assert subject.regions == ()
+
+
+async def test_phone_is_never_asked_but_is_accepted_from_the_line(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """По телефону во внешних реестрах не ищут — спрашивать его не за чем.
+
+    Но если он в строке есть, он подтверждает личность во внутренней базе, и
+    выбрасывать его тоже незачем.
+    """
+    await feed(dispatcher, bot, message=make_message(f"{FULL_LINE} +79161234567"))
+
+    assert not sent.contains("Телефон должника")
+    subject = next(iter(container.subject_store._items.values()))[0]
+    assert subject.phone == "+79161234567"
+
+
+async def test_a_malformed_name_is_explained_not_guessed(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
     await feed(dispatcher, bot, message=make_message("Иванов"))
 
     assert sent.contains("как минимум фамилия и имя")
     assert not sent.contains("RECOVERY SCORE")
 
 
-async def test_bad_date_can_be_corrected(
+async def test_garbage_gets_one_question_not_five(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
+    await feed(dispatcher, bot, message=make_message("asdf"))
+
+    assert len(sent.texts) == 1
+    assert not sent.contains("RECOVERY SCORE")
+
+    # И следующая нормальная строка сразу запускает проверку.
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
+    assert sent.contains("RECOVERY SCORE")
+
+
+async def test_a_name_alone_still_runs_and_says_what_is_missing(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Полнота не блокирует. Бот идёт с тем, что дали, и называет цену.
+
+    Строка про ИНН показывается, пока идёт проверка, — она ничего не стоит и
+    учит. Что именно осталось неопрошенным, дословно проверяется на карточке
+    (``tests/test_bot_view.py``) и на самих провайдерах: демо-источники ищут по
+    одному ФИО и про обязательную дату у ФССП не знают.
+    """
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    await feed(dispatcher, bot, message=make_message("не дата"))
-    assert sent.contains("Не удалось разобрать дату")
+
+    assert sent.contains("RECOVERY SCORE")
+    assert sent.contains("Без ИНН не спрошу банкротство, ИП и арбитраж")
+    assert any(text.startswith("📅 Добавить дату рождения") for text in buttons(sent))
+
+
+async def test_a_broken_date_blocks_and_can_be_corrected(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Единственный блок, кроме «искать нечего», — и он про ложь, а не про полноту.
+
+    Оператор дату дал. Молча выбросить её значило бы отдать отчёт с двумя
+    пустыми разделами по вине опечатки, которую он считает исправленной.
+    """
+    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич 15.13.1980"))
+
+    assert sent.contains("на дату не похоже")
+    assert not sent.contains("RECOVERY SCORE")
 
     await feed(dispatcher, bot, message=make_message("12.03.1985"))
-    assert sent.contains("Телефон")
+    assert sent.contains("RECOVERY SCORE")
+    assert sent.contains("дата рождения 12.03.1985")
+
+
+async def test_a_broken_date_can_be_skipped_forward(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич 15.13.1980"))
+    assert "pskip:birth_date" in callbacks(sent)
+
+    await feed(dispatcher, bot, callback_query=make_callback("pskip:birth_date"))
+
+    assert sent.contains("RECOVERY SCORE")
+    subject = next(iter(container.subject_store._items.values()))[0]
+    assert subject.birth_date is None
+
+
+async def test_ambiguous_ten_digits_ask_instead_of_guessing(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Угаданный «телефон» закрыл бы единственный вход в мост «паспорт → ИНН»."""
+    await feed(
+        dispatcher, bot, message=make_message("Тестов Андрей Сергеевич 12.03.1985 9204384710")
+    )
+
+    assert sent.contains("паспорт или телефон")
+    assert not sent.contains("RECOVERY SCORE")
+
+    await feed(dispatcher, bot, callback_query=make_callback("pten:passport"))
+
+    assert sent.contains("RECOVERY SCORE")
+    subject = next(iter(container.subject_store._items.values()))[0]
+    assert subject.passport == "9204384710"
+
+
+async def test_an_entity_inn_is_reported_but_does_not_stop_the_run(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    await feed(dispatcher, bot, message=make_message(f"{FULL_LINE} ИНН 7709123456"))
+
+    assert sent.contains("ИНН организации")
+    assert sent.contains("RECOVERY SCORE")
 
 
 async def test_cancel_resets_the_conversation(
@@ -134,9 +279,6 @@ async def test_cancel_resets_the_conversation(
     await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
     await feed(dispatcher, bot, message=make_message("/cancel"))
     assert sent.contains("Отменено")
-
-    # A stray message after cancelling must not be read as a name.
-    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
     assert not sent.contains("RECOVERY SCORE")
 
 
@@ -222,48 +364,82 @@ async def test_passport_search_masks_the_number(
     assert sent.contains("45** ******")
 
 
-async def test_person_flow_asks_for_a_passport_only_when_the_bridge_is_on(
-    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+# ------------------------------------------------- паспорт: только после отчёта
+
+
+async def test_passport_is_not_asked_before_the_report(
+    bot: Bot, sent: SentMessages, container: Container
 ) -> None:
-    """Флаг выключен — паспорт в этом флоу не спрашивают вовсе."""
-    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
-    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    await feed(dispatcher, bot, message=make_message("12.03.1985"))
-    await feed(dispatcher, bot, callback_query=make_callback("skip"))
-    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+    """Мост включён, а вопроса нет: отчёт приходит первым.
+
+    Паспорт нужен ровно для того, чтобы добыть ИНН, и ровно тем, кому ИНН не
+    хватило. Узнать это можно только после прогона, поэтому вопрос переехал под
+    карточку и стал кнопкой.
+    """
+    enabled = _with_bridge(container)
+    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
 
     assert not sent.contains("Серия и номер паспорта")
     assert sent.contains("RECOVERY SCORE")
+    assert any(text.startswith("🪪 Узнать ИНН по паспорту") for text in buttons(sent))
 
 
-async def test_the_passport_step_masks_the_number_and_feeds_the_bridge(
+@pytest.mark.parametrize(
+    "line",
+    [
+        # ИНН уже есть — мост не нужен вовсе.
+        f"{FULL_LINE} 770912345601",
+        # Нет даты рождения — мост ответит insufficient_query, не сделав вызова.
+        "Тестов Андрей Сергеевич",
+    ],
+)
+async def test_the_passport_button_is_hidden_when_it_would_lie(
+    bot: Bot, sent: SentMessages, container: Container, line: str
+) -> None:
+    """Кнопка показывается, только если она не соврёт.
+
+    ``will_query`` на субъекте с подставленным паспортом — единственная честная
+    проверка: провайдер и кнопка не могут разойтись, потому что это один и тот
+    же код. Случай «мост выключен» проверяется на живом провайдере в
+    ``tests/test_report_actions.py``: демо-мост не стоит денег и включён всегда.
+    """
+    enabled = _with_bridge(container)
+    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+
+    await feed(dispatcher, bot, message=make_message(line))
+
+    assert sent.contains("RECOVERY SCORE")
+    assert not any(text.startswith("🪪 Узнать ИНН по паспорту") for text in buttons(sent))
+
+
+async def test_the_passport_button_masks_the_number_and_feeds_the_bridge(
     bot: Bot, sent: SentMessages, container: Container
 ) -> None:
-    """Флаг включён — паспорт спрашивается последним и в чат не возвращается.
+    """Нажали кнопку — паспорт спрашивается, удаляется из чата и едет в мост.
 
-    Он же доезжает до моста: в демо тот детерминированно выдаёт ИНН профиля, и
-    строка моста появляется в блоке ИСТОЧНИКИ.
+    В демо мост детерминированно выдаёт ИНН профиля, поэтому его строка
+    появляется в блоке ИСТОЧНИКИ.
     """
     from app.db.repository import SearchRepository
 
     enabled = _with_bridge(container)
     dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
 
-    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
-    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    await feed(dispatcher, bot, message=make_message("12.03.1985"))
-    await feed(dispatcher, bot, callback_query=make_callback("skip"))
-    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
+    token = _last_add_token(sent, "passport")
+    await feed(dispatcher, bot, callback_query=make_callback(f"padd:passport:{token}"))
 
     assert sent.contains("Серия и номер паспорта")
     assert sent.contains("не сохраняются в базе")
+    assert sent.contains("Ваше сообщение с номером я удалю")
 
     await feed(dispatcher, bot, message=make_message("4509123456"))
 
     assert not sent.contains("4509123456")
     assert sent.contains("45** ******")
     assert sent.contains("✓ ИНН по паспорту (ФНС) — ИНН получен")
-    assert sent.contains("RECOVERY SCORE")
 
     async with enabled.database.session() as session:
         request = (await SearchRepository(session).recent_for_user(OPERATOR_ID))[0]
@@ -271,20 +447,77 @@ async def test_the_passport_step_masks_the_number_and_feeds_the_bridge(
     assert "4509123456" not in request.subject_json
 
 
-async def test_the_passport_step_can_be_skipped(
+async def test_an_inn_from_the_line_skips_the_bridge_entirely(
     bot: Bot, sent: SentMessages, container: Container
 ) -> None:
     enabled = _with_bridge(container)
     dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
 
-    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
-    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    await feed(dispatcher, bot, message=make_message("12.03.1985"))
-    await feed(dispatcher, bot, callback_query=make_callback("skip"))
-    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
-    await feed(dispatcher, bot, callback_query=make_callback("skip"))
+    await feed(dispatcher, bot, message=make_message(f"{FULL_LINE} 770912345601"))
 
-    assert sent.contains("RECOVERY SCORE")
+    subject = next(iter(enabled.subject_store._items.values()))[0]
+    assert subject.inn == "770912345601"
+    bridge = enabled.registry.inn_bridge
+    assert bridge is not None
+    assert not bridge.is_needed(subject)
+    assert not sent.contains("ИНН по паспорту")
+
+
+async def test_adding_an_inn_reruns_with_a_different_query_hash(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Добор — это второй платный прогон, и кэш его не подменит."""
+    from app.services.search import build_query_hash
+
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
+    before = next(iter(container.subject_store._items.values()))[0]
+    token = _last_add_token(sent, "inn")
+
+    await feed(dispatcher, bot, callback_query=make_callback(f"padd:inn:{token}"))
+    assert sent.contains("ИНН физлица")
+
+    await feed(dispatcher, bot, message=make_message("770912345601"))
+    after = next(reversed(container.subject_store._items.values()))[0]
+
+    assert after.inn == "770912345601"
+    assert build_query_hash(before) != build_query_hash(after)
+
+
+async def test_a_ten_digit_inn_is_refused_as_a_company(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
+    token = _last_add_token(sent, "inn")
+    await feed(dispatcher, bot, callback_query=make_callback(f"padd:inn:{token}"))
+
+    sent.texts.clear()
+    await feed(dispatcher, bot, message=make_message("7709123456"))
+
+    assert sent.contains("ИНН организации")
+    assert not sent.contains("RECOVERY SCORE")
+
+
+async def test_the_region_is_an_offer_under_the_card_not_a_step(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
+    assert not sent.contains("Выберите регион")
+
+    token = _last_add_token(sent, "region")
+    await feed(dispatcher, bot, callback_query=make_callback(f"padd:region:{token}"))
+    assert sent.contains("Сейчас ищу по всем регионам")
+
+    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+
+    narrowed = next(reversed(container.subject_store._items.values()))[0]
+    assert narrowed.regions == ("moscow",)
+
+
+def _last_add_token(sent: SentMessages, field: str) -> str:
+    """Токен субъекта из кнопки «добавить <поле>» под последней карточкой."""
+    matches = [data for data in callbacks(sent) if data.startswith(f"padd:{field}:")]
+    assert matches, f"кнопки padd:{field} нет среди {callbacks(sent)}"
+    return matches[-1].split(":", maxsplit=2)[2]
 
 
 def _with_bridge(container: Container) -> Container:
@@ -315,11 +548,7 @@ async def test_history_is_empty_then_populated(
     await feed(dispatcher, bot, message=make_message("/history"))
     assert sent.contains("История пуста")
 
-    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
-    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    await feed(dispatcher, bot, callback_query=make_callback("skip"))
-    await feed(dispatcher, bot, callback_query=make_callback("skip"))
-    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
 
     sent.texts.clear()
     await feed(dispatcher, bot, message=make_message("/history"))
@@ -333,11 +562,7 @@ async def test_history_repeat_reruns_the_search(
 ) -> None:
     from app.db.repository import SearchRepository
 
-    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
-    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    await feed(dispatcher, bot, message=make_message("12.03.1985"))
-    await feed(dispatcher, bot, callback_query=make_callback("skip"))
-    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
 
     async with container.database.session() as session:
         request_id = (await SearchRepository(session).recent_for_user(OPERATOR_ID))[0].id
@@ -483,11 +708,7 @@ async def test_cached_search_is_announced(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
     async def run_person_search() -> None:
-        await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
-        await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-        await feed(dispatcher, bot, message=make_message("12.03.1985"))
-        await feed(dispatcher, bot, callback_query=make_callback("skip"))
-        await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+        await feed(dispatcher, bot, message=make_message(FULL_LINE))
 
     await run_person_search()
     sent.texts.clear()
@@ -526,11 +747,7 @@ async def test_search_sends_a_card_with_a_link_not_a_wall(
     linked_dispatcher: Dispatcher, bot: Bot, sent: SentMessages, linked: Container
 ) -> None:
     """С включённым вебом в чат уходит карточка и кнопка, а не отчёт текстом."""
-    await feed(linked_dispatcher, bot, callback_query=make_callback("menu:person"))
-    await feed(linked_dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    await feed(linked_dispatcher, bot, message=make_message("12.03.1985"))
-    await feed(linked_dispatcher, bot, callback_query=make_callback("skip"))
-    await feed(linked_dispatcher, bot, callback_query=make_callback("region:moscow"))
+    await feed(linked_dispatcher, bot, message=make_message(FULL_LINE))
 
     assert sent.contains("Тестов Андрей Сергеевич")
     assert sent.contains("Recovery Score")
@@ -551,11 +768,7 @@ async def test_search_falls_back_to_text_without_a_public_url(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
     """Без публичного адреса лучше простыня, чем нерабочая кнопка."""
-    await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
-    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    await feed(dispatcher, bot, message=make_message("12.03.1985"))
-    await feed(dispatcher, bot, callback_query=make_callback("skip"))
-    await feed(dispatcher, bot, callback_query=make_callback("region:moscow"))
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
 
     assert sent.contains("ИСТОЧНИКИ")
 
@@ -582,16 +795,14 @@ async def test_batch_offers_the_queue_page(
 async def test_progress_message_is_edited_not_reposted(
     linked_dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """Одно сообщение, которое меняется, вместо очереди новых."""
-    await feed(linked_dispatcher, bot, callback_query=make_callback("menu:person"))
-    await feed(linked_dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    await feed(linked_dispatcher, bot, message=make_message("12.03.1985"))
-    await feed(linked_dispatcher, bot, callback_query=make_callback("skip"))
-    sent.texts.clear()
-    await feed(linked_dispatcher, bot, callback_query=make_callback("region:moscow"))
+    """Одно сообщение, которое меняется, вместо очереди новых.
+
+    На сотне должников это и есть разница между читаемым чатом и лентой.
+    """
+    await feed(linked_dispatcher, bot, message=make_message(FULL_LINE))
 
     # Первое — прогресс, дальше правка того же сообщения результатом.
-    assert any("Проверяю" in text for text in sent.texts)
+    assert sent.texts[0].startswith("Проверяю")
     assert sent.contains("Recovery Score")
 
 
@@ -609,3 +820,53 @@ def test_star_opens_the_bot_to_everyone(live_settings: Settings) -> None:
     assert guard.is_allowed(999)
     # Отсутствие пользователя не значит «открыто»: анонимный апдейт всё равно нет.
     assert not guard.is_allowed(None)
+
+
+# ------------------------------------------------- чужие сценарии не перехвачены
+
+
+async def test_other_flows_are_not_hijacked_by_the_catch_all(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Ловец свободной строки стоит последним и только вне состояния.
+
+    Без ``StateFilter(None)`` он съедал бы ввод госномера, VIN, адреса и
+    договора: ``search_person`` включается в корень раньше всех них.
+    """
+    await feed(dispatcher, bot, callback_query=make_callback("menu:contract"))
+    await feed(dispatcher, bot, message=make_message("EV-20481"))
+    assert sent.contains("НАШИ ДАННЫЕ")
+
+    sent.texts.clear()
+    await feed(dispatcher, bot, callback_query=make_callback("menu:vehicle_plate"))
+    await feed(dispatcher, bot, message=make_message("не номер"))
+    assert sent.contains("Не похоже на российский госномер")
+
+    sent.texts.clear()
+    await feed(dispatcher, bot, callback_query=make_callback("menu:vin"))
+    await feed(dispatcher, bot, message=make_message("SHORTVIN"))
+    assert sent.contains("17 символов")
+
+    sent.texts.clear()
+    await feed(dispatcher, bot, callback_query=make_callback("menu:address"))
+    await feed(dispatcher, bot, message=make_message("Москва, ул. Примерная, д. 1"))
+    assert sent.contains("ФИО, если известно")
+
+    sent.texts.clear()
+    await feed(dispatcher, bot, message=make_message("/cancel"))
+    await feed(dispatcher, bot, message=make_message("/import"))
+    await feed(dispatcher, bot, message=make_message("не файл"))
+    assert sent.contains("Нужно отправить файл документом")
+
+
+async def test_a_bare_plate_in_a_free_line_is_a_vehicle_not_a_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Голый госномер — это не человек без ФИО."""
+    await feed(dispatcher, bot, message=make_message("А123ВС77"))
+
+    subject = next(iter(container.subject_store._items.values()))[0]
+    assert subject.search_type == "vehicle_plate"
+    assert subject.vehicle is not None
+    assert subject.vehicle.plate == "А123ВС77"
+    assert sent.contains("Авто — не подключено")

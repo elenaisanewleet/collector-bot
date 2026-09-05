@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from app.domain.enums import CourtCaseRole, ProviderName, ProviderStatus
+from app.domain.enums import CourtCaseRole, MissingInput, ProviderName, ProviderStatus
 from app.domain.identity import PersonName, SearchSubject, compare_names, is_name_evidence
 from app.domain.models import CourtCase, ProviderResult
 from app.providers.mapping import as_text, dig
@@ -82,7 +82,8 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
         if inn is None:
             return self.insufficient_query(
                 "Для проверки арбитража нужен ИНН физлица (12 цифр) — "
-                "поиск по одному ФИО дал бы чужие дела"
+                "поиск по одному ФИО дал бы чужие дела",
+                missing=(MissingInput.INN,),
             )
 
         mapped, raw = await self.mapped_for(NEWDB_METHOD, inn_params(inn))

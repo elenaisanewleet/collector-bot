@@ -63,6 +63,12 @@ def build_router() -> Router:
     root.include_router(import_csv.build_router())
     root.include_router(history.build_router())
     root.include_router(admin.build_router())
+    # Последним и только последним. Этот роутер ловит любой текст вне состояния
+    # и разбирает его как строку про должника — то есть перехватил бы ввод
+    # госномера, VIN, адреса и договора, встань он раньше. Внутри стоит
+    # ``StateFilter(None)``, но порядок — вторая половина той же защиты: команды
+    # и меню обязаны получить свой шанс первыми.
+    root.include_router(search_person.build_free_text_router())
     return root
 
 

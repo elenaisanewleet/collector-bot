@@ -484,11 +484,26 @@ def _confidence(report: DebtorReport) -> tuple[float, list[str]]:
         total_weight += weight
         provider = ProviderName(provider_key)
         result = report.result_for(provider)
-        if provider is ProviderName.INTERNAL and result is not None and result.is_answered:
-            answered_weight += weight
-            if not report.internal_records:
-                notes.append("нет данных во внутренней базе")
-            continue
+        if provider is ProviderName.INTERNAL:
+            if result is not None and result.is_answered:
+                # База ответила — вес засчитан. Пустой ответ это тоже ответ, и
+                # называть его непроверенным значит занижать уверенность.
+                answered_weight += weight
+                if not report.internal_records:
+                    notes.append("нет данных во внутренней базе")
+                continue
+            if result is None:
+                # Состояния внутренней базы в отчёте нет вовсе — отчёт собран в
+                # обход SearchService. Единственное честное утверждение выводится
+                # из самого субъекта: «не нашли» и «нечем было искать» разные
+                # вещи, а записи могут лежать в отчёте и без ProviderResult.
+                if report.internal_records:
+                    answered_weight += weight
+                else:
+                    notes.append(_internal_note(report))
+                continue
+            # База ответила отказом: причину назовёт общая ветка ниже, из ответа
+            # источника, а не из догадки по субъекту.
         if result is not None and result.is_answered:
             answered_weight += weight
             if result.is_partial:
@@ -514,17 +529,64 @@ def _confidence(report: DebtorReport) -> tuple[float, list[str]]:
     return max(MIN_CONFIDENCE, round(confidence, 2)), notes
 
 
+def _internal_note(report: DebtorReport) -> str:
+    """«Не нашли» и «нечем было искать» — разные утверждения.
+
+    Поиск по одному ИНН во внутренней базе не реализован вовсе (см.
+    ``SearchService._internal_candidates``), поэтому субъект, у которого нет ни
+    ФИО, ни телефона, ни договора, ни машины, ни адреса, приходит сюда с пустым
+    результатом, которого никто не получал.
+
+    Запасной путь: он работает только там, где состояния источника в отчёте нет
+    (отчёт собран мимо ``SearchService``). Когда состояние есть, то же самое
+    говорит сам источник — ``insufficient_query`` из
+    :meth:`app.services.search.SearchService.lookup_internal_result`. Предикат
+    ниже перечисляет ровно те же поля, что ``search._has_internal_query``;
+    правится один — правится и второй, иначе фолбэк начнёт врать про поиск,
+    которого не было.
+    """
+    subject = report.subject
+    vehicle = subject.vehicle
+    searchable = any(
+        (
+            subject.name,
+            subject.phone,
+            subject.contract_number,
+            subject.claim_number,
+            subject.debtor_id,
+            subject.address,
+            vehicle.vin if vehicle else None,
+            vehicle.plate if vehicle else None,
+        )
+    )
+    if searchable:
+        return "нет данных во внутренней базе"
+    return "во внутренней базе искать было нечем: ни ФИО, ни телефона, ни договора"
+
+
 def _unanswered_note(provider: ProviderName, result: ProviderResult | None) -> str:
     """Строка про непроверенный источник в «Ограничениях оценки».
 
     Формулировка берётся из общей таблицы состояний, а не сочиняется здесь:
     свой набор слов на четвёртом выводе уже терял разницу между «не хватило
     данных для запроса» и «ошибка обращения».
+
+    Единственное исключение — «недостаточно данных». Таблица знает, что данных
+    не хватило, но не знает, каких именно; знает это только провайдер, и
+    оператору нужно ровно это. Без названия поля строка читается как сбой
+    («попробуйте позже»), а не как «дошлите ИНН», — то есть «не спросили» опять
+    маскируется под «спросили, не вышло». Такая же связка «таблица плюс
+    сообщение провайдера» стоит в :mod:`app.services.verdict` и в
+    :func:`app.services.reporting.unanswered_line`, третьего набора слов не
+    появляется.
     """
-    from app.services.reporting import source_state
+    from app.services.reporting import SourceStateCode, source_state
 
     title = PROVIDER_TITLES.get(provider, provider.value)
-    return f"{title}: {source_state(result).label}"
+    state = source_state(result)
+    if state.code is SourceStateCode.INSUFFICIENT and result is not None and result.error_message:
+        return f"{title}: {result.error_message}"
+    return f"{title}: {state.label}"
 
 
 def _has_only_probable_matches(report: DebtorReport) -> bool:

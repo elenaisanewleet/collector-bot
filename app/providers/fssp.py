@@ -26,6 +26,7 @@ from typing import Any
 from app.config import Settings
 from app.domain.enums import (
     REGION_FSSP_CODES,
+    MissingInput,
     ProceedingStatus,
     ProviderName,
     ProviderStatus,
@@ -85,12 +86,15 @@ class FSSPProvider(BaseProvider):
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Для поиска в ФССП нужно ФИО")
+            return self.insufficient_query(
+                "Для поиска в ФССП нужно ФИО", missing=(MissingInput.NAME,)
+            )
         if subject.birth_date is None:
             # NewDB requires dob. Saying so is honest; querying without it and
             # reporting the rejection as "ничего не найдено" would not be.
             return self.insufficient_query(
-                "Для поиска в ФССП нужна дата рождения — источник требует её обязательно"
+                "Для поиска в ФССП нужна дата рождения — источник требует её обязательно",
+                missing=(MissingInput.BIRTH_DATE,),
             )
 
         base = person_params(

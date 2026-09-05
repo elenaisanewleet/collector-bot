@@ -9,7 +9,13 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.banner import send_welcome
 from app.bot.common import answer_callback, callback_message, reset_state
-from app.bot.keyboards import BACK_CALLBACK, CANCEL_CALLBACK, main_menu, main_reply_keyboard
+from app.bot.keyboards import (
+    BACK_CALLBACK,
+    CANCEL_CALLBACK,
+    MENU_PREFIX,
+    main_menu,
+    main_reply_keyboard,
+)
 from app.container import Container
 
 CANCELLED = "Отменено. Возвращаемся в главное меню."
@@ -83,6 +89,22 @@ def build_router() -> Router:
     async def handle_cancel(message: Message, state: FSMContext) -> None:
         await reset_state(state)
         await message.answer(CANCELLED, reply_markup=main_menu())
+
+    @router.callback_query(F.data == f"{MENU_PREFIX}:back")
+    async def handle_back_to_menu(
+        callback: CallbackQuery, state: FSMContext, container: Container
+    ) -> None:
+        """«🔍 Новая проверка» под каждой карточкой отчёта.
+
+        Обработчика у неё не было вовсе — кнопка молча ничего не делала. Теперь,
+        когда карточка стала главным местом, откуда оператор идёт к следующему
+        должнику, молчание тут дороже четырёх строк кода.
+        """
+        await reset_state(state)
+        message = callback_message(callback)
+        if message:
+            await message.answer(CHOOSE_TYPE, reply_markup=main_menu())
+        await answer_callback(callback)
 
     @router.callback_query(F.data == CANCEL_CALLBACK)
     async def handle_cancel_callback(callback: CallbackQuery, state: FSMContext) -> None:
