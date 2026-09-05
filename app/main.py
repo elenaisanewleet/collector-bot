@@ -12,12 +12,15 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import (
+    TelegramAPIError,
     TelegramConflictError,
     TelegramNetworkError,
     TelegramUnauthorizedError,
 )
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommandScopeChat, MenuButtonCommands
 
+from app.bot.commands import owner_telegram_commands, telegram_commands
 from app.bot.router import setup_dispatcher
 from app.config import Settings, get_settings
 from app.container import build_container
@@ -30,7 +33,9 @@ logger = get_logger(__name__)
 MISSING_TOKEN = "TELEGRAM_BOT_TOKEN не задан. Укажите его в .env — токен выдаёт @BotFather."
 EMPTY_ALLOWLIST = (
     "ALLOWED_TELEGRAM_USER_IDS пуст: бот закрытый и никого не пустит. "
-    "Укажите числовые Telegram ID через запятую — или «*», чтобы открыть всем."
+    "Укажите числовые Telegram ID через запятую — или «*», чтобы открыть всем. "
+    "Третий вариант — OWNER_TELEGRAM_USER_IDS: тогда посторонний присылает "
+    "заявку, а владелец пускает его кнопкой."
 )
 BAD_TOKEN = "Telegram отклонил токен. Проверьте TELEGRAM_BOT_TOKEN в .env."
 NO_NETWORK = (
@@ -85,6 +90,7 @@ async def start_bot(settings: Settings | None = None) -> None:
         # Drop updates queued while the bot was down: acting on a stale search
         # request after a restart is worse than losing it.
         await bot.delete_webhook(drop_pending_updates=True)
+        await publish_commands(bot, resolved)
         await dispatcher.start_polling(bot)
     except TelegramUnauthorizedError as exc:
         raise SystemExit(BAD_TOKEN) from exc
@@ -105,13 +111,52 @@ async def start_bot(settings: Settings | None = None) -> None:
         await container.dispose()
 
 
+async def publish_commands(bot: Bot, settings: Settings | None = None) -> None:
+    """Синяя кнопка «Меню» со списком команд.
+
+    Без неё команды существуют, но их негде увидеть: человек либо знает слово
+    после слеша, либо не знает. Отправляется при каждом старте, потому что
+    список живёт на стороне Telegram и после правки кода сам не обновится.
+
+    Владельцу дополнительно уходит свой список — с ``/access``. Область
+    ``BotCommandScopeChat`` для чата, в который бот ещё ни разу не писал,
+    отвергается Telegram, поэтому каждый владелец обрабатывается отдельно:
+    один недоступный не должен лишить меню остальных.
+
+    Отказ Telegram не должен ронять бота: список команд — удобство, а приём
+    сообщений — работа. Ошибку логируем и идём дальше.
+    """
+    try:
+        await bot.set_my_commands(telegram_commands())
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    except TelegramAPIError as exc:
+        logger.warning("commands.publish_failed", detail=str(exc))
+
+    for owner_id in sorted(settings.owner_user_ids) if settings else ():
+        try:
+            await bot.set_my_commands(
+                owner_telegram_commands(), scope=BotCommandScopeChat(chat_id=owner_id)
+            )
+        except TelegramAPIError as exc:
+            logger.warning("commands.owner_publish_failed", owner_id=owner_id, detail=str(exc))
+
+
 def _validate(settings: Settings) -> None:
     if not settings.telegram_bot_token:
         raise SystemExit(MISSING_TOKEN)
-    if not settings.allowed_user_ids and not settings.telegram_access_is_open:
+    if (
+        not settings.allowed_user_ids
+        and not settings.telegram_access_is_open
+        and not settings.owner_user_ids
+    ):
+        # Владелец в списке — уже не «никого не пустит»: он и сам работает, и
+        # пускает остальных кнопкой. Пустой ALLOWED_TELEGRAM_USER_IDS при
+        # заданном владельце — рабочая конфигурация, а не ошибка.
         raise SystemExit(EMPTY_ALLOWLIST)
     if settings.web_url_is_insecure and not settings.web_allow_insecure:
         raise SystemExit(INSECURE_WEB_URL)
+    if settings.access_moderation_enabled:
+        logger.info("access.moderated", owners=len(settings.owner_user_ids))
     if settings.telegram_access_is_open:
         # Не отказ и не предупреждение в лог, которое никто не прочтёт: строка
         # печатается при каждом старте, потому что открытый бот тратит чужими
@@ -119,6 +164,10 @@ def _validate(settings: Settings) -> None:
         logger.warning(
             "access.open",
             note="ALLOWED_TELEGRAM_USER_IDS=* — бот отвечает всем, кто его найдёт",
+            # «*» сильнее владельцев: заявок не будет вовсе, потому что пущены
+            # уже все. Молчать об этом нельзя — владелец, вписавший себя в
+            # OWNER_TELEGRAM_USER_IDS, вправе думать, что включил одобрение.
+            owner_approval="выключено символом «*»" if settings.owner_user_ids else "не настроено",
         )
     _validate_newdb_field_map(settings)
 
@@ -154,7 +203,7 @@ def main() -> None:
     asyncio.run(start_bot())
 
 
-__all__ = ["main", "run_demo", "start_bot"]
+__all__ = ["main", "publish_commands", "run_demo", "start_bot"]
 
 
 if __name__ == "__main__":

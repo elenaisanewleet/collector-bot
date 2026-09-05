@@ -12,7 +12,11 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.storage.memory import MemoryStorage
 
+from app.bot.router import setup_dispatcher
 from app.config import AppMode, Settings
 from app.container import Container
 from app.db.session import Database
@@ -34,6 +38,7 @@ from app.providers.registry import (
     build_inn_bridge,
     build_internal_provider,
 )
+from app.services.access import AccessService
 from app.services.batch import BatchService
 from app.services.import_service import ImportService
 from app.services.scoring import RecoveryScoreEngine
@@ -41,6 +46,8 @@ from app.services.search import SearchService
 from app.services.share import ShareLinkService
 from app.services.subject_store import SubjectStore
 from app.services.verdict import VerdictEngine
+
+from .bot_harness import FAKE_TOKEN, SentMessages, intercept
 
 DEMO_CSV = Path("data/demo_debtors.csv")
 
@@ -101,6 +108,7 @@ async def container(settings: Settings, database: Database) -> AsyncIterator[Con
         verdict_engine=VerdictEngine(settings),
         share_service=ShareLinkService(settings, database),
         subject_store=SubjectStore(),
+        access_service=AccessService(settings, database),
     )
     yield instance
 
@@ -264,3 +272,24 @@ def provider_result(
 @pytest.fixture
 def anyio_backend() -> Iterator[str]:
     yield "asyncio"
+
+
+# ---------------------------------------------------------------- bot harness
+
+
+@pytest.fixture
+def sent() -> SentMessages:
+    return SentMessages()
+
+
+@pytest.fixture
+def bot(sent: SentMessages, monkeypatch: pytest.MonkeyPatch) -> Iterator[Bot]:
+    """A Bot whose outbound calls are intercepted instead of sent."""
+    instance = Bot(token=FAKE_TOKEN, default=DefaultBotProperties(parse_mode=None))
+    monkeypatch.setattr(Bot, "__call__", intercept(sent), raising=True)
+    yield instance
+
+
+@pytest.fixture
+def dispatcher(container: Container) -> Dispatcher:
+    return setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)

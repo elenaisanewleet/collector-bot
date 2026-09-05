@@ -3,128 +3,32 @@
 These drive real ``aiogram`` updates through the real dispatcher — middleware,
 routers, FSM and handlers — with only the outbound Telegram API replaced. That
 makes them the closest thing to running the bot without a token.
+
+Стенд перехвата и фикстуры общие: :mod:`tests.bot_harness` и ``conftest``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from datetime import datetime
-from typing import Any
+from dataclasses import replace
 
 import pytest
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import (
-    AnswerCallbackQuery,
-    DeleteMessage,
-    EditMessageText,
-    SendDocument,
-    SendMessage,
-    TelegramMethod,
-)
-from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
 from app.bot.middleware import ACCESS_DENIED_MESSAGE
 from app.bot.router import setup_dispatcher
 from app.config import Settings
 from app.container import Container
 
-FAKE_TOKEN = "123456789:AAEnoughCharactersToLookLikeARealToken00"
-OPERATOR_ID = 111
-OUTSIDER_ID = 999
-CHAT_ID = 500
-
-
-class SentMessages:
-    """Captures everything the bot tried to send."""
-
-    def __init__(self) -> None:
-        self.texts: list[str] = []
-        self.markups: list[Any] = []
-        self.callback_answers: list[str] = []
-        self.documents: list[tuple[str, bytes]] = []
-
-    @property
-    def joined(self) -> str:
-        return "\n".join(self.texts)
-
-    def contains(self, needle: str) -> bool:
-        return any(needle in text for text in self.texts)
-
-
-@pytest.fixture
-def sent() -> SentMessages:
-    return SentMessages()
-
-
-@pytest.fixture
-def bot(sent: SentMessages, monkeypatch: pytest.MonkeyPatch) -> Iterator[Bot]:
-    """A Bot whose outbound calls are intercepted instead of sent."""
-    instance = Bot(token=FAKE_TOKEN, default=DefaultBotProperties(parse_mode=None))
-    counter = {"id": 1000}
-
-    async def fake_call(self: Bot, method: TelegramMethod[Any], *args: Any, **kwargs: Any) -> Any:
-        if isinstance(method, SendMessage):
-            sent.texts.append(method.text)
-            sent.markups.append(method.reply_markup)
-            counter["id"] += 1
-            return Message.model_construct(
-                message_id=counter["id"],
-                date=datetime(2026, 9, 4),
-                chat=Chat(id=CHAT_ID, type="private"),
-                text=method.text,
-            ).as_(self)
-        if isinstance(method, EditMessageText):
-            # Прогресс правится на месте — для теста это такой же текст.
-            sent.texts.append(method.text or "")
-            sent.markups.append(method.reply_markup)
-            return True
-        if isinstance(method, SendDocument):
-            document = method.document
-            sent.documents.append(
-                (getattr(document, "filename", ""), getattr(document, "data", b""))
-            )
-            return True
-        if isinstance(method, AnswerCallbackQuery):
-            sent.callback_answers.append(method.text or "")
-            return True
-        if isinstance(method, DeleteMessage):
-            return True
-        return True
-
-    monkeypatch.setattr(Bot, "__call__", fake_call, raising=True)
-    yield instance
-
-
-@pytest.fixture
-def dispatcher(container: Container) -> Dispatcher:
-    return setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)
-
-
-def make_message(text: str, user_id: int = OPERATOR_ID, message_id: int = 1) -> Message:
-    return Message.model_construct(
-        message_id=message_id,
-        date=datetime(2026, 9, 4),
-        chat=Chat(id=CHAT_ID, type="private"),
-        from_user=User(id=user_id, is_bot=False, first_name="Operator"),
-        text=text,
-    )
-
-
-def make_callback(data: str, user_id: int = OPERATOR_ID) -> CallbackQuery:
-    return CallbackQuery.model_construct(
-        id=f"cb-{data}",
-        from_user=User(id=user_id, is_bot=False, first_name="Operator"),
-        chat_instance="chat-instance",
-        data=data,
-        message=make_message("предыдущее сообщение", user_id=user_id, message_id=2),
-    )
-
-
-async def feed(dispatcher: Dispatcher, bot: Bot, **update: Any) -> None:
-    await dispatcher.feed_update(bot, Update.model_construct(update_id=1, **update))
-
+from .bot_harness import (
+    FAKE_TOKEN,
+    OPERATOR_ID,
+    OUTSIDER_ID,
+    SentMessages,
+    feed,
+    make_callback,
+    make_message,
+)
 
 # ---------------------------------------------------------------- access
 
@@ -135,7 +39,12 @@ async def test_start_shows_the_main_menu(
     await feed(dispatcher, bot, message=make_message("/start"))
 
     assert sent.contains(container.settings.app_name)
-    assert sent.contains("Внутренний сервис проверки должников")
+    # Приветствие говорит, что делать, а не описывает себя: нажми, введи, получи.
+    assert sent.contains("Нажмите кнопку")
+    assert sent.contains("Введите то, что бот попросит")
+    assert sent.contains("Получите вердикт")
+    # И не даёт прочитать молчание источника как чистую биографию.
+    assert sent.contains("Это не значит, что там чисто")
     assert sent.markups[0] is not None  # the inline menu
 
 
@@ -387,14 +296,17 @@ def _with_bridge(container: Container) -> Container:
     )
 
 
-async def test_help_lists_connected_sources(
+async def test_help_explains_the_product_in_plain_words(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
     await feed(dispatcher, bot, message=make_message("/help"))
 
-    assert sent.contains("Команды:")
-    assert sent.contains("не использует базы утечек")
-    assert sent.contains("Источники:")
+    assert sent.contains("КОМАНДЫ")
+    assert sent.contains("не пользуется базами утечек")
+    # Термины, на которых оператор спотыкается, объяснены на месте.
+    assert sent.contains("Recovery Score")
+    assert sent.contains("ПОЧЕМУ ВАЖНА ДАТА РОЖДЕНИЯ")
+    assert sent.contains("Можно подавать заявление о судебном приказе")
 
 
 async def test_history_is_empty_then_populated(
@@ -595,16 +507,13 @@ def linked(container: Container) -> Container:
     settings = container.settings.model_copy(
         update={"web_public_url": "https://reports.example.test"}
     )
-    return Container(
+    # replace(), а не пересборка Container по полям: перечисленный вручную
+    # список полей молча теряет всякую новую службу, и тест ломается там, где к
+    # ссылкам на отчёт отношения не имеет.
+    return replace(
+        container,
         settings=settings,
-        database=container.database,
-        registry=container.registry,
-        search_service=container.search_service,
-        import_service=container.import_service,
-        batch_service=container.batch_service,
-        verdict_engine=container.verdict_engine,
         share_service=ShareLinkService(settings, container.database),
-        subject_store=container.subject_store,
     )
 
 

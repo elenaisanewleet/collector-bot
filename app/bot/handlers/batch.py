@@ -118,6 +118,22 @@ def render_summary(summary: BatchSummary) -> str:
     return "\n".join(lines)
 
 
+async def offer_batch(message: Message, state: FSMContext, container: Container) -> None:
+    """Смета прогона и предложение подтвердить.
+
+    Модульного уровня, а не вложенная в ``build_router``: тот же экран открывает
+    кнопка «📊 Проверить всю базу» с нижней клавиатуры, а её обработчик живёт в
+    :mod:`app.bot.handlers.buttons` и до замыкания не дотянулся бы.
+    """
+    estimate = await container.batch_service.estimate()
+    if estimate.debtors == 0:
+        await state.clear()
+        await message.answer(EMPTY_BASE, reply_markup=main_menu())
+        return
+    await state.set_state(BatchCheck.waiting_confirm)
+    await message.answer(render_estimate(estimate), reply_markup=batch_confirm_keyboard())
+
+
 def build_router() -> Router:
     """Build this module's router.
 
@@ -131,7 +147,7 @@ def build_router() -> Router:
     async def handle_batch_command(
         message: Message, state: FSMContext, container: Container
     ) -> None:
-        await _offer(message, state, container)
+        await offer_batch(message, state, container)
 
     @router.callback_query(F.data == f"{BATCH_PREFIX}:start")
     async def handle_batch_start(
@@ -140,19 +156,7 @@ def build_router() -> Router:
         await answer_callback(callback)
         target = callback_message(callback)
         if target:
-            await _offer(target, state, container)
-
-    async def _offer(message: Message, state: FSMContext, container: Container) -> None:
-        estimate = await container.batch_service.estimate()
-        if estimate.debtors == 0:
-            await state.clear()
-            await message.answer(EMPTY_BASE, reply_markup=main_menu())
-            return
-        await state.set_state(BatchCheck.waiting_confirm)
-        await message.answer(
-            render_estimate(estimate),
-            reply_markup=batch_confirm_keyboard(),
-        )
+            await offer_batch(target, state, container)
 
     @router.callback_query(BatchCheck.waiting_confirm, F.data == f"{BATCH_PREFIX}:run")
     async def handle_batch_run(

@@ -63,6 +63,16 @@ def build_router() -> Router:
         # Token presence is confirmed without ever printing the value.
         lines.append(f"Токен бота: {mask_secret(settings.telegram_bot_token)}")
         lines.append(f"Допущенных пользователей: {len(settings.allowed_user_ids)}")
+        # Кто вообще попадает в бота — вопрос состояния системы, а не отдельного
+        # экрана: открытый бот и бот с одобрением ведут себя по-разному, и
+        # увидеть это надо там же, где смотрят всё остальное.
+        if settings.telegram_access_is_open:
+            lines.append("Доступ: открыт всем (ALLOWED_TELEGRAM_USER_IDS=*)")
+        elif settings.access_moderation_enabled:
+            owners = len(settings.owner_user_ids)
+            lines.append(f"Доступ: по одобрению, владельцев — {owners} (/access)")
+        else:
+            lines.append("Доступ: только по списку в .env")
         await message.answer("\n".join(lines))
 
     @router.message(Command("revoke"))

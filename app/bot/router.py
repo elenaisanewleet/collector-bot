@@ -9,14 +9,17 @@ from __future__ import annotations
 from aiogram import Dispatcher, Router
 
 from app.bot.handlers import (
+    access,
     admin,
     batch,
+    buttons,
     history,
     import_csv,
     search_contract,
     search_misc,
     search_person,
     search_vehicle,
+    sources,
     start,
 )
 from app.bot.handlers import (
@@ -33,7 +36,25 @@ def build_router() -> Router:
     independent trees rather than failing on an already-attached child.
     """
     root = Router(name="root")
+    # Нижняя клавиатура — самой первой, до всего остального. Её нажатия приходят
+    # обычным текстом, и любой диалоговый роутер, оказавшийся выше, съел бы их:
+    # «🕘 История» на шаге ввода ФИО разобралась бы как фамилия. Фильтры здесь —
+    # пять точных совпадений по строке, поэтому первое место ничего не
+    # перехватывает у остальных. Подробности — в docstring модуля.
+    root.include_router(buttons.build_router())
     root.include_router(start.build_router())
+    # Справочные экраны идут до диалогов намеренно. Хендлеры состояний забирают
+    # себе весь текст, дошедший до их роутера, поэтому команда, подключённая
+    # после них, посреди диалога молча съедается: /help во время ввода ФИО
+    # отвечает «Нужно как минимум фамилия и имя». Спросить «откуда данные» и
+    # «как это работает» человек вправе в любой момент.
+    root.include_router(sources.build_router())
+    root.include_router(help_handlers.build_router())
+    # Заявки на доступ — тоже до диалоговых. Владелец получает карточку с
+    # кнопками в тот момент, когда сам, возможно, стоит на шаге ввода ФИО, и
+    # «Разрешить» обязано сработать, не дожидаясь, пока он доиграет свою
+    # проверку. Ни один хендлер здесь состояние не трогает.
+    root.include_router(access.build_router())
     root.include_router(batch.build_router())
     root.include_router(search_person.build_router())
     root.include_router(search_vehicle.build_router())
@@ -41,7 +62,6 @@ def build_router() -> Router:
     root.include_router(search_misc.build_router())
     root.include_router(import_csv.build_router())
     root.include_router(history.build_router())
-    root.include_router(help_handlers.build_router())
     root.include_router(admin.build_router())
     return root
 
@@ -56,6 +76,7 @@ def setup_dispatcher(dispatcher: Dispatcher, container: Container) -> Dispatcher
     allowlist = AllowlistMiddleware(
         container.settings.allowed_user_ids,
         open_access=container.settings.telegram_access_is_open,
+        access=container.access_service,
     )
     dependencies = DependencyMiddleware(container=container)
 
