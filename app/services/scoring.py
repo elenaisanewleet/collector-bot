@@ -488,7 +488,7 @@ def _confidence(report: DebtorReport) -> tuple[float, list[str]]:
             if report.internal_records:
                 answered_weight += weight
             else:
-                notes.append("нет данных во внутренней базе")
+                notes.append(_internal_note(report))
             continue
         result = report.result_for(provider)
         if result is not None and result.is_answered:
@@ -516,6 +516,33 @@ def _confidence(report: DebtorReport) -> tuple[float, list[str]]:
     return max(MIN_CONFIDENCE, round(confidence, 2)), notes
 
 
+def _internal_note(report: DebtorReport) -> str:
+    """«Не нашли» и «нечем было искать» — разные утверждения.
+
+    Поиск по одному ИНН во внутренней базе не реализован вовсе (см.
+    ``SearchService._internal_candidates``), поэтому субъект, у которого нет ни
+    ФИО, ни телефона, ни договора, ни машины, ни адреса, приходит сюда с пустым
+    результатом, которого никто не получал.
+    """
+    subject = report.subject
+    vehicle = subject.vehicle
+    searchable = any(
+        (
+            subject.name,
+            subject.phone,
+            subject.contract_number,
+            subject.claim_number,
+            subject.debtor_id,
+            subject.address,
+            vehicle.vin if vehicle else None,
+            vehicle.plate if vehicle else None,
+        )
+    )
+    if searchable:
+        return "нет данных во внутренней базе"
+    return "во внутренней базе искать было нечем: ни ФИО, ни телефона, ни договора"
+
+
 def _unanswered_note(provider: ProviderName, result: ProviderResult | None) -> str:
     title = PROVIDER_TITLES.get(provider, provider.value)
     if result is None:
@@ -524,6 +551,10 @@ def _unanswered_note(provider: ProviderName, result: ProviderResult | None) -> s
         return f"{title}: источник не подключён"
     if result.status is ProviderStatus.UNAVAILABLE:
         return f"{title}: источник недоступен"
+    if result.error_code == "insufficient_query":
+        # Обращения не было вовсе — называть это ошибкой обращения значит
+        # прятать нехватку данных за сбоем и подсказывать «попробуйте позже».
+        return f"{title}: {result.error_message or 'нечем было спросить'}"
     return f"{title}: ошибка обращения к источнику"
 
 

@@ -24,6 +24,7 @@ from app.config import FedresursBackend, Settings
 from app.domain.enums import (
     BankruptcyStatus,
     EntityType,
+    MissingInput,
     ProviderName,
     ProviderStatus,
 )
@@ -113,7 +114,9 @@ class FedresursProvider(BaseProvider):
             # with any other backend means the wiring is incomplete.
             return self.not_configured("Бэкенд ЕФРСБ не настроен")
         if subject.name is None and not subject.inn:
-            return self.insufficient_query("Для проверки банкротства нужно ФИО или ИНН")
+            return self.insufficient_query(
+                "Для проверки банкротства нужно ФИО или ИНН", missing=(MissingInput.NAME,)
+            )
 
         params: dict[str, Any] = {}
         if subject.name:
@@ -201,7 +204,8 @@ class NewDBBankruptcyProvider(NewDBMethodProvider):
         if inn is None:
             return self.insufficient_query(
                 "Для проверки банкротства нужен ИНН физлица (12 цифр) — "
-                "источник ищет только по нему"
+                "источник ищет только по нему",
+                missing=(MissingInput.INN,),
             )
 
         records, raw = await self.rows_for(NEWDB_METHOD, inn_params(inn))

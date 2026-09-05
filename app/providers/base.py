@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 
-from app.domain.enums import ProviderName, ProviderStatus
+from app.domain.enums import MissingInput, ProviderName, ProviderStatus
 from app.domain.identity import SearchSubject
 from app.domain.models import ProviderResult
 from app.logging_setup import get_logger
@@ -130,17 +130,26 @@ class BaseProvider(ABC):
             error_message=message,
         )
 
-    def insufficient_query(self, message: str) -> ProviderResult:
+    def insufficient_query(
+        self, message: str, *, missing: tuple[MissingInput, ...] = ()
+    ) -> ProviderResult:
         """The source was not queried because the input lacked what it needs.
 
         Reported as an error rather than ``NO_RESULTS``: we did not look, so we
         must not imply there was nothing to find.
+
+        ``missing`` дублирует сообщение машинно. Текст остаётся главным — его
+        печатает и веб-страница, и блок ИСТОЧНИКИ, — но сгруппировать по нему
+        несколько источников с одной причиной нельзя, не разбирая собственную
+        строку обратно. Поле необязательное: провайдер, который его не
+        заполнил, теряет только группировку в карточке.
         """
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.ERROR,
             error_code="insufficient_query",
             error_message=message,
+            missing_input=tuple(item.value for item in missing),
         )
 
 

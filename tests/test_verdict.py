@@ -16,7 +16,7 @@ import pytest
 from app.config import Settings
 from app.domain.enums import ProviderName, ProviderStatus
 from app.domain.identity import SearchSubject
-from app.domain.models import DebtorReport, InternalDebtorRecord
+from app.domain.models import DebtorReport, InternalDebtorRecord, ProviderResult
 from app.domain.verdict import FeeBasis, Verdict
 from app.services.scoring import RecoveryScoreEngine
 from app.services.verdict import VerdictEngine
@@ -223,3 +223,56 @@ def test_verdict_is_deterministic(engine: VerdictEngine, person_subject: SearchS
     second = engine.decide(build_report(person_subject))
     assert first.verdict is second.verdict
     assert first.headline == second.headline
+
+
+# ---------------------------------------------------------------- замок на упрощение
+
+
+def test_a_name_and_birth_date_alone_can_never_yield_file_or_order(
+    engine: VerdictEngine, person_subject: SearchSubject
+) -> None:
+    """Три источника из шести — не повод для «подавать».
+
+    Упростив ввод, легко получить бодрый отчёт по тому, что спросить удалось, и
+    не заметить, что остальное спросить было нечем. Замок стоит здесь:
+    ``DECISIVE_PROVIDERS`` — это ФССП и ЕФРСБ, и молчание любого из двух
+    принудительно даёт REVIEW, какой бы чистой ни была вторая половина.
+
+    Без ИНН ЕФРСБ отвечает ``insufficient_query`` всегда, значит FILE и ORDER
+    для субъекта с одним ФИО и датой недостижимы в принципе.
+    """
+    report = build_report(
+        person_subject,
+        internal=make_internal(debt="900000"),
+        fssp=(ProviderStatus.NO_RESULTS, []),
+        fedresurs=None,
+    )
+    report.provider_results.append(
+        ProviderResult(
+            provider=ProviderName.FEDRESURS,
+            status=ProviderStatus.ERROR,
+            error_code="insufficient_query",
+            error_message="Для проверки банкротства нужен ИНН физлица (12 цифр)",
+            missing_input=("inn",),
+        )
+    )
+
+    decision = engine.decide(report)
+
+    assert decision.verdict is Verdict.REVIEW
+    assert "ЕФРСБ" in decision.headline
+
+
+def test_adding_the_inn_unlocks_the_actionable_verdict(
+    engine: VerdictEngine, person_subject: SearchSubject
+) -> None:
+    """Обратная половина замка: с ответившим ЕФРСБ вердикт снова рабочий."""
+    with_inn = person_subject.model_copy(update={"inn": "770912345601"})
+    report = build_report(
+        with_inn,
+        internal=make_internal(debt="900000"),
+        fssp=(ProviderStatus.NO_RESULTS, []),
+        fedresurs=(ProviderStatus.NO_RESULTS, []),
+    )
+
+    assert engine.decide(report).verdict is Verdict.FILE

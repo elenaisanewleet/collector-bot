@@ -42,7 +42,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from app.domain.enums import PledgeStatus, ProviderName, ProviderStatus
+from app.domain.enums import MissingInput, PledgeStatus, ProviderName, ProviderStatus
 from app.domain.identity import SearchSubject, normalize_vin
 from app.domain.models import PledgeRecord, ProviderResult
 from app.providers.mapping import as_text
@@ -82,7 +82,8 @@ class NewDBPledgeProvider(NewDBMethodProvider):
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if not _searchable_by(subject):
             return self.insufficient_query(
-                "Для проверки залогов нужен VIN либо ФИО с датой рождения"
+                "Для проверки залогов нужен VIN либо ФИО с датой рождения",
+                missing=_missing_for(subject),
             )
         plans = self._plans(subject)
         if not plans:
@@ -190,6 +191,19 @@ def _unmatched_note(unmatched: list[str], *, parsed: int) -> tuple[str, ...]:
 
 def _searchable_by(subject: SearchSubject) -> bool:
     return bool(_subject_vin(subject)) or _has_identity(subject)
+
+
+def _missing_for(subject: SearchSubject) -> tuple[MissingInput, ...]:
+    """Чего не хватило именно этому субъекту.
+
+    VIN здесь не называется: у поиска по человеку его нет и быть не должно, а
+    предложить оператору «дайте VIN» вместо «дайте дату рождения» значило бы
+    отправить его за тем, чего он не найдёт. Строка сообщения по-прежнему
+    называет оба пути.
+    """
+    if subject.name is None:
+        return (MissingInput.NAME, MissingInput.BIRTH_DATE)
+    return (MissingInput.BIRTH_DATE,)
 
 
 def _has_identity(subject: SearchSubject) -> bool:

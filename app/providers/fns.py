@@ -37,6 +37,7 @@ from app.domain.enums import (
     BusinessRole,
     BusinessStatus,
     EntityType,
+    MissingInput,
     ProviderName,
     ProviderStatus,
 )
@@ -111,7 +112,9 @@ class FNSProvider(BaseProvider):
         if self._settings.fns_provider is not FNSBackend.GENERIC_JSON:
             return self.not_configured("Бэкенд ФНС не настроен")
         if subject.name is None and not subject.inn:
-            return self.insufficient_query("Для проверки в ФНС нужно ФИО или ИНН")
+            return self.insufficient_query(
+                "Для проверки в ФНС нужно ФИО или ИНН", missing=(MissingInput.NAME,)
+            )
 
         params: dict[str, Any] = {}
         if subject.inn:
@@ -192,7 +195,8 @@ class NewDBBusinessProvider(NewDBMethodProvider):
             # так что откат давал бы не запасной путь, а отклонённый запрос.
             # Десятизначный ИНН отвергается там же: ``innfiz`` — двенадцать цифр.
             return self.insufficient_query(
-                "Для проверки ИП нужен ИНН физлица (12 цифр) — источник ищет только по нему"
+                "Для проверки ИП нужен ИНН физлица (12 цифр) — источник ищет только по нему",
+                missing=(MissingInput.INN,),
             )
 
         mapped, raw = await self.mapped_for(NEWDB_METHOD, inn_params(inn))

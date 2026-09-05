@@ -730,6 +730,35 @@ async def test_missing_birth_date_is_not_no_results(
     assert not result.status.is_answered
 
 
+async def test_insufficient_query_names_the_missing_field(
+    fssp_settings: Settings, person_subject: SearchSubject, nameless_subject: SearchSubject
+) -> None:
+    """Чего не хватило — машинно, а не только словами.
+
+    Карточка группирует источники с одной причиной в одну строку, и делать это
+    разбором собственного текста нельзя: формулировку правят, группировка
+    ломается молча. Ответ живёт рядом с сообщением и приходит от провайдера,
+    поэтому разойтись им негде.
+    """
+    provider = FSSPProvider(fssp_settings)
+
+    no_name = await provider.fetch(nameless_subject)
+    no_date = await provider.fetch(person_subject.model_copy(update={"birth_date": None}))
+
+    assert no_name.missing_input == ("name",)
+    assert no_date.missing_input == ("birth_date",)
+
+
+async def test_an_answered_provider_reports_no_missing_field(
+    person_subject: SearchSubject,
+) -> None:
+    """Поле — про нехватку данных, а не про любой отказ."""
+    result = await UnconfiguredVehicleProvider().fetch(person_subject)
+
+    assert result.status is ProviderStatus.NOT_CONFIGURED
+    assert result.missing_input == ()
+
+
 # ---------------------------------------------------------------- vendor adapters
 
 

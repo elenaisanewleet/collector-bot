@@ -26,6 +26,7 @@ from app.domain.enums import (
     BusinessStatus,
     CourtCaseRole,
     EntityType,
+    MissingInput,
     PledgeStatus,
     ProceedingStatus,
     ProviderName,
@@ -44,6 +45,7 @@ from app.providers.base import BaseProvider
 from app.providers.identity_bridge import (
     InnBridgeProvider,
     InnBridgeResult,
+    missing_bridge_fields,
     missing_bridge_input,
 )
 from app.utils.hashing import normalize_token
@@ -228,7 +230,7 @@ class DemoFSSPProvider(BaseProvider):
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Нужно ФИО")
+            return self.insufficient_query("Нужно ФИО", missing=(MissingInput.NAME,))
 
         profile = _profile_for(subject)
         if profile is not None:
@@ -300,7 +302,7 @@ class DemoFedresursProvider(BaseProvider):
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Нужно ФИО")
+            return self.insufficient_query("Нужно ФИО", missing=(MissingInput.NAME,))
 
         profile = _profile_for(subject)
         if profile is None or profile.bankruptcy is None:
@@ -333,7 +335,7 @@ class DemoFNSProvider(BaseProvider):
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Нужно ФИО")
+            return self.insufficient_query("Нужно ФИО", missing=(MissingInput.NAME,))
 
         profile = _profile_for(subject)
         if profile is None:
@@ -377,7 +379,7 @@ class DemoPledgeProvider(BaseProvider):
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Нужно ФИО")
+            return self.insufficient_query("Нужно ФИО", missing=(MissingInput.NAME,))
 
         profile = _profile_for(subject)
         if profile is None:
@@ -432,7 +434,7 @@ class DemoInnBridgeProvider(InnBridgeProvider):
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         missing = missing_bridge_input(subject)
         if missing is not None:
-            return self.insufficient_query(missing)
+            return self.insufficient_query(missing, missing=missing_bridge_fields(subject))
 
         profile = _profile_for(subject)
         if profile is None or profile.inn is None:
@@ -457,7 +459,7 @@ class DemoCourtProvider(BaseProvider):
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         if subject.name is None:
-            return self.insufficient_query("Нужно ФИО")
+            return self.insufficient_query("Нужно ФИО", missing=(MissingInput.NAME,))
 
         profile = _profile_for(subject)
         if profile is None:

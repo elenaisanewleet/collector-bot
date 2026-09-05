@@ -37,13 +37,21 @@ _LEGAL_FORM_ANYWHERE = re.compile(r"\b(?:ип|индивидуальный\s+п�
 _IDENTIFIER_TAIL = re.compile(r"\b(?:инн|огрнип|огрн|снилс|кпп|паспорт)\b[\s:№n°-]*\d*")
 # «г.р.» вырезается только следом за датой: одиночные «г» и «р» бывают и
 # инициалами («Тестов Г.Р.»), и терять их вслепую нельзя.
-_BIRTH_DATE_MARKER = re.compile(r"(?<=\d)\s*г\s*\.?\s*р\s*\.?|\b(?:года|дата)\s+рожд\w*")
+#
+# Публичное имя: тот же хвост приходится срезать и на входе — оператор копирует
+# «Тестов Андрей Сергеевич 15.03.1980 г.р.» из выгрузки целиком. Две копии
+# одного правила разошлись бы на первой же правке.
+BIRTH_DATE_MARKER = re.compile(r"(?<=\d)\s*г\s*\.?\s*р\s*\.?|\b(?:года|дата)\s+рожд\w*")
 _PARENTHESIZED = re.compile(r"\(([^)]*)\)")
 
 FIO_MIN_PARTS = 2
 FIO_MAX_PARTS = 3
 INN_INDIVIDUAL_LENGTH = 12
 INN_ENTITY_LENGTH = 10
+#: Серия и номер российского паспорта, слитно.
+PASSPORT_LENGTH = 10
+#: Российский номер в национальном формате: 8/7 плюс десять цифр.
+PHONE_LENGTH = 11
 VIN_LENGTH = 17
 # I, O and Q are excluded from the VIN alphabet to avoid confusion with 1 and 0.
 _VIN_ALLOWED = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
@@ -329,7 +337,7 @@ def _without_registry_noise(text: str) -> str:
     Андрей Сергеевич ИП». Ни одна из них не про другого человека — все три про
     нашего, с припиской.
     """
-    for pattern in (_IDENTIFIER_TAIL, _BIRTH_DATE_MARKER, _LEGAL_FORM_ANYWHERE):
+    for pattern in (_IDENTIFIER_TAIL, BIRTH_DATE_MARKER, _LEGAL_FORM_ANYWHERE):
         text = pattern.sub(" ", text)
     return " ".join(text.split())
 
@@ -405,9 +413,9 @@ def normalize_phone(raw: str | None) -> str | None:
     digits = re.sub(r"\D", "", raw)
     if not digits:
         return None
-    if len(digits) == 11 and digits[0] in {"7", "8"}:
+    if len(digits) == PHONE_LENGTH and digits[0] in {"7", "8"}:
         return f"+7{digits[1:]}"
-    if len(digits) == 10 and digits[0] == "9":
+    if len(digits) == PHONE_LENGTH - 1 and digits[0] == "9":
         return f"+7{digits}"
     return None
 
@@ -442,7 +450,7 @@ def normalize_passport(raw: str | None) -> str | None:
     if not raw:
         return None
     digits = re.sub(r"\D", "", raw)
-    return digits if len(digits) == 10 else None
+    return digits if len(digits) == PASSPORT_LENGTH else None
 
 
 def normalize_address(raw: str | None) -> str | None:
@@ -531,4 +539,13 @@ class SearchSubject(BaseModel):
                 return candidate
         if self.vehicle:
             return self.vehicle.title
-        return self.address or "—"
+        if self.address:
+            return self.address
+        if self.inn:
+            # Поиск по одному ИНН — законный вход: банкротство, статус ИП и
+            # арбитраж только по нему и ищут. Без этой ветки такой отчёт
+            # назывался бы «—» и в чате, и в истории.
+            from app.utils.masking import mask_inn
+
+            return mask_inn(self.inn) or "—"
+        return "—"

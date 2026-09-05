@@ -7,17 +7,19 @@ that is neither collection nor rendering lives here or in the service layer.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from contextlib import suppress
 
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.bot import view
-from app.bot.keyboards import report_keyboard
+from app.bot import report_actions, view
 from app.container import Container
+from app.domain.enums import SearchType
 from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport
 from app.logging_setup import get_logger
+from app.providers.newdb import individual_inn
 from app.services.reporting import render_report
 from app.services.share import ShareKind, ShareTarget
 from app.utils.formatting import split_message
@@ -28,6 +30,11 @@ logger = get_logger(__name__)
 # правку сообщения, и достаточно часто, чтобы это читалось как движение.
 STAGE_INTERVAL_SECONDS = 1.6
 
+#: Показывается, пока идёт проверка, и только когда правда. Три источника из
+#: шести ищут только по ИНН физлица; сказать об этом до отчёта ничего не стоит и
+#: избавляет от вопроса «почему тут пусто».
+NO_INN_NOTE = "Без ИНН не спрошу банкротство, ИП и арбитраж — добавить можно кнопкой под отчётом."
+
 
 async def run_and_send_report(
     message: Message,
@@ -36,6 +43,7 @@ async def run_and_send_report(
     *,
     user_id: int,
     force_refresh: bool = False,
+    notes: Sequence[str] = (),
 ) -> DebtorReport:
     """Проверить должника и показать результат.
 
@@ -46,9 +54,19 @@ async def run_and_send_report(
 
     Если публичный адрес не задан, ссылки нет, и бот честно отдаёт полный
     текстовый отчёт: лучше простыня, чем нерабочая кнопка.
+
+    ``notes`` — оговорки к разбору строки: «этот ИНН — организации, проверяю без
+    него». Они едут и в прогресс, и в карточку. Именно в карточку, а не только
+    в прогресс: прогресс правится на месте, и оговорка, оставленная в нём,
+    исчезла бы вместе с ним — а «я выбросил часть вашего ввода» обязано
+    остаться на виду рядом с результатом.
     """
-    notice = await message.answer(view.searching(0, subject_name=subject.display_name))
-    ticker = asyncio.create_task(_tick_stages(notice, subject.display_name))
+    accepted = view.accepted_line(subject)
+    note = "\n".join([*notes, *filter(None, (_progress_note(subject),))]) or None
+    notice = await message.answer(
+        view.searching(0, subject_name=subject.display_name, accepted=accepted, note=note)
+    )
+    ticker = asyncio.create_task(_tick_stages(notice, subject.display_name, accepted, note))
     try:
         outcome = await container.search_service.search_detailed(
             subject, telegram_user_id=user_id, force_refresh=force_refresh
@@ -65,23 +83,44 @@ async def run_and_send_report(
             ShareTarget(ShareKind.REPORT, outcome.request_id), telegram_user_id=user_id
         )
 
+    # Токен кладётся под ТОТ субъект, с которым прошёл прогон, — с ИНН, если его
+    # добыл мост. Иначе «Обновить» и предложения под карточкой рассуждали бы о
+    # вопросе, а не об ответе.
+    token = container.subject_store.put(report.subject)
+    keyboard = report_actions.report_keyboard(
+        url=url,
+        refresh_token=token,
+        subject=report.subject,
+        bridge=container.registry.inn_bridge,
+    )
+
     if url is None:
+        # Без публичного адреса отчёт уходит текстом — но предложения добрать
+        # данные остаются: они про субъект, а не про веб-страницу, и деплой без
+        # веба не должен молча терять единственный способ открыть три источника.
         await _safe_delete(notice)
-        for chunk in split_message(render_report(report, demo_mode=container.settings.is_demo)):
+        chunks = split_message(render_report(report, demo_mode=container.settings.is_demo))
+        for chunk in chunks[:-1]:
             await message.answer(chunk)
+        await message.answer(chunks[-1], reply_markup=keyboard)
         return report
 
-    token = container.subject_store.put(subject)
     await _edit_or_send(
-        notice,
-        message,
-        view.report_card(report, decision),
-        reply_markup=report_keyboard(url=url, refresh_token=token),
+        notice, message, view.report_card(report, decision, notes=notes), reply_markup=keyboard
     )
     return report
 
 
-async def _tick_stages(notice: Message, subject_name: str) -> None:
+def _progress_note(subject: SearchSubject) -> str | None:
+    """Что не откроется на этих данных. Только для поиска по человеку."""
+    if subject.search_type != SearchType.PERSON.value:
+        return None
+    return NO_INN_NOTE if individual_inn(subject) is None else None
+
+
+async def _tick_stages(
+    notice: Message, subject_name: str, accepted: str | None, note: str | None
+) -> None:
     """Двигать полосу прогресса, пока идёт проверка.
 
     Отдельная задача, потому что сам поиск ничего о показе не знает и знать не
@@ -91,7 +130,9 @@ async def _tick_stages(notice: Message, subject_name: str) -> None:
         for index in range(1, len(view.STAGES)):
             await asyncio.sleep(STAGE_INTERVAL_SECONDS)
             with suppress(Exception):  # правка сообщения — дело необязательное
-                await notice.edit_text(view.searching(index, subject_name=subject_name))
+                await notice.edit_text(
+                    view.searching(index, subject_name=subject_name, accepted=accepted, note=note)
+                )
     except asyncio.CancelledError:  # pragma: no cover - обычный путь отмены
         pass
 

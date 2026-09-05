@@ -23,7 +23,6 @@ from app.domain.enums import PROVIDER_TITLES, ProviderName, ScoreCategory
 from app.domain.fees import claim_fee, court_order_fee
 from app.domain.models import DebtorReport
 from app.domain.verdict import FeeBasis, Verdict, VerdictDecision, VerdictReason
-from app.utils.formatting import pluralize_ru
 from app.utils.money import format_amount
 
 # Источники, без ответа которых решение принимать рано.
@@ -123,12 +122,15 @@ class VerdictEngine:
         if not silent:
             return None
         titles = ", ".join(PROVIDER_TITLES.get(name, name.value) for name in silent)
-        noun = pluralize_ru(len(silent), "источник", "источника", "источников")
+        # Без числительного, поэтому и без родительного падежа: «ключевые
+        # источника» и «ключевые источник» — то, что получалось из pluralize_ru,
+        # согласованного только с существительным. Список источников тут же,
+        # считать их за оператора незачем.
+        subject = "ключевой источник" if len(silent) == 1 else "ключевые источники"
+        verb = "Не ответил" if len(silent) == 1 else "Не ответили"
         return VerdictDecision(
             verdict=Verdict.REVIEW,
-            headline=(
-                f"Не ответили ключевые {noun}: {titles}. Решение на неполных данных принимать рано."
-            ),
+            headline=(f"{verb} {subject}: {titles}. Решение на неполных данных принимать рано."),
             reasons=tuple(
                 VerdictReason(
                     code="source_silent",

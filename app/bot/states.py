@@ -10,14 +10,24 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class PersonSearch(StatesGroup):
-    waiting_fio = State()
-    waiting_birth_date = State()
-    waiting_phone = State()
-    waiting_region = State()
-    # Последним шагом и только при INN_BRIDGE_ENABLED. Порядок не случайный: к
-    # этому моменту все прочие данные уже собраны, поэтому паспорт не попадает в
-    # state.update_data вовсе — он идёт прямо в SearchSubject.
-    waiting_passport = State()
+    """Поиск по человеку: одна строка на входе и один вопрос при нужде.
+
+    Пять состояний свернулись в два, и это не экономия кода, а суть правки. ФИО,
+    дата рождения, телефон, регион и паспорт спрашивались подряд, четыре из пяти
+    можно было пропустить — то есть бот требовал того, без чего прекрасно
+    обходится. Теперь оператор пишет всё, что знает, одной строкой, а
+    :mod:`app.bot.identifiers` разбирает её.
+
+    ``waiting_field`` — единственный уточняющий шаг, и живёт он в двух режимах.
+    До запуска в данных лежит ``raw`` (исходная строка, которую перечитают
+    заново с поправкой), после отчёта — ``token`` субъекта из
+    :class:`~app.services.subject_store.SubjectStore`. Поле ``field`` говорит,
+    что именно ждут. Паспорт в данные не кладётся никогда: он живёт ровно до
+    ``SearchSubject``.
+    """
+
+    waiting_query = State()
+    waiting_field = State()
 
 
 class ContractSearch(StatesGroup):
