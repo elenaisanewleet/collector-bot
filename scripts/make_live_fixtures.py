@@ -71,6 +71,7 @@ def load_substitutions() -> dict[str, str]:
     SUBSTITUTIONS.update({str(k): str(v) for k, v in data.items()})
     return SUBSTITUTIONS
 
+
 # Vendor access tokens: hex strings that address a person's card or a ЕГРЮЛ
 # extract. Replaced by a hex string of exactly the same length, so the shape of
 # ``links.egrul`` ("token=<hex>&inn=<ИНН>&pdf=vyp") survives intact.
