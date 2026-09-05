@@ -217,7 +217,14 @@ def _queue_exports(request: web.Request) -> ExportLinks:
 
 
 def _html(body: str, *, status: int = 200) -> web.Response:
-    return web.Response(text=body, status=status, content_type="text/html", headers=PRIVATE_HEADERS)
+    response = web.Response(
+        text=body, status=status, content_type="text/html", headers=PRIVATE_HEADERS
+    )
+    # Очередь на восемьсот строк — это под мегабайт разметки, и открывают её с
+    # телефона. Сжатие уносит её примерно в тринадцать раз; страница остаётся
+    # автономной, потому что жмётся то же тело, а не подгружается новое.
+    response.enable_compression()
+    return response
 
 
 def _attachment(payload: bytes, *, name: str, content_type: str) -> web.Response:

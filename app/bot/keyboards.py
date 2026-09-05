@@ -133,12 +133,35 @@ def history_keyboard(tokens: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     )
 
 
-def batch_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Прогон тратит платные запросы, поэтому запускается только по подтверждению."""
+def batch_confirm_keyboard(label: str, debtors: int) -> InlineKeyboardMarkup:
+    """Прогон тратит платные запросы, поэтому запускается только по подтверждению.
+
+    Подпись приходит снаружи и называет сумму, а не действие: под пальцем у
+    оператора в этот момент списание, и подпись обязана говорить о нём.
+
+    ``debtors`` уезжает в callback, и это не украшение. Смета живёт в сообщении,
+    сообщения в чате живут вечно, а база меняется: без числа в кнопке вчерашняя
+    смета молча запускает сегодняшний прогон на другие деньги.
+    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Запустить проверку", callback_data=f"{BATCH_PREFIX}:run")],
+            [InlineKeyboardButton(text=label, callback_data=f"{BATCH_PREFIX}:run:{debtors}")],
             [InlineKeyboardButton(text="Отмена", callback_data=CANCEL_CALLBACK)],
+        ]
+    )
+
+
+def batch_running_keyboard(url: str | None) -> InlineKeyboardMarkup | None:
+    """Ссылка на очередь под сообщением о прогрессе.
+
+    Очередь заполняется на ходу, и ждать полчаса до конца прогона, чтобы в неё
+    заглянуть, незачем: страница сама знает, что прогон ещё идёт, и говорит это.
+    """
+    if not url:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Очередь (заполняется)", url=url)],
         ]
     )
 

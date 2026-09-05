@@ -110,7 +110,13 @@ def accepted_line(subject: SearchSubject) -> str | None:
     return "Принял: " + " · ".join(parts)
 
 
-def batch_progress(processed: int, total: int, failed: int) -> str:
+def batch_progress(processed: int, total: int, failed: int, *, spent: str | None = None) -> str:
+    """Прогресс массовой проверки: сколько сделано и во что это уже обошлось.
+
+    ``spent`` стоит здесь, а не в отдельном сообщении, по той же причине, по
+    которой полоса правится на месте: прогон длится полчаса, и всё это время
+    оператор смотрит на одно сообщение. Если цена не в нём, её не видно вовсе.
+    """
     fraction = processed / total if total else 0.0
     lines = [
         "Проверяю базу",
@@ -118,6 +124,8 @@ def batch_progress(processed: int, total: int, failed: int) -> str:
         f"{progress_bar(fraction)}  {round(fraction * 100)}%",
         f"{processed} из {total}",
     ]
+    if spent:
+        lines.append(spent)
     if failed:
         lines.append(f"Не удалось проверить: {failed}")
     return "\n".join(lines)

@@ -1,16 +1,43 @@
 """``/batch`` — массовая проверка всей выгрузки.
 
-Три вещи, которые отличают этот флоу от одиночного поиска:
+Главный сценарий продукта в чате: восемьсот должников, и вопрос ровно один —
+на кого тратить госпошлину. Отчёт живёт на веб-странице, а бот отвечает за то,
+что вокруг неё: решение потратить деньги, ожидание и честный итог.
 
-*   Смета до запуска. Прогон тратит платные запросы, поэтому оператор сначала
-    видит, сколько должников и сколько обращений к источникам это будет.
-*   Прогресс правится на месте. Одно сообщение, которое обновляется, вместо
-    восьмисот новых — иначе чат станет нечитаемым уже на сотом должнике.
-*   Результат — очередь, а не отчёт. Сначала сводка «сколько на что», потом
-    списки по вердиктам и выгрузка в CSV.
+Пять вещей, из которых собран этот флоу.
+
+**Смета называет деньги, а не «сейчас проверим».** До запуска оператор видит
+четыре числа: сколько должников, сколько обращений к источникам, во что это
+встанет в рублях и по скольким строкам данных не хватает настолько, что часть
+источников по ним не спросят вовсе. Рубли берутся из настройки
+``PROVIDER_REQUEST_COST``; если её нет, смета так и говорит — и остаётся в
+обращениях, а не подставляет придуманный тариф.
+
+**Подтверждение называет сумму на самой кнопке.** «Запустить проверку» — это
+про действие, «Списать до 10 020 ₽» — про последствие, и подписью под пальцем
+должно стоять второе. Подтверждается при этом конкретная смета: в callback
+уезжает число должников, и если база с тех пор изменилась, бот показывает смету
+заново, а не запускает прогон по числам, которых оператор не видел.
+
+**Прогресс правится на месте и называет потраченное.** Одно сообщение вместо
+восьмисот, и в нём не только «137 из 800», но и сколько это уже стоило. Ссылка
+на очередь появляется с первым же обновлением, а не в конце: страница
+заполняется на ходу, и смотреть её можно, пока прогон идёт.
+
+**Прогон кончается тремя разными способами.** Дошёл до конца, остановлен
+отказом источника, оборвался на сбое. Под одной подписью «Проверка завершена»
+это ложь: очередь в двух случаях из трёх неполная, а решение о госпошлине
+принимают по ней. Поэтому итог начинается с того, чем кончился прогон, и лишь
+потом называет цифры.
+
+**Что успели — показываем всегда.** Оборванный прогон не отменяет посчитанного:
+сводка и ссылка на очередь уходят в чат и после отказа источника, и после сбоя,
+вместе с прямой оговоркой, что строк не хватает.
 """
 
 from __future__ import annotations
+
+from decimal import Decimal
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -23,18 +50,20 @@ from app.bot.keyboards import (
     BATCH_PREFIX,
     batch_confirm_keyboard,
     batch_result_keyboard_with_link,
+    batch_running_keyboard,
     main_menu,
 )
 from app.bot.states import BatchCheck
 from app.container import Container
 from app.db.models import BatchItem
 from app.db.repository import BatchRepository
+from app.domain.enums import PROVIDER_TITLES, ProviderName
 from app.domain.verdict import VERDICT_TITLES, Verdict
 from app.logging_setup import get_logger
-from app.services.batch import BatchEstimate, BatchProgress, BatchSummary
+from app.services.batch import BatchEstimate, BatchProgress, BatchSummary, RunStatus
 from app.services.export import queue_to_csv
 from app.services.share import ShareKind, ShareTarget
-from app.utils.formatting import pluralize_ru, split_message
+from app.utils.formatting import group_digits, pluralize_ru, split_message
 from app.utils.money import format_amount
 
 logger = get_logger(__name__)
@@ -44,31 +73,112 @@ EMPTY_BASE = (
 )
 NO_RUN = "Прогонов ещё не было. Запустите проверку через /batch."
 LIST_PAGE_SIZE = 15
+# Прогон не пережил даже собственного закрытия — сводки нет и взять её неоткуда.
+RUN_CRASHED = (
+    "Прогон оборвался, и собрать сводку не удалось.\n\n"
+    "Всё, что успело посчитаться, осталось в базе и не потеряно. Запустите "
+    "проверку заново: за уже проверенных второй раз платить не придётся, они "
+    "возьмутся из кэша."
+)
+# Смету подтверждают по конкретным числам. Если база с тех пор изменилась,
+# запускать по старым — значит списать деньги за то, чего оператор не видел.
+BASE_CHANGED = (
+    "База изменилась с момента, когда я показал смету. Вот пересчитанная — "
+    "проверьте числа и подтвердите заново."
+)
 
 
 def render_estimate(estimate: BatchEstimate) -> str:
+    """Смета: четыре числа и оговорки, после которых можно нажимать.
+
+    Порядок не произвольный. Сначала объём (сколько должников), потом цена
+    (сколько обращений и сколько рублей), потом дыры в данных — и только в конце
+    оговорки. Оператор читает сверху вниз и на каждом шаге знает больше, чем на
+    предыдущем; цена, поставленная после оговорок, теряется в них.
+    """
     noun = pluralize_ru(estimate.debtors, "должник", "должника", "должников")
     lines = [
         "Массовая проверка",
         "",
         f"В базе: {estimate.debtors} {noun}",
-        f"Уже проверено недавно: {estimate.cached} — будут взяты из кэша",
+        f"Уже проверено недавно: {estimate.cached} — будут взяты из кэша, они бесплатны",
         f"Нужно опросить: {estimate.to_query}",
+        *_cost_lines(estimate),
     ]
-    if estimate.providers_per_debtor:
-        lines.append(
-            f"Обращений к источникам: около {estimate.requests} "
-            f"({estimate.providers_per_debtor} на должника)"
-        )
-    else:
-        lines.append("Внешние источники не подключены — проверка пройдёт по внутренней базе.")
-    lines.extend(_bridge_lines(estimate))
+    gaps = _gap_lines(estimate)
+    if gaps:
+        lines.append("")
+        lines.append("Данных не хватает:")
+        lines.extend(gaps)
     if estimate.capped:
         lines.append("")
-        lines.append("Прогон ограничен настройкой BATCH_MAX_DEBTORS.")
+        lines.append(
+            "Прогон ограничен настройкой BATCH_MAX_DEBTORS: проверим первые "
+            f"{estimate.debtors}, остальные останутся непроверенными."
+        )
     lines.append("")
-    lines.append("Запросы к платным источникам списываются с вашего баланса.")
+    lines.append(
+        "Запросы к платным источникам списываются с вашего баланса в момент "
+        "обращения и не возвращаются, даже если источник ничего не нашёл."
+    )
+    lines.append(
+        "Прогон долгий. Прогресс будет в этом же сообщении, а очередь начнёт "
+        "заполняться сразу — ссылку пришлю с первым обновлением."
+    )
     return "\n".join(lines)
+
+
+def _cost_lines(estimate: BatchEstimate) -> list[str]:
+    """Цена прогона: в обращениях и в рублях.
+
+    Формулировка «до N» и оговорка про кэш повторяют страницу очереди дословно.
+    Это не копипаста, а требование: смета и страница называют одно и то же
+    число, и если они назовут его разными словами, оператор решит, что чисел
+    два.
+    """
+    if not estimate.providers_per_debtor:
+        return [
+            "Внешние источники не подключены — проверка пройдёт по внутренней "
+            "базе и не будет стоить ничего."
+        ]
+    lines = [
+        f"Обращений к источникам: до {group_digits(estimate.requests)} "
+        f"({estimate.providers_per_debtor} на должника; взятые из кэша не оплачиваются)"
+    ]
+    cost = estimate.cost
+    if cost is None:
+        # Ноль рублей здесь означал бы «бесплатно». Правда — «цена неизвестна»,
+        # и сказать это надо словами, а не пропущенной строкой.
+        lines.append(
+            "Во сколько это встанет в рублях — сказать нечем: цена обращения не "
+            "задана в настройках (PROVIDER_REQUEST_COST). Считайте в обращениях."
+        )
+    else:
+        lines.append(
+            f"Спишется с баланса: до {format_amount(cost)} "
+            f"(по {format_amount(estimate.cost_per_request)} за обращение)"
+        )
+    return lines
+
+
+def _gap_lines(estimate: BatchEstimate) -> list[str]:
+    """Чего не хватает в самой выгрузке — до того, как за прогон заплатят.
+
+    Обе дыры чинятся правкой выгрузки, то есть до запуска, то есть знать о них
+    надо здесь. После прогона это уже не информация, а объяснение, почему деньги
+    ушли в строки со словом «неизвестно».
+    """
+    lines: list[str] = []
+    if estimate.unusable > 0:
+        noun = pluralize_ru(estimate.unusable, "строка", "строки", "строк")
+        verb = pluralize_ru(estimate.unusable, "попадёт", "попадут", "попадут")
+        lines.append(
+            f"Ни ФИО, ни номера договора: {estimate.unusable} {noun}. Искать по "
+            f"ним нечего и нечем — они {verb} в очередь как «не проверено», а не "
+            "как «ничего не найдено»."
+        )
+    lines.extend(_bridge_lines(estimate))
+    return lines
 
 
 def _bridge_lines(estimate: BatchEstimate) -> list[str]:
@@ -89,12 +199,148 @@ def _bridge_lines(estimate: BatchEstimate) -> list[str]:
     return []
 
 
-def render_progress(progress: BatchProgress) -> str:
-    return view.batch_progress(progress.processed, progress.total, progress.failed)
+def confirm_label(estimate: BatchEstimate) -> str:
+    """Подпись кнопки запуска. Называет последствие, а не действие.
+
+    «Запустить проверку» — про то, что произойдёт на экране. Оператор в этот
+    момент тратит деньги, и под пальцем у него должна стоять сумма.
+    """
+    if not estimate.providers_per_debtor:
+        return "Запустить проверку"
+    cost = estimate.cost
+    if cost is None:
+        return f"Запустить — до {group_digits(estimate.requests)} платных обращений"
+    return f"Запустить и списать до {format_amount(cost)}"
+
+
+def render_progress(progress: BatchProgress, estimate: BatchEstimate | None = None) -> str:
+    """Прогресс с ценой: сколько проверено и во что это уже обошлось."""
+    return view.batch_progress(
+        progress.processed,
+        progress.total,
+        progress.failed,
+        spent=_spent_line(progress, estimate),
+    )
+
+
+def _spent_line(progress: BatchProgress, estimate: BatchEstimate | None) -> str | None:
+    """Сколько прогон уже потратил.
+
+    Верхняя граница, а не точное число: сколько из проверенных пришло из кэша,
+    известно только источнику. «До» — то же слово, что в смете и на странице
+    очереди, и по той же причине.
+    """
+    if estimate is None or not estimate.providers_per_debtor:
+        return None
+    requests = progress.processed * estimate.providers_per_debtor
+    line = f"Потрачено: до {group_digits(requests)} обращений"
+    if estimate.cost_per_request > 0:
+        line += f" — до {format_amount(estimate.cost_per_request * requests)}"
+    return line + " (взятые из кэша не оплачиваются)"
 
 
 def render_summary(summary: BatchSummary) -> str:
-    lines = ["Проверка завершена", ""]
+    """Итог прогона. Начинается с того, чем прогон кончился.
+
+    Сначала полнота, потом цифры — а не наоборот. Двести строк «можно подавать»,
+    прочитанные до сообщения о том, что прогон встал на трёхстах из восьмисот,
+    успевают стать планом на неделю; после — остаются тем, что они есть.
+    """
+    lines = [_head_line(summary)]
+    incomplete = _incomplete_lines(summary)
+    if incomplete:
+        lines.append("")
+        lines.extend(incomplete)
+
+    verdicts = _verdict_lines(summary)
+    if verdicts:
+        lines.append("")
+        lines.extend(verdicts)
+
+    lines.append("")
+    lines.extend(_money_lines(summary))
+
+    if summary.failed:
+        lines.append("")
+        noun = pluralize_ru(summary.failed, "строка", "строки", "строк")
+        lines.append(
+            f"Не удалось проверить: {summary.failed} {noun}. Это не «ничего не "
+            "найдено» — по ним не ответил никто, и в суммы выше они не вошли."
+        )
+    lines.append("")
+    lines.append("Оценка аналитическая и не заменяет юридическую проверку.")
+    return "\n".join(lines)
+
+
+def _head_line(summary: BatchSummary) -> str:
+    if summary.status == RunStatus.STOPPED:
+        return "Прогон остановлен: источник перестал отвечать"
+    if summary.status == RunStatus.INTERRUPTED:
+        return "Прогон оборвался"
+    return f"Проверка завершена: {summary.processed} из {summary.total}"
+
+
+def _incomplete_lines(summary: BatchSummary) -> list[str]:
+    """Почему очередь неполная и что с этим делать.
+
+    Стоит выше цифр и говорит прямым текстом: непроверенные — это не «чисто», а
+    «не смотрели». Заканчивается действием, потому что вопрос у оператора здесь
+    ровно один — платить ли за прогон второй раз (не платить: кэш).
+    """
+    if summary.is_complete:
+        return []
+    left = summary.unchecked
+    if left:
+        noun = pluralize_ru(left, "должник", "должника", "должников")
+        lines = [
+            f"Проверено {summary.processed} из {summary.total}. "
+            f"Оставшиеся {left} {noun} не проверялись вовсе — это не «ничего не "
+            "найдено», до них просто не дошло. Очередь ниже неполная."
+        ]
+    else:
+        # Прогон обошёл всю выгрузку, но закрылся нештатно: строки последней
+        # страницы могли не записаться. Счётчик тут ничего не показывает, и
+        # молчать об этом нельзя — очередь всё равно под подозрением.
+        lines = [
+            f"Проверено {summary.processed} из {summary.total}, но прогон "
+            "закрылся нештатно: часть результатов могла не попасть в очередь."
+        ]
+    if summary.status == RunStatus.STOPPED:
+        lines.append(_refusal_line(summary))
+    elif summary.status == RunStatus.INTERRUPTED:
+        detail = f" ({summary.error})" if summary.error else ""
+        lines.append(
+            f"Прогон не пережил сбоя{detail}. Всё, что успело посчитаться, верно и лежит в очереди."
+        )
+    lines.append(
+        "Запустите /batch заново, когда почините: за уже проверенных второй раз "
+        "платить не придётся, они возьмутся из кэша."
+    )
+    return lines
+
+
+def _refusal_line(summary: BatchSummary) -> str:
+    """Кто именно отказал. Без имени источника чинить нечего."""
+    titles = [_source_title(name) for name in summary.refused_sources]
+    who = ", ".join(titles) if titles else "источник"
+    return (
+        f"Отказ пришёл от: {who}. Обычно это кончившийся баланс или отклонённый "
+        "ключ доступа. Я остановил прогон, чтобы не платить за ответы, которых "
+        "всё равно не будет."
+    )
+
+
+def _source_title(name: str) -> str:
+    try:
+        return PROVIDER_TITLES.get(ProviderName(name), name)
+    except ValueError:
+        # Источник из будущей версии. Печатаем как есть: имя без словаря лучше,
+        # чем пропущенная строка про то, кто именно отказал.
+        return name
+
+
+def _verdict_lines(summary: BatchSummary) -> list[str]:
+    lines = []
     for verdict in (Verdict.FILE, Verdict.ORDER, Verdict.REVIEW, Verdict.DROP):
         count = summary.count(verdict)
         if not count:
@@ -104,18 +350,34 @@ def render_summary(summary: BatchSummary) -> str:
         if debt:
             row += f" — на {format_amount(debt)}"
         lines.append(row)
+    return lines
 
-    if summary.saved_fees:
-        lines.append("")
+
+def _money_lines(summary: BatchSummary) -> list[str]:
+    """Две суммы, ради которых прогон и запускался.
+
+    Сэкономленная пошлина печатается всегда, в том числе нулём: отсутствие
+    строки читается как отсутствие экономии, а «безнадёжных не нашлось» — это
+    другое утверждение и его надо сказать. Тем же правилом живёт страница
+    очереди, и слова здесь те же.
+    """
+    lines = []
+    if summary.actionable:
+        noun = pluralize_ru(summary.actionable, "должнику", "должникам", "должникам")
         lines.append(
-            f"Не будет потрачено на пошлины по безнадёжным: {format_amount(summary.saved_fees)}"
+            f"Пошлина по {summary.actionable} {noun}, которых несём в суд: "
+            f"{format_amount(summary.actionable_fee)}"
         )
-    if summary.failed:
-        lines.append("")
-        lines.append(f"Не удалось проверить: {summary.failed}")
-    lines.append("")
-    lines.append("Оценка аналитическая и не заменяет юридическую проверку.")
-    return "\n".join(lines)
+    dropped = summary.count(Verdict.DROP)
+    if summary.saved_fees > Decimal("0"):
+        verb = pluralize_ru(dropped, "отсеян", "отсеяно", "отсеяно")
+        lines.append(
+            f"Сэкономлено на пошлинах: {format_amount(summary.saved_fees)} — "
+            f"{dropped} безнадёжных {verb}, эти деньги останутся в кассе"
+        )
+    else:
+        lines.append("Сэкономлено на пошлинах: 0 ₽ — безнадёжных в этом прогоне не нашлось")
+    return lines
 
 
 def build_router() -> Router:
@@ -142,45 +404,92 @@ def build_router() -> Router:
         if target:
             await _offer(target, state, container)
 
-    async def _offer(message: Message, state: FSMContext, container: Container) -> None:
+    async def _offer(
+        message: Message, state: FSMContext, container: Container, note: str = ""
+    ) -> None:
         estimate = await container.batch_service.estimate()
         if estimate.debtors == 0:
             await state.clear()
             await message.answer(EMPTY_BASE, reply_markup=main_menu())
             return
         await state.set_state(BatchCheck.waiting_confirm)
+        text = render_estimate(estimate)
         await message.answer(
-            render_estimate(estimate),
-            reply_markup=batch_confirm_keyboard(),
+            f"{note}\n\n{text}" if note else text,
+            # Число должников уезжает в callback: подтверждают конкретную смету,
+            # а не абстрактный запуск.
+            reply_markup=batch_confirm_keyboard(confirm_label(estimate), estimate.debtors),
         )
 
-    @router.callback_query(BatchCheck.waiting_confirm, F.data == f"{BATCH_PREFIX}:run")
+    @router.callback_query(BatchCheck.waiting_confirm, F.data.startswith(f"{BATCH_PREFIX}:run"))
     async def handle_batch_run(
         callback: CallbackQuery, state: FSMContext, container: Container, user_id: int
     ) -> None:
-        await state.clear()
         await answer_callback(callback)
         message = callback_message(callback)
         if message is None:
             return
 
+        estimate = await container.batch_service.estimate()
+        if _confirmed_debtors(callback.data) != estimate.debtors:
+            # База изменилась между сметой и нажатием: кто-то импортировал
+            # выгрузку, или прошла чистка. Запускать по числам, которых оператор
+            # не видел, нельзя — за них платят.
+            await _offer(message, state, container, note=BASE_CHANGED)
+            return
+        await state.clear()
+
         notice = await message.answer(
-            render_progress(BatchProgress(processed=0, total=1, failed=0))
+            render_progress(BatchProgress(processed=0, total=estimate.debtors, failed=0), estimate)
         )
         last = ""
+        keyboard = None
 
         async def report(progress: BatchProgress) -> None:
-            nonlocal last
-            text = render_progress(progress)
+            nonlocal last, keyboard
+            if keyboard is None and progress.run_id:
+                # Очередь наполняется на ходу, и открыть её можно с первой
+                # секунды. Ссылка выдаётся один раз и потом только переезжает
+                # вместе с текстом.
+                keyboard = batch_running_keyboard(
+                    await container.share_service.issue(
+                        ShareTarget(ShareKind.QUEUE, progress.run_id),
+                        telegram_user_id=user_id,
+                    )
+                )
+            text = render_progress(progress, estimate)
             if text == last:
                 return
             last = text
             try:
-                await notice.edit_text(text)
+                await notice.edit_text(text, reply_markup=keyboard)
             except Exception:
                 logger.debug("batch.progress_edit_failed")
 
-        summary = await container.batch_service.run(telegram_user_id=user_id, progress=report)
+        try:
+            summary = await container.batch_service.run(telegram_user_id=user_id, progress=report)
+        except Exception:
+            # Прогон закрывает себя сам даже на сбое, так что сюда попадает
+            # только то, что сломалось вокруг него. Молчать нельзя: оператор
+            # смотрит на замерший прогресс и не знает, идёт ли ещё что-то.
+            logger.exception("batch.run_crashed")
+            await message.answer(RUN_CRASHED, reply_markup=main_menu())
+            return
+
+        await _deliver(message, notice, summary, container, user_id)
+
+    async def _deliver(
+        message: Message,
+        notice: Message,
+        summary: BatchSummary,
+        container: Container,
+        user_id: int,
+    ) -> None:
+        """Итог и кнопки. Уходит одинаково для дошедшего и для оборванного прогона.
+
+        Оборванный прогон — не повод прятать посчитанное: двести проверенных
+        строк стоили денег и остаются верными.
+        """
         # Ссылка на веб-очередь — главное действие после прогона: таблицу на
         # восемьсот строк в сообщении Telegram не показать.
         url = await container.share_service.issue(
@@ -190,10 +499,11 @@ def build_router() -> Router:
             container.share_service.export_urls(url, ShareKind.QUEUE) if url else (None, None)
         )
         keyboard = batch_result_keyboard_with_link(url, csv_url=csv_url, print_url=print_url)
+        text = render_summary(summary)
         try:
-            await notice.edit_text(render_summary(summary), reply_markup=keyboard)
+            await notice.edit_text(text, reply_markup=keyboard)
         except Exception:
-            await message.answer(render_summary(summary), reply_markup=keyboard)
+            await message.answer(text, reply_markup=keyboard)
 
     @router.callback_query(F.data.startswith(f"{BATCH_PREFIX}:list:"))
     async def handle_batch_list(
@@ -259,6 +569,17 @@ def build_router() -> Router:
         )
 
     return router
+
+
+def _confirmed_debtors(data: str | None) -> int | None:
+    """Сколько должников было в смете, которую подтвердили.
+
+    ``None`` — старая кнопка без числа (сообщение из прошлой версии бота висит
+    в чате). Считается несовпадением: показать смету заново дешевле, чем
+    списать деньги по числам, которых никто не видел.
+    """
+    tail = (data or "").rsplit(":", maxsplit=1)[-1]
+    return int(tail) if tail.isdigit() else None
 
 
 def _queue_line(index: int, item: BatchItem) -> str:

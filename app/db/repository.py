@@ -141,6 +141,19 @@ class BatchRepository:
         self._session.add(item)
         await self._session.flush()
 
+    async def update_progress(self, run_id: int, *, processed: int, failed: int) -> None:
+        """Отметить продвижение незаконченного прогона.
+
+        Страница очереди открывается, пока прогон идёт, и читает эти два числа.
+        Без промежуточной записи они оба остаются нулями до самого конца.
+        """
+        run = await self._session.get(BatchRun, run_id)
+        if run is None:
+            return
+        run.processed = processed
+        run.failed = failed
+        await self._session.flush()
+
     async def finish_run(
         self, run_id: int, *, processed: int, failed: int, status: str = "finished"
     ) -> None:

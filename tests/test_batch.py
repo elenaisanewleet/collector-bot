@@ -213,6 +213,92 @@ async def test_runs_are_scoped_to_the_operator(loaded: Container) -> None:
     assert other is None
 
 
+# ---------------------------------------------------------------- срез очереди
+
+
+async def test_the_snapshot_carries_the_money_the_page_shows(loaded: Container) -> None:
+    """Итоги, ради которых страницу открывают, считаются здесь, а не в вёрстке."""
+    summary = await loaded.batch_service.run(telegram_user_id=OPERATOR_ID)
+    snapshot = await loaded.batch_service.queue_snapshot(summary.run_id)
+
+    assert snapshot is not None
+    assert snapshot.saved_fees == snapshot.fee(Verdict.DROP)
+    assert snapshot.actionable_fee == snapshot.fee(Verdict.FILE) + snapshot.fee(Verdict.ORDER)
+    assert snapshot.total_debt == sum(snapshot.debt(v) for v in Verdict)
+    assert snapshot.total_fee >= snapshot.saved_fees
+    assert not snapshot.is_running
+    # Число источников на должника нужно, чтобы назвать цену прогона в запросах.
+    assert snapshot.providers_per_debtor == 5
+
+
+async def test_an_unfinished_run_reports_the_rows_it_has_already_written(
+    loaded: Container,
+) -> None:
+    """Страница открывается во время прогона и обязана показывать движение.
+
+    Раньше счётчики прогона писались только в конце, и полчаса страница честно
+    показывала «обработано 0» поверх заполняющейся очереди.
+    """
+    from app.db.models import BatchItem
+    from app.domain.verdict import VERDICT_ORDER
+
+    async with loaded.database.session() as session:
+        repo = BatchRepository(session)
+        run = await repo.create_run(telegram_user_id=OPERATOR_ID, total=800)
+        run_id = run.id
+        for index in range(3):
+            await repo.add_item(
+                BatchItem(
+                    batch_run_id=run_id,
+                    debtor_id=index + 1,
+                    verdict=Verdict.ORDER.value,
+                    verdict_order=VERDICT_ORDER[Verdict.ORDER],
+                    headline="Долг бесспорный.",
+                    debt_amount=Decimal("120000"),
+                    debt_kopecks=12_000_000,
+                    state_fee=Decimal("2400"),
+                    confidence=100,
+                )
+            )
+        await repo.update_progress(run_id, processed=3, failed=0)
+
+    snapshot = await loaded.batch_service.queue_snapshot(run_id)
+    assert snapshot is not None
+    assert snapshot.is_running
+    assert snapshot.processed == 3
+    assert snapshot.total == 800
+    assert len(snapshot.items) == 3
+
+
+async def test_a_snapshot_of_a_torn_run_trusts_the_rows_over_the_counter(
+    loaded: Container,
+) -> None:
+    """Оборванный прогон не успевает записать счётчик, но строки уже лежат."""
+    from app.db.models import BatchItem
+    from app.domain.verdict import VERDICT_ORDER
+
+    async with loaded.database.session() as session:
+        repo = BatchRepository(session)
+        run = await repo.create_run(telegram_user_id=OPERATOR_ID, total=800)
+        run_id = run.id
+        await repo.add_item(
+            BatchItem(
+                batch_run_id=run_id,
+                debtor_id=1,
+                verdict=Verdict.REVIEW.value,
+                verdict_order=VERDICT_ORDER[Verdict.REVIEW],
+                headline="Проверка не выполнена",
+                error="TimeoutError",
+            )
+        )
+
+    snapshot = await loaded.batch_service.queue_snapshot(run_id)
+    assert snapshot is not None
+    # Счётчик прогона так и остался нулём, а строка есть — верим строке.
+    assert snapshot.processed == 1
+    assert snapshot.failed == 1
+
+
 # ---------------------------------------------------------------- export
 
 

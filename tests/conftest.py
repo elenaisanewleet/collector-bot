@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.config import AppMode, Settings
 from app.container import Container
@@ -41,6 +43,7 @@ from app.services.search import SearchService
 from app.services.share import ShareLinkService
 from app.services.subject_store import SubjectStore
 from app.services.verdict import VerdictEngine
+from tests.botkit import SentMessages, install_bot
 
 DEMO_CSV = Path("data/demo_debtors.csv")
 
@@ -103,6 +106,23 @@ async def container(settings: Settings, database: Database) -> AsyncIterator[Con
         subject_store=SubjectStore(),
     )
     yield instance
+
+
+@pytest.fixture
+def sent() -> SentMessages:
+    return SentMessages()
+
+
+@pytest.fixture
+def bot(sent: SentMessages, monkeypatch: pytest.MonkeyPatch) -> Iterator[Bot]:
+    yield install_bot(sent, monkeypatch)
+
+
+@pytest.fixture
+def dispatcher(container: Container) -> Dispatcher:
+    from app.bot.router import setup_dispatcher
+
+    return setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)
 
 
 @pytest.fixture

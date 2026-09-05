@@ -158,12 +158,15 @@ document.addEventListener('click', function (event) {
   var el = event.target.closest('.copy');
   if (!el || el.dataset.done === '1') return;
   // Текст берётся только из data-copy: раньше повторный тап копировал слово
-  // «скопировано» и затирал им номер производства.
+  // «скопировано» и затирал им номер производства. Возвращается на место
+  // подпись, снятая до подмены: в очереди кнопка показывает «12 400 ₽», а
+  // копирует «12400» — в исковое заявление вставляют число, а не рубли.
   var text = el.dataset.copy || '';
+  var shown = el.textContent;
   var mark = function (label) {
     el.dataset.done = '1';
     el.textContent = label;
-    setTimeout(function () { el.textContent = text; el.dataset.done = ''; }, 1200);
+    setTimeout(function () { el.textContent = shown; el.dataset.done = ''; }, 1200);
   };
   if (!navigator.clipboard) { mark('выделите вручную'); return; }
   navigator.clipboard.writeText(text).then(
@@ -242,9 +245,14 @@ def cell(
     return f"<td{attrs}>{inner}</td>"
 
 
-def raw_cell(html: str, *, label: str = "", value: str = "") -> str:
-    """Ячейка с готовой разметкой. ``value`` уезжает в ``data-v`` для фильтров."""
-    attr = f' data-l="{e(label)}"' if label else ""
+def raw_cell(html: str, *, label: str = "", value: str = "", classes: str = "") -> str:
+    """Ячейка с готовой разметкой. ``value`` уезжает в ``data-v`` для фильтров.
+
+    ``classes`` — те же ``n``/``r``, что и у :func:`cell`: колонка с суммой не
+    перестаёт быть колонкой с суммой оттого, что внутри неё кнопка.
+    """
+    attr = f' class="{e(classes)}"' if classes else ""
+    attr += f' data-l="{e(label)}"' if label else ""
     attr += f' data-v="{e(value)}"' if value else ""
     return f"<td{attr}>{html}</td>"
 

@@ -7,124 +7,24 @@ makes them the closest thing to running the bot without a token.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from datetime import datetime
-from typing import Any
-
 import pytest
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import (
-    AnswerCallbackQuery,
-    DeleteMessage,
-    EditMessageText,
-    SendDocument,
-    SendMessage,
-    TelegramMethod,
-)
-from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
 from app.bot.middleware import ACCESS_DENIED_MESSAGE
-from app.bot.router import setup_dispatcher
 from app.config import Settings
 from app.container import Container
-
-FAKE_TOKEN = "123456789:AAEnoughCharactersToLookLikeARealToken00"
-OPERATOR_ID = 111
-OUTSIDER_ID = 999
-CHAT_ID = 500
-
-
-class SentMessages:
-    """Captures everything the bot tried to send."""
-
-    def __init__(self) -> None:
-        self.texts: list[str] = []
-        self.markups: list[Any] = []
-        self.callback_answers: list[str] = []
-        self.documents: list[tuple[str, bytes]] = []
-
-    @property
-    def joined(self) -> str:
-        return "\n".join(self.texts)
-
-    def contains(self, needle: str) -> bool:
-        return any(needle in text for text in self.texts)
-
-
-@pytest.fixture
-def sent() -> SentMessages:
-    return SentMessages()
-
-
-@pytest.fixture
-def bot(sent: SentMessages, monkeypatch: pytest.MonkeyPatch) -> Iterator[Bot]:
-    """A Bot whose outbound calls are intercepted instead of sent."""
-    instance = Bot(token=FAKE_TOKEN, default=DefaultBotProperties(parse_mode=None))
-    counter = {"id": 1000}
-
-    async def fake_call(self: Bot, method: TelegramMethod[Any], *args: Any, **kwargs: Any) -> Any:
-        if isinstance(method, SendMessage):
-            sent.texts.append(method.text)
-            sent.markups.append(method.reply_markup)
-            counter["id"] += 1
-            return Message.model_construct(
-                message_id=counter["id"],
-                date=datetime(2026, 9, 4),
-                chat=Chat(id=CHAT_ID, type="private"),
-                text=method.text,
-            ).as_(self)
-        if isinstance(method, EditMessageText):
-            # Прогресс правится на месте — для теста это такой же текст.
-            sent.texts.append(method.text or "")
-            sent.markups.append(method.reply_markup)
-            return True
-        if isinstance(method, SendDocument):
-            document = method.document
-            sent.documents.append(
-                (getattr(document, "filename", ""), getattr(document, "data", b""))
-            )
-            return True
-        if isinstance(method, AnswerCallbackQuery):
-            sent.callback_answers.append(method.text or "")
-            return True
-        if isinstance(method, DeleteMessage):
-            return True
-        return True
-
-    monkeypatch.setattr(Bot, "__call__", fake_call, raising=True)
-    yield instance
-
-
-@pytest.fixture
-def dispatcher(container: Container) -> Dispatcher:
-    return setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)
-
-
-def make_message(text: str, user_id: int = OPERATOR_ID, message_id: int = 1) -> Message:
-    return Message.model_construct(
-        message_id=message_id,
-        date=datetime(2026, 9, 4),
-        chat=Chat(id=CHAT_ID, type="private"),
-        from_user=User(id=user_id, is_bot=False, first_name="Operator"),
-        text=text,
-    )
-
-
-def make_callback(data: str, user_id: int = OPERATOR_ID) -> CallbackQuery:
-    return CallbackQuery.model_construct(
-        id=f"cb-{data}",
-        from_user=User(id=user_id, is_bot=False, first_name="Operator"),
-        chat_instance="chat-instance",
-        data=data,
-        message=make_message("предыдущее сообщение", user_id=user_id, message_id=2),
-    )
-
-
-async def feed(dispatcher: Dispatcher, bot: Bot, **update: Any) -> None:
-    await dispatcher.feed_update(bot, Update.model_construct(update_id=1, **update))
-
+from tests.botkit import (
+    FAKE_TOKEN,
+    OPERATOR_ID,
+    OUTSIDER_ID,
+    SentMessages,
+    buttons,
+    callbacks,
+    dispatcher_for,
+    feed,
+    make_callback,
+    make_message,
+)
 
 # ---------------------------------------------------------------- access
 
@@ -172,28 +72,6 @@ async def test_outsider_cannot_start_a_search(
 # который снова начнёт спрашивать телефон или регион, обязан упасть.
 
 FULL_LINE = "Тестов Андрей Сергеевич 12.03.1985"
-
-
-def buttons(sent: SentMessages) -> list[str]:
-    """Тексты всех кнопок, которые бот показал за прогон."""
-    return [
-        button.text
-        for markup in sent.markups
-        if markup is not None and getattr(markup, "inline_keyboard", None)
-        for row in markup.inline_keyboard
-        for button in row
-    ]
-
-
-def callbacks(sent: SentMessages) -> list[str]:
-    return [
-        button.callback_data
-        for markup in sent.markups
-        if markup is not None and getattr(markup, "inline_keyboard", None)
-        for row in markup.inline_keyboard
-        for button in row
-        if button.callback_data
-    ]
 
 
 async def test_free_line_runs_without_a_single_button(
@@ -468,7 +346,7 @@ async def test_passport_is_not_asked_before_the_report(
     карточку и стал кнопкой.
     """
     enabled = _with_bridge(container)
-    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+    dispatcher = dispatcher_for(enabled)
 
     await feed(dispatcher, bot, message=make_message(FULL_LINE))
 
@@ -497,7 +375,7 @@ async def test_the_passport_button_is_hidden_when_it_would_lie(
     ``tests/test_report_actions.py``: демо-мост не стоит денег и включён всегда.
     """
     enabled = _with_bridge(container)
-    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+    dispatcher = dispatcher_for(enabled)
 
     await feed(dispatcher, bot, message=make_message(line))
 
@@ -516,7 +394,7 @@ async def test_the_passport_button_masks_the_number_and_feeds_the_bridge(
     from app.db.repository import SearchRepository
 
     enabled = _with_bridge(container)
-    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+    dispatcher = dispatcher_for(enabled)
 
     await feed(dispatcher, bot, message=make_message(FULL_LINE))
     token = _last_add_token(sent, "passport")
@@ -542,7 +420,7 @@ async def test_an_inn_from_the_line_skips_the_bridge_entirely(
     bot: Bot, sent: SentMessages, container: Container
 ) -> None:
     enabled = _with_bridge(container)
-    dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), enabled)
+    dispatcher = dispatcher_for(enabled)
 
     await feed(dispatcher, bot, message=make_message(f"{FULL_LINE} 770912345601"))
 
@@ -688,6 +566,15 @@ async def test_repeat_of_another_operators_search_is_refused(
 # ---------------------------------------------------------------- массовая проверка
 
 
+def confirm_callback(sent: SentMessages) -> str:
+    """Нажать ровно ту кнопку запуска, которую бот показал.
+
+    Не константа: в callback уезжает число должников из сметы, и тест, который
+    подставляет своё, проверяет не тот сценарий, который увидит оператор.
+    """
+    return next(data for data in callbacks(sent) if data.startswith("batch:run"))
+
+
 async def test_batch_shows_an_estimate_before_spending(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
@@ -716,12 +603,12 @@ async def test_batch_runs_and_reports_a_queue(
     await container.import_service.import_file(container.settings.internal_csv_path)
 
     await feed(dispatcher, bot, message=make_message("/batch"))
-    await feed(dispatcher, bot, callback_query=make_callback("batch:run"))
+    await feed(dispatcher, bot, callback_query=make_callback(confirm_callback(sent)))
 
     assert sent.contains("Проверка завершена")
     assert sent.contains("Судебный приказ")
     assert sent.contains("Не подавать")
-    assert sent.contains("Не будет потрачено на пошлины")
+    assert sent.contains("Сэкономлено на пошлинах")
 
 
 async def test_batch_lists_one_verdict(
@@ -729,7 +616,7 @@ async def test_batch_lists_one_verdict(
 ) -> None:
     await container.import_service.import_file(container.settings.internal_csv_path)
     await feed(dispatcher, bot, message=make_message("/batch"))
-    await feed(dispatcher, bot, callback_query=make_callback("batch:run"))
+    await feed(dispatcher, bot, callback_query=make_callback(confirm_callback(sent)))
 
     sent.texts.clear()
     await feed(dispatcher, bot, callback_query=make_callback("batch:list:drop"))
@@ -750,7 +637,7 @@ async def test_batch_export_sends_a_file(
 ) -> None:
     await container.import_service.import_file(container.settings.internal_csv_path)
     await feed(dispatcher, bot, message=make_message("/batch"))
-    await feed(dispatcher, bot, callback_query=make_callback("batch:run"))
+    await feed(dispatcher, bot, callback_query=make_callback(confirm_callback(sent)))
     await feed(dispatcher, bot, callback_query=make_callback("batch:export"))
 
     assert sent.documents, "CSV не отправлен"
@@ -831,7 +718,7 @@ def linked(container: Container) -> Container:
 
 @pytest.fixture
 def linked_dispatcher(linked: Container) -> Dispatcher:
-    return setup_dispatcher(Dispatcher(storage=MemoryStorage()), linked)
+    return dispatcher_for(linked)
 
 
 async def test_search_sends_a_card_with_a_link_not_a_wall(
@@ -870,7 +757,7 @@ async def test_batch_offers_the_queue_page(
     await linked.import_service.import_file(linked.settings.internal_csv_path)
 
     await feed(linked_dispatcher, bot, message=make_message("/batch"))
-    await feed(linked_dispatcher, bot, callback_query=make_callback("batch:run"))
+    await feed(linked_dispatcher, bot, callback_query=make_callback(confirm_callback(sent)))
 
     urls = [
         button.url
