@@ -20,26 +20,21 @@
 		-Server
 	}
 
-	# Проверка живости — без логов, иначе журнал забьётся стуком мониторинга.
-	handle /healthz {
-		reverse_proxy bot:8080
-	}
-
-	handle {
-		reverse_proxy bot:8080
-	}
+	reverse_proxy bot:8080
 
 	log {
 		output file /data/access.log {
 			roll_size 10MiB
 			roll_keep 5
 		}
-		# Токен отчёта — это ключ доступа к персональным данным. В журнал он
-		# попадать не должен: журнал живёт дольше ссылки и читается шире.
+		# Путь запроса содержит токен доступа к персональным данным. Журнал
+		# живёт дольше ссылки и читается шире, поэтому URI из него вырезается
+		# целиком: кто и когда заходил — видно, куда именно — нет.
 		format filter {
 			wrap console
 			fields {
-				request>uri query_placeholder
+				uri delete
+				request>uri delete
 			}
 		}
 	}
