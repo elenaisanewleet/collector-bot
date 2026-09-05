@@ -380,6 +380,30 @@ def _money_lines(summary: BatchSummary) -> list[str]:
     return lines
 
 
+async def offer_batch(
+    message: Message, state: FSMContext, container: Container, note: str = ""
+) -> None:
+    """Смета прогона и предложение подтвердить.
+
+    Модульного уровня, а не вложенная в ``build_router``: тот же экран открывает
+    кнопка «📊 Проверить всю базу» с нижней клавиатуры, а её обработчик живёт в
+    :mod:`app.bot.handlers.buttons` и до замыкания не дотянулся бы.
+    """
+    estimate = await container.batch_service.estimate()
+    if estimate.debtors == 0:
+        await state.clear()
+        await message.answer(EMPTY_BASE, reply_markup=main_menu())
+        return
+    await state.set_state(BatchCheck.waiting_confirm)
+    text = render_estimate(estimate)
+    if note:
+        text = f"{note}\n\n{text}"
+    await message.answer(
+        text,
+        reply_markup=batch_confirm_keyboard(confirm_label(estimate), estimate.debtors),
+    )
+
+
 def build_router() -> Router:
     """Build this module's router.
 
@@ -393,7 +417,7 @@ def build_router() -> Router:
     async def handle_batch_command(
         message: Message, state: FSMContext, container: Container
     ) -> None:
-        await _offer(message, state, container)
+        await offer_batch(message, state, container)
 
     @router.callback_query(F.data == f"{BATCH_PREFIX}:start")
     async def handle_batch_start(
@@ -402,24 +426,7 @@ def build_router() -> Router:
         await answer_callback(callback)
         target = callback_message(callback)
         if target:
-            await _offer(target, state, container)
-
-    async def _offer(
-        message: Message, state: FSMContext, container: Container, note: str = ""
-    ) -> None:
-        estimate = await container.batch_service.estimate()
-        if estimate.debtors == 0:
-            await state.clear()
-            await message.answer(EMPTY_BASE, reply_markup=main_menu())
-            return
-        await state.set_state(BatchCheck.waiting_confirm)
-        text = render_estimate(estimate)
-        await message.answer(
-            f"{note}\n\n{text}" if note else text,
-            # Число должников уезжает в callback: подтверждают конкретную смету,
-            # а не абстрактный запуск.
-            reply_markup=batch_confirm_keyboard(confirm_label(estimate), estimate.debtors),
-        )
+            await offer_batch(target, state, container)
 
     @router.callback_query(BatchCheck.waiting_confirm, F.data.startswith(f"{BATCH_PREFIX}:run"))
     async def handle_batch_run(
@@ -435,7 +442,7 @@ def build_router() -> Router:
             # База изменилась между сметой и нажатием: кто-то импортировал
             # выгрузку, или прошла чистка. Запускать по числам, которых оператор
             # не видел, нельзя — за них платят.
-            await _offer(message, state, container, note=BASE_CHANGED)
+            await offer_batch(message, state, container, note=BASE_CHANGED)
             return
         await state.clear()
 

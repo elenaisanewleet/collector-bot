@@ -3,9 +3,13 @@
 These drive real ``aiogram`` updates through the real dispatcher — middleware,
 routers, FSM and handlers — with only the outbound Telegram API replaced. That
 makes them the closest thing to running the bot without a token.
+
+Стенд перехвата и фикстуры общие: :mod:`tests.bot_harness` и ``conftest``.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 import pytest
 from aiogram import Bot, Dispatcher
@@ -13,7 +17,8 @@ from aiogram import Bot, Dispatcher
 from app.bot.middleware import ACCESS_DENIED_MESSAGE
 from app.config import Settings
 from app.container import Container
-from tests.botkit import (
+
+from .bot_harness import (
     FAKE_TOKEN,
     OPERATOR_ID,
     OUTSIDER_ID,
@@ -35,7 +40,12 @@ async def test_start_shows_the_main_menu(
     await feed(dispatcher, bot, message=make_message("/start"))
 
     assert sent.contains(container.settings.app_name)
-    assert sent.contains("Внутренний сервис проверки должников")
+    # Приветствие говорит, что делать, а не описывает себя: нажми, введи, получи.
+    assert sent.contains("Нажмите кнопку")
+    assert sent.contains("Введите то, что бот попросит")
+    assert sent.contains("Получите вердикт")
+    # И не даёт прочитать молчание источника как чистую биографию.
+    assert sent.contains("Это не значит, что там чисто")
     assert sent.markups[0] is not None  # the inline menu
 
 
@@ -498,14 +508,17 @@ def _with_bridge(container: Container) -> Container:
     )
 
 
-async def test_help_lists_connected_sources(
+async def test_help_explains_the_product_in_plain_words(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
     await feed(dispatcher, bot, message=make_message("/help"))
 
-    assert sent.contains("Команды:")
-    assert sent.contains("не использует базы утечек")
-    assert sent.contains("Источники:")
+    assert sent.contains("КОМАНДЫ")
+    assert sent.contains("не пользуется базами утечек")
+    # Термины, на которых оператор спотыкается, объяснены на месте.
+    assert sent.contains("Recovery Score")
+    assert sent.contains("ПОЧЕМУ ВАЖНА ДАТА РОЖДЕНИЯ")
+    assert sent.contains("Можно подавать заявление о судебном приказе")
 
 
 async def test_history_is_empty_then_populated(
@@ -703,16 +716,13 @@ def linked(container: Container) -> Container:
     settings = container.settings.model_copy(
         update={"web_public_url": "https://reports.example.test"}
     )
-    return Container(
+    # replace(), а не пересборка Container по полям: перечисленный вручную
+    # список полей молча теряет всякую новую службу, и тест ломается там, где к
+    # ссылкам на отчёт отношения не имеет.
+    return replace(
+        container,
         settings=settings,
-        database=container.database,
-        registry=container.registry,
-        search_service=container.search_service,
-        import_service=container.import_service,
-        batch_service=container.batch_service,
-        verdict_engine=container.verdict_engine,
         share_service=ShareLinkService(settings, container.database),
-        subject_store=container.subject_store,
     )
 
 

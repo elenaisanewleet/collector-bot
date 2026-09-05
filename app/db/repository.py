@@ -16,6 +16,7 @@ from sqlalchemy import CursorResult, Select, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
+    AccessRequest,
     AuditEvent,
     BatchItem,
     BatchRun,
@@ -458,6 +459,73 @@ class ShareLinkRepository:
             await self._session.execute(delete(ShareLink).where(ShareLink.expires_at <= utcnow())),
         )
         return result.rowcount or 0
+
+
+class AccessRepository:
+    """Заявки на доступ. Одна строка на человека — см. модель."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get(self, telegram_user_id: int) -> AccessRequest | None:
+        stmt = select(AccessRequest).where(AccessRequest.telegram_user_id == telegram_user_id)
+        found: AccessRequest | None = await self._session.scalar(stmt)
+        return found
+
+    async def upsert_request(
+        self,
+        *,
+        telegram_user_id: int,
+        username: str | None,
+        full_name: str | None,
+        status: str,
+    ) -> AccessRequest:
+        """Подать заявку: создать строку или вернуть существующую в ``pending``.
+
+        Имя и username переписываются при каждой подаче: человек мог их сменить,
+        а владелец решает именно по ним.
+        """
+        row = await self.get(telegram_user_id)
+        now = utcnow()
+        if row is None:
+            row = AccessRequest(
+                telegram_user_id=telegram_user_id,
+                username=username,
+                full_name=full_name,
+                status=status,
+                requested_at=now,
+            )
+            self._session.add(row)
+        else:
+            row.username = username or row.username
+            row.full_name = full_name or row.full_name
+            row.status = status
+            row.requested_at = now
+            row.decided_at = None
+            row.decided_by = None
+        await self._session.flush()
+        return row
+
+    async def set_status(
+        self, telegram_user_id: int, *, status: str, decided_by: int
+    ) -> AccessRequest | None:
+        row = await self.get(telegram_user_id)
+        if row is None:
+            return None
+        row.status = status
+        row.decided_at = utcnow()
+        row.decided_by = decided_by
+        await self._session.flush()
+        return row
+
+    async def by_status(self, *statuses: str) -> list[AccessRequest]:
+        stmt = (
+            select(AccessRequest)
+            .where(AccessRequest.status.in_(statuses))
+            .order_by(AccessRequest.requested_at.desc(), AccessRequest.id.desc())
+        )
+        result = await self._session.scalars(stmt)
+        return list(result.all())
 
 
 class AuditRepository:

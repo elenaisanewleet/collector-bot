@@ -61,6 +61,15 @@ PLEDGE_SCOPE_NOTE = (
 # подавал», а иски к физлицу идут в суд общей юрисдикции.
 COURT_SCOPE_NOTE = "Суды общей юрисдикции этот источник не покрывает."
 DISCLAIMER = "Оценка является аналитической и не заменяет юридическую проверку."
+# Подписи состояния «источник подключён / не подключён» и строка, которой это
+# состояние печатается в отчёте. Живут здесь по той же причине, что и
+# SourceStateCode ниже: их показывает не только отчёт — те же слова стоят на
+# экране «Откуда данные», в справке и в /status, и второй набор формулировок
+# разъехался бы с первым за одну правку.
+CONNECTED_LABEL = "подключено"
+NOT_CONFIGURED_LABEL = "не подключено"
+EMPTY_LABEL = "проверено, записей нет"
+NOT_CONFIGURED_REPORT_LINE = "Не проверено: источник не подключён."
 DEMO_BANNER = "⚠️ ДЕМО-РЕЖИМ: данные вымышленные, внешние источники не опрашивались."
 NO_FACTORS_NOTE = "Факторов для оценки недостаточно — источники не дали данных."
 
@@ -126,9 +135,9 @@ def source_state(result: ProviderResult | None, *, records: int | None = None) -
         count = len(result.records) if records is None else records
         return SourceState(SourceStateCode.FOUND, f"{count} зап.", "✓", True)
     if result.status is ProviderStatus.NO_RESULTS:
-        return SourceState(SourceStateCode.EMPTY, "проверено, записей нет", "—", True)
+        return SourceState(SourceStateCode.EMPTY, EMPTY_LABEL, "—", True)
     if result.status is ProviderStatus.NOT_CONFIGURED:
-        return SourceState(SourceStateCode.NOT_CONFIGURED, "не подключено", "○", False)
+        return SourceState(SourceStateCode.NOT_CONFIGURED, NOT_CONFIGURED_LABEL, "○", False)
     if result.error_code == "insufficient_query":
         return SourceState(SourceStateCode.INSUFFICIENT, "недостаточно данных", "?", False)
     if result.status is ProviderStatus.UNAVAILABLE:
@@ -165,7 +174,7 @@ def unanswered_line(
         case SourceStateCode.NOT_QUERIED:
             return "Источник не опрашивался."
         case SourceStateCode.NOT_CONFIGURED:
-            return "Не проверено: источник не подключён."
+            return NOT_CONFIGURED_REPORT_LINE
         case SourceStateCode.INSUFFICIENT:
             detail = (result.error_message if result else None) or "недостаточно данных"
             return f"Не проверено: {detail}.{_bridge_note(bridge)}"

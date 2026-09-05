@@ -4,6 +4,13 @@ The bot is closed. The allowlist check runs before any handler, so an
 unauthorized user cannot start a search, create a search request, or cause a
 single outbound call to an external API. The refusal is logged — the user id and
 nothing else — so an attempt is visible without recording what was asked.
+
+Незнакомец при этом упирается не обязательно в стену. Если у бота есть владелец
+(``OWNER_TELEGRAM_USER_IDS``), первое сообщение постороннего превращается в
+заявку: он читает, что доступ по одобрению, владелец получает карточку с именем
+и кнопками. Это единственное, что посторонний может вызвать в боте, и оно не
+доходит ни до одного хендлера и ни до одного платного запроса — заявка пишется
+здесь же, в middleware.
 """
 
 from __future__ import annotations
@@ -11,10 +18,17 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from aiogram import BaseMiddleware
+from aiogram import BaseMiddleware, Bot
 from aiogram.types import CallbackQuery, Message, TelegramObject, User
 
+from app.bot.access_view import (
+    REQUEST_PENDING,
+    REQUEST_SENT,
+    notify_owners_of_request,
+    request_throttled,
+)
 from app.logging_setup import get_logger
+from app.services.access import AccessService, RequestOutcome
 
 logger = get_logger(__name__)
 
@@ -25,20 +39,40 @@ class AllowlistMiddleware(BaseMiddleware):
     """Rejects every update from a user outside ``ALLOWED_TELEGRAM_USER_IDS``.
 
     An empty allowlist denies everyone: a closed tool must fail shut, never open.
+
+    ``access`` включает режим одобрения. Без него поведение ровно прежнее —
+    список из ``.env`` и отказ всем остальным; с ним решение принимает
+    :class:`~app.services.access.AccessService`, у которого порядок проверок
+    записан в одном месте, а не размазан между настройкой и middleware.
     """
 
-    def __init__(self, allowed_user_ids: frozenset[int], *, open_access: bool = False) -> None:
+    def __init__(
+        self,
+        allowed_user_ids: frozenset[int],
+        *,
+        open_access: bool = False,
+        access: AccessService | None = None,
+    ) -> None:
         self._allowed = allowed_user_ids
         self._open = open_access
+        self._access = access
         if open_access:
             logger.warning(
                 "allowlist.open",
                 note="bot is open to everyone: every stranger spends the balance",
             )
+        elif access is not None and access.moderation_enabled:
+            logger.info("allowlist.moderated", owners=len(access.owner_ids))
         elif not allowed_user_ids:
             logger.warning("allowlist.empty", note="no user can access the bot")
 
     def is_allowed(self, user_id: int | None) -> bool:
+        """Синхронная проверка по одному только ``.env``.
+
+        Осталась синхронной намеренно: решения, принятые кнопкой, лежат в базе и
+        читаются :meth:`AccessService.is_allowed`, а эта отвечает на вопрос
+        «пущен ли он настройкой» — там, где ходить в базу незачем.
+        """
         if user_id is None:
             return False
         return self._open or user_id in self._allowed
@@ -52,15 +86,53 @@ class AllowlistMiddleware(BaseMiddleware):
         user: User | None = data.get("event_from_user")
         user_id = user.id if user else None
 
-        if self.is_allowed(user_id):
+        if await self._passes(user_id):
             data["user_id"] = user_id
             return await handler(event, data)
 
         # Deliberately does not log the message text: the request content of an
         # unauthorized user is not ours to retain.
         logger.warning("access.denied", user_id=user_id)
+        if self._access is not None and self._access.moderation_enabled and user is not None:
+            await self._offer_request(event, data, user)
+            return None
         await _refuse(event)
         return None
+
+    async def _passes(self, user_id: int | None) -> bool:
+        if self._access is None:
+            return self.is_allowed(user_id)
+        return await self._access.is_allowed(user_id)
+
+    async def _offer_request(self, event: TelegramObject, data: dict[str, Any], user: User) -> None:
+        """Первое сообщение незнакомца — это заявка.
+
+        Только для сообщений. Заявку по нажатию инлайн-кнопки не принимаем:
+        кнопка у постороннего может взяться лишь из пересланного чужого
+        сообщения, и «запрос отправлен» в ответ на такое нажатие объяснило бы
+        человеку не то, что произошло.
+        """
+        access = self._access
+        if access is None:  # pragma: no cover - вызывается только под проверкой
+            return
+        if not isinstance(event, Message):
+            await _refuse(event)
+            return
+
+        result = await access.submit_request(
+            user_id=user.id, username=user.username, full_name=user.full_name or None
+        )
+        if result.outcome is RequestOutcome.THROTTLED:
+            await event.answer(request_throttled(result.retry_after_hours))
+            return
+        if result.outcome is RequestOutcome.PENDING:
+            await event.answer(REQUEST_PENDING)
+            return
+
+        await event.answer(REQUEST_SENT)
+        bot = data.get("bot")
+        if isinstance(bot, Bot):
+            await notify_owners_of_request(bot, access.owner_ids, user)
 
 
 async def _refuse(event: TelegramObject) -> None:

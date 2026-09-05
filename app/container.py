@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from app.config import Settings, get_settings
 from app.db.session import Database
 from app.providers.registry import ProviderRegistry, build_registry
+from app.services.access import AccessService
 from app.services.batch import BatchService
 from app.services.identity import IdentityMatcher
 from app.services.import_service import ImportService
@@ -34,6 +35,7 @@ class Container:
     verdict_engine: VerdictEngine
     share_service: ShareLinkService
     subject_store: SubjectStore
+    access_service: AccessService
 
     async def dispose(self) -> None:
         await self.database.dispose()
@@ -66,4 +68,5 @@ def build_container(settings: Settings | None = None) -> Container:
         verdict_engine=verdict_engine,
         share_service=ShareLinkService(resolved, database),
         subject_store=SubjectStore(),
+        access_service=AccessService(resolved, database),
     )

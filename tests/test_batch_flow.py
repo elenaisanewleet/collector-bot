@@ -16,7 +16,7 @@
 *   **Что успели — показываем всегда.** Оборванный прогон не отменяет
     посчитанного: за двести проверенных строк уже заплачено.
 
-Стенд — настоящий диспетчер (``tests/botkit.py``): роутеры, FSM, middleware,
+Стенд — настоящий диспетчер (``tests/bot_harness.py``): роутеры, FSM, middleware,
 перехвачен только исходящий Telegram. Отдельно от него проверяются чистые
 функции вёрстки: состояния, которые в демо-режиме не воспроизвести (прогон на
 восемьсот строк, оборванный на трёхстах), проверяются на них.
@@ -53,7 +53,8 @@ from app.services.batch import (
     RunStatus,
 )
 from app.services.share import ShareLinkService
-from tests.botkit import (
+
+from .bot_harness import (
     OPERATOR_ID,
     SentMessages,
     buttons,
@@ -426,6 +427,10 @@ def refusing_container(container: Container) -> Container:
         verdict_engine=container.verdict_engine,
         share_service=container.share_service,
         subject_store=container.subject_store,
+        # Подменяется только источник и его окружение; всё остальное берётся
+        # готовым из исходного контейнера, чтобы список полей не превращался в
+        # вторую сборку приложения.
+        access_service=container.access_service,
     )
 
 

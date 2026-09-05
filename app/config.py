@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------- telegram
     telegram_bot_token: str = ""
     allowed_telegram_user_ids: str = ""
+    # Владельцы бота. Их доступ не обсуждается и не отзывается кнопкой — это те,
+    # кто платит за запросы и отвечает за данные. Отдельная настройка, а не
+    # первый элемент allowed_telegram_user_ids: список допущенных правится
+    # руками и «*» в нём стирает всякий смысл порядка, а вопрос «кому уходят
+    # заявки на доступ» должен иметь однозначный ответ.
+    owner_telegram_user_ids: str = ""
 
     # ---------------------------------------------------------------- storage
     database_url: str = "sqlite+aiosqlite:///./collector_bot.db"
@@ -214,16 +220,28 @@ class Settings(BaseSettings):
         Malformed entries are dropped rather than crashing the bot, but an empty
         result means *nobody* is allowed — the closed bot fails shut.
         """
-        ids: set[int] = set()
-        for chunk in self.allowed_telegram_user_ids.replace(";", ",").split(","):
-            token = chunk.strip()
-            if not token:
-                continue
-            try:
-                ids.add(int(token))
-            except ValueError:
-                continue
-        return frozenset(ids)
+        return _parse_user_ids(self.allowed_telegram_user_ids)
+
+    @property
+    def owner_user_ids(self) -> frozenset[int]:
+        """Кому уходят заявки на доступ и кто может их одобрять.
+
+        Владелец допущен всегда, даже если его забыли вписать в список
+        допущенных: иначе одобрять заявки было бы некому — их некому было бы и
+        увидеть.
+        """
+        return _parse_user_ids(self.owner_telegram_user_ids)
+
+    @property
+    def access_moderation_enabled(self) -> bool:
+        """Режим «доступ по одобрению».
+
+        Включается наличием владельца и выключается символом «*»: открытый бот
+        пускает всех, и заявка в нём — экран, который никто никогда не увидит.
+        Без владельца режима тоже нет — заявку было бы некому показать, и она
+        молча легла бы в базу вместо честного «Доступ запрещён».
+        """
+        return bool(self.owner_user_ids) and not self.telegram_access_is_open
 
     @property
     def telegram_access_is_open(self) -> bool:
@@ -321,6 +339,25 @@ class Settings(BaseSettings):
             and self.fns_api_key
             and self.fns_field_map is not None
         )
+
+
+def _parse_user_ids(raw: str) -> frozenset[int]:
+    """Числовые Telegram ID из строки настройки.
+
+    Мусорные значения отбрасываются, а не роняют бота: опечатка в одном ID не
+    повод отобрать доступ у остальных. Но и не повод пустить кого-то лишнего —
+    отброшенное значение никого не открывает.
+    """
+    ids: set[int] = set()
+    for chunk in raw.replace(";", ",").split(","):
+        token = chunk.strip()
+        if not token:
+            continue
+        try:
+            ids.add(int(token))
+        except ValueError:
+            continue
+    return frozenset(ids)
 
 
 @lru_cache(maxsize=1)

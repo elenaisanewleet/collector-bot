@@ -224,6 +224,39 @@ class ShareLink(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
 
 
+class AccessRequest(Base):
+    """Заявка на доступ и решение владельца по ней.
+
+    Одна строка на человека, а не журнал заявок: вопрос, на который эта таблица
+    отвечает, — «пускать ли его сейчас», и он имеет ровно один ответ. История
+    решений при этом не теряется — approve, reject и revoke пишутся в
+    ``audit_events``, который для того и append-only.
+
+    Живёт в базе, а не в памяти процесса, потому что перезапуск бота не должен
+    ни отбирать выданный доступ, ни возвращать отобранный, ни обнулять суточную
+    паузу для отклонённого — иначе она обходится любым падением.
+
+    Имя и username хранятся как строки: владелец решает по ним, кого пускает, а
+    к моменту показа списка человек может и не писать боту, чтобы Telegram
+    прислал их заново.
+    """
+
+    __tablename__ = "access_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_user_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(64))
+    full_name: Mapped[str | None] = mapped_column(String(255))
+    # pending / approved / rejected / revoked — см. app.services.access.
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    # Время последней поданной заявки. На нём держится суточная пауза, поэтому
+    # оно обновляется при подаче, а не при решении.
+    requested_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+    decided_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    decided_by: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
 class AuditEvent(Base):
     """Append-only trail of who did what.
 

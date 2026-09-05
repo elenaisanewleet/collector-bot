@@ -31,7 +31,12 @@ EMPTY_HISTORY = "История пуста. Запустите первую пр
 STALE_TOKEN = "Данные устарели, запустите поиск заново."
 
 
-async def _send_history(message: Message, container: Container, user_id: int) -> None:
+async def send_history(message: Message, container: Container, user_id: int) -> None:
+    """Последние проверки оператора.
+
+    Публичная: тот же экран открывает кнопка «🕘 История» с нижней клавиатуры
+    (:mod:`app.bot.handlers.buttons`).
+    """
     async with container.database.session() as session:
         repo = SearchRepository(session)
         requests = await repo.recent_for_user(user_id, limit=HISTORY_PAGE_SIZE)
@@ -117,7 +122,7 @@ def build_router() -> Router:
         message: Message, state: FSMContext, container: Container, user_id: int
     ) -> None:
         await state.clear()
-        await _send_history(message, container, user_id)
+        await send_history(message, container, user_id)
 
     @router.callback_query(F.data == f"{MENU_PREFIX}:history")
     async def handle_history_callback(
@@ -127,7 +132,7 @@ def build_router() -> Router:
         await answer_callback(callback)
         message = callback_message(callback)
         if message:
-            await _send_history(message, container, user_id)
+            await send_history(message, container, user_id)
 
     @router.callback_query(F.data.startswith(f"{REPEAT_PREFIX}:"))
     async def repeat_search(callback: CallbackQuery, container: Container, user_id: int) -> None:

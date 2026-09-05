@@ -1,26 +1,31 @@
-"""``/help`` — commands, limits and an explicit statement of what is connected."""
+"""``/help`` — как этим пользоваться, написанное для неюриста.
+
+Читатель справки — оператор, который выгружает должников из 1С и решает, на кого
+тратить пошлину. Он не знает, что такое ЕФРСБ, судебный приказ и цена иска, и
+узнавать это отдельно не должен: если термин здесь стоит, он тут же и объяснён.
+
+Список источников с их живым состоянием живёт не здесь, а на экране
+«Откуда данные» (:mod:`app.bot.sources`) — один экран на один вопрос.
+"""
 
 from __future__ import annotations
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
-from app.bot.keyboards import main_menu
+from app.bot.commands import commands_help
+from app.bot.common import answer_callback, callback_message
+from app.bot.keyboards import MENU_PREFIX, main_menu
+from app.bot.sources import LIMITS, LIMITS_HEADER
 from app.container import Container
-from app.domain.enums import PROVIDER_TITLES, ProviderName
+from app.utils.formatting import split_message
 
-COMMANDS = """Команды:
-/start — главное меню
-/batch — проверить всю базу и получить очередь взыскания
-/search — новая проверка
-/history — последние 10 проверок
-/import — импорт CSV с должниками
-/status — состояние системы и подключённых источников
-/audit — последние события журнала
-/revoke — отозвать выданные ссылки на отчёты
-/help — эта справка
-/cancel — прервать текущий диалог"""
+HELP_CALLBACK = f"{MENU_PREFIX}:help"
+
+WHAT_IT_IS = """ЧТО ЭТО
+Бот проверяет должника по официальным реестрам и говорит, стоит ли тратить
+на него пошлину. Вопрос, на который он отвечает, ровно один: подавать или нет."""
 
 HOW_TO_ASK = """Как спрашивать:
 Пришлите одной строкой всё, что знаете, в любом порядке —
@@ -39,46 +44,83 @@ LINKS_NOTE = """Про ссылки на отчёты:
 Ссылка живёт ограниченное время; если она ушла не туда, погасите её
 командой /revoke и запросите отчёт заново."""
 
-LIMITS = """Что делает сервис:
-• ищет должника в нашей базе и в подключённых легальных источниках;
-• сопоставляет записи и показывает уровень совпадения;
-• считает Recovery Score с объяснением каждого фактора.
+HOW_TO_START = """С ЧЕГО НАЧАТЬ
+1. Загрузите выгрузку должников из 1С — /import
+2. Прогоните всю базу разом — /batch. Или проверьте одного — /search
+3. Получите очередь: с кого начинать, а на кого не тратиться"""
 
-Чего сервис не делает:
-• не ищет банковские счета и остатки;
-• не определяет местоположение;
-• не использует базы утечек и «пробив»;
-• не заменяет юридическую проверку."""
+WHAT_TO_ENTER = """ЧТО ВВОДИТЬ
+Физлицо: фамилию и имя, отчество по желанию. Дальше бот спросит дату рождения,
+телефон и регион — телефон и регион можно пропустить.
+Договор или заявка: номер из вашей 1С, например EV-20481. Бот покажет карточку
+должника и предложит проверить его по внешним источникам.
+Госномер, VIN, адрес: ищутся только по вашей базе — эти данные попали туда из
+ваших же договоров."""
 
-CONFIDENCE_NOTE = """Про совпадения:
-Одинаковое ФИО из разных источников — это ещё не один человек.
-Подтверждённым совпадение становится только при совпадении
-даты рождения или ИНН. Остальное показывается как «возможное»."""
+WHY_BIRTH_DATE = """ПОЧЕМУ ВАЖНА ДАТА РОЖДЕНИЯ
+ФССП без даты рождения запрос не принимает вовсе: производств не будет, и это
+будет не «их нет», а «мы не смотрели».
+И однофамильцев в стране тысячи. Без даты рождения или ИНН ни одну найденную
+запись нельзя уверенно отнести к вашему должнику: бот пометит её как возможное
+совпадение, а не как подтверждённое, и это честно."""
+
+WHAT_VERDICT_MEANS = """ЧТО ЗНАЧИТ ВЕРДИКТ
+Можно подавать иск — препятствий не нашли, сумма больше порога приказа.
+Можно подавать заявление о судебном приказе — долг бесспорный и не больше
+500 000 ₽. Приказ выносит судья единолично, без заседания и без вызова сторон:
+быстрее и вдвое дешевле по пошлине. Но должник может отменить его одним
+заявлением, и тогда придётся идти обычным иском.
+Нужна ручная проверка — данных не хватило или что-то не сходится. Решение
+остаётся за человеком, бот его не принимает.
+Подавать не стоит — деньги уйдут впустую. Так бывает при банкротстве должника,
+при пошлине, несоразмерной долгу, и при низкой перспективе взыскания."""
+
+WHAT_NUMBERS_MEAN = """ЧТО ЗНАЧАТ ЦИФРЫ
+Recovery Score, 0-100 — насколько вероятно получить деньги: есть ли у человека
+доход и имущество, не банкрот ли он, много ли взыскателей стоит впереди вас.
+Уверенность данных — совсем про другое: сколько источников ответило и насколько
+надёжно совпадение. Балл 80 при уверенности 30% читается так: похоже на
+хорошего должника, но знаем мы о нём мало.
+Пошлина — сколько платить суду при подаче. «Не платится» значит, что в этом
+сценарии подавать не нужно вовсе, а не что суд бесплатный."""
+
+UNCHECKED_NOTE = """ГЛАВНОЕ ПРО «НЕ ПРОВЕРЕНО»
+Источник, который не ответил или не подключён, помечен «не проверено». Это не
+«там чисто», это «мы туда не смотрели». Список таких источников бот печатает
+прямо под вердиктом и не прячет.
+Что именно подключено сейчас — /sources"""
+
+LINKS_NOTE = """ПРО ССЫЛКИ НА ОТЧЁТЫ
+Отчёт открывается по временной ссылке без пароля: её можно переслать юристу,
+распечатать, сохранить в PDF или скачать текстом.
+Ссылка живёт ограниченное время. Если она ушла не туда — погасите все свои
+ссылки командой /revoke и запросите отчёт заново, бот выдаст новый адрес."""
 
 
-def _sources_section(container: Container) -> str:
-    """Lists each source and whether it is actually connected right now."""
-    lines = ["Источники:"]
-    if container.settings.is_demo:
-        lines.append("⚠️ Демо-режим: внешние источники заменены тестовыми данными.")
-    for provider in container.registry.external:
-        title = PROVIDER_TITLES.get(provider.name, provider.name.value)
-        mark = "✓" if provider.is_configured else "○"
-        state = "подключено" if provider.is_configured else "не подключено"
-        lines.append(f"{mark} {title} — {state}")
-    lines.append(f"✓ {PROVIDER_TITLES[ProviderName.INTERNAL]} — CSV + внутренняя база")
-    bridge = container.registry.inn_bridge
-    if bridge is not None:
-        # Мост не источник фактов, поэтому идёт отдельной строкой и со своим
-        # объяснением: без него три источника выше не проверяются вовсе.
-        mark = "✓" if bridge.is_configured else "○"
-        state = (
-            "подключено — один платный вызов на должника"
-            if bridge.is_configured
-            else "не подключено: без ИНН банкротство, статус ИП и арбитраж не проверяются"
-        )
-        lines.append(f"{mark} {PROVIDER_TITLES[ProviderName.INN_BRIDGE]} — {state}")
-    return "\n".join(lines)
+def help_text(container: Container) -> str:
+    blocks = [
+        f"{container.settings.app_name} — как это работает",
+        WHAT_IT_IS,
+        HOW_TO_START,
+        WHAT_TO_ENTER,
+        WHY_BIRTH_DATE,
+        WHAT_VERDICT_MEANS,
+        WHAT_NUMBERS_MEAN,
+        UNCHECKED_NOTE,
+        f"{LIMITS_HEADER}\n{LIMITS}",
+        LINKS_NOTE,
+        commands_help(),
+    ]
+    return "\n\n".join(blocks)
+
+
+async def send_help(message: Message, container: Container) -> None:
+    chunks = split_message(help_text(container))
+    for index, chunk in enumerate(chunks):
+        # Меню — только под последним куском: клавиатура посреди справки
+        # читается как её конец.
+        last = index == len(chunks) - 1
+        await message.answer(chunk, reply_markup=main_menu() if last else None)
 
 
 def build_router() -> Router:
@@ -92,17 +134,13 @@ def build_router() -> Router:
 
     @router.message(Command("help"))
     async def handle_help(message: Message, container: Container) -> None:
-        text = "\n\n".join(
-            [
-                f"{container.settings.app_name} — справка",
-                HOW_TO_ASK,
-                COMMANDS,
-                LIMITS,
-                CONFIDENCE_NOTE,
-                LINKS_NOTE,
-                _sources_section(container),
-            ]
-        )
-        await message.answer(text, reply_markup=main_menu())
+        await send_help(message, container)
+
+    @router.callback_query(F.data == HELP_CALLBACK)
+    async def handle_help_callback(callback: CallbackQuery, container: Container) -> None:
+        await answer_callback(callback)
+        message = callback_message(callback)
+        if message:
+            await send_help(message, container)
 
     return router
