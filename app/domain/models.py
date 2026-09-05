@@ -80,6 +80,7 @@ class InternalDebtorRecord(SourcedFact):
     # form is always available and is what the report displays.
     phone: str | None = None
     phone_masked: str | None = None
+    inn: str | None = None
     contract_number: str | None = None
     claim_number: str | None = None
     debt_amount: Decimal | None = None

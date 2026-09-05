@@ -154,6 +154,7 @@ class ImportService:
             phone=row.phone if store_raw else None,
             phone_masked=mask_phone(row.phone),
             phone_hash=phone_hash(row.phone),
+            inn=row.inn,
             contract_number=row.contract_number,
             claim_number=row.claim_number,
             debt_amount=row.debt_amount,

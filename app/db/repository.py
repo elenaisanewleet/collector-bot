@@ -567,6 +567,7 @@ def debtor_to_record(debtor: Debtor) -> InternalDebtorRecord:
         birth_date=debtor.birth_date,
         phone=debtor.phone,
         phone_masked=debtor.phone_masked,
+        inn=debtor.inn,
         contract_number=debtor.contract_number,
         claim_number=debtor.claim_number,
         debt_amount=debtor.debt_amount,

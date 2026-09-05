@@ -488,12 +488,12 @@ async def test_internal_lookup_reports_its_own_state(container: Container) -> No
         name=parse_fio("Никого Нет Такого"),
         birth_date=date(1970, 1, 1),
     )
-    _records, result = await container.search_service.lookup_internal_result(subject)
+    _records, result, _ = await container.search_service.lookup_internal_result(subject)
     assert result.provider is ProviderName.INTERNAL
     assert result.status is ProviderStatus.NO_RESULTS
 
     nameless = SearchSubject(search_type=SearchType.PERSON.value)
-    _none, empty = await container.search_service.lookup_internal_result(nameless)
+    _none, empty, _ = await container.search_service.lookup_internal_result(nameless)
     assert empty.error_code == "insufficient_query"
 
 

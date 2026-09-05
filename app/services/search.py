@@ -138,10 +138,20 @@ class SearchService:
                 )
                 return SearchOutcome(cached.report, cached.request_id)
 
+        # Внутренняя база — первой, и это не косметика. Оператор вводит номер
+        # телефона: заказчик ведёт должников в 1С, выгрузка приходит оттуда, и
+        # ФИО с датой рождения лежат в ней рядом с номером. Без переноса их в
+        # запрос ФССП и залоги отвечают «недостаточно данных» на человека,
+        # которого мы только что нашли у себя.
+        internal_records, internal_result, internal_exact = await self.lookup_internal_result(
+            subject
+        )
+        subject = _enrich_from_internal(subject, internal_records, exact=internal_exact)
+
         # Мост паспорт→ИНН строго после ключа кэша (он считается по вопросу
-        # оператора) и строго до внешней волны: три источника ищут только по ИНН.
+        # оператора), после внутренней базы (вдруг ИНН уже там — это платный
+        # вызов) и строго до внешней волны: три источника ищут только по ИНН.
         subject, bridge_result = await self._resolve_inn(subject)
-        internal_records, internal_result = await self.lookup_internal_result(subject)
         provider_results = await self._run_external(subject)
         if bridge_result is not None:
             provider_results = [bridge_result, *provider_results]
@@ -164,12 +174,12 @@ class SearchService:
         Exact-identifier hits get a confidence floor; a name-based hit goes
         through the ordinary matcher like any external record.
         """
-        records, _ = await self.lookup_internal_result(subject)
+        records, _, _ = await self.lookup_internal_result(subject)
         return records
 
     async def lookup_internal_result(
         self, subject: SearchSubject
-    ) -> tuple[list[InternalDebtorRecord], ProviderResult]:
+    ) -> tuple[list[InternalDebtorRecord], ProviderResult, bool]:
         """То же самое, но с состоянием источника рядом с записями.
 
         Внутренняя база — такой же источник, как ФССП, и обязана уметь сказать
@@ -180,25 +190,35 @@ class SearchService:
         """
         provider = self._registry.internal
         if not _has_internal_query(subject):
-            return [], ProviderResult(
-                provider=ProviderName.INTERNAL,
-                status=ProviderStatus.ERROR,
-                error_code="insufficient_query",
-                error_message="для поиска во внутренней базе нужны ФИО, договор или телефон",
+            return (
+                [],
+                ProviderResult(
+                    provider=ProviderName.INTERNAL,
+                    status=ProviderStatus.ERROR,
+                    error_code="insufficient_query",
+                    error_message="для поиска во внутренней базе нужны ФИО, договор или телефон",
+                ),
+                False,
             )
         try:
             records, exact = await self._internal_candidates(provider, subject)
         except InternalSourceError as exc:
             logger.warning("internal.lookup_failed", error=str(exc))
-            return [], ProviderResult(
-                provider=ProviderName.INTERNAL,
-                status=ProviderStatus.ERROR,
-                error_code="internal_source_failed",
+            return (
+                [],
+                ProviderResult(
+                    provider=ProviderName.INTERNAL,
+                    status=ProviderStatus.ERROR,
+                    error_code="internal_source_failed",
+                ),
+                False,
             )
 
         if not records:
-            return [], ProviderResult(
-                provider=ProviderName.INTERNAL, status=ProviderStatus.NO_RESULTS
+            return (
+                [],
+                ProviderResult(provider=ProviderName.INTERNAL, status=ProviderStatus.NO_RESULTS),
+                False,
             )
         unique = _dedupe_internal(records)
         self._matcher.annotate(
@@ -208,7 +228,11 @@ class SearchService:
         )
         # Записи живут в ``report.internal_records`` и не дублируются в
         # результате: здесь важно только состояние источника.
-        return unique, ProviderResult(provider=ProviderName.INTERNAL, status=ProviderStatus.SUCCESS)
+        return (
+            unique,
+            ProviderResult(provider=ProviderName.INTERNAL, status=ProviderStatus.SUCCESS),
+            exact,
+        )
 
     # ------------------------------------------------------------- internals
 
@@ -435,7 +459,7 @@ class SearchService:
                 )
             )
 
-        internal_records, internal_result = await self.lookup_internal_result(subject)
+        internal_records, internal_result, _ = await self.lookup_internal_result(subject)
         report = self._aggregator.build(
             subject, [internal_result, *results], internal_records=internal_records
         )
@@ -476,6 +500,53 @@ def _deserialize_records(payload: str) -> list[FactRecord]:
     except ValidationError:
         logger.warning("cache.record_schema_mismatch")
         return []
+
+
+def _enrich_from_internal(
+    subject: SearchSubject,
+    records: Sequence[InternalDebtorRecord],
+    *,
+    exact: bool,
+) -> SearchSubject:
+    """Дополнить запрос тем, что нашлось в нашей же выгрузке.
+
+    Сценарий, ради которого это написано, у заказчика основной: он ведёт
+    должников в 1С, оператор помнит только номер телефона и вводит его. Мы
+    находим строку выгрузки — и в ней рядом с номером лежат ФИО и дата
+    рождения. Без переноса их в запрос ФССП и залоги отвечают «недостаточно
+    данных» о человеке, которого мы только что опознали.
+
+    Условие ``exact`` существенно: дополняем только когда запись найдена по
+    точному идентификатору — телефону, номеру договора, идентификатору
+    должника. Совпадение по одному имени для этого не годится: подставив дату
+    рождения однофамильца, мы получили бы чужие производства, показанные как
+    производства должника, и не отличили бы их потом ничем.
+
+    Заполняются только пустые поля. То, что оператор ввёл руками, приоритетнее
+    выгрузки: он мог знать про смену фамилии, которой в 1С ещё нет.
+    """
+    if not exact or not records:
+        return subject
+
+    update: dict[str, object] = {}
+    if subject.name is None:
+        found = next((record.name for record in records if record.name is not None), None)
+        if found is not None:
+            update["name"] = found
+    if subject.birth_date is None:
+        birth = next((record.birth_date for record in records if record.birth_date), None)
+        if birth is not None:
+            update["birth_date"] = birth
+    if subject.inn is None:
+        # Ради этой строки колонка ИНН и заведена в выгрузке: банкротство,
+        # статус ИП и арбитраж ищут только по нему. Есть он в 1С — три
+        # источника открываются от одного введённого телефона, и платный
+        # запрос ИНН по паспорту не понадобится.
+        found_inn = next((record.inn for record in records if record.inn), None)
+        if found_inn is not None:
+            update["inn"] = found_inn
+
+    return subject.model_copy(update=update) if update else subject
 
 
 def _has_internal_query(subject: SearchSubject) -> bool:
