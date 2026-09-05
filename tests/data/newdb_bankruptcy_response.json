@@ -1,6 +1,6 @@
 {
     "params": {
-        "innfiz": "270392288605",
+        "innfiz": "270311112222",
         "country": "ru",
         "method": "bankrot_person",
         "newdb_qid": "EOAIIPOM7p-vMygB"
@@ -19,8 +19,8 @@
                     {
                         "bankruptcy": [
                             {
-                                "case_number": "А73-7992/2017",
-                                "case_url": "/legalcases/7975d0c7-9c63-41b4-b649-cd17331c759e",
+                                "case_number": "А73-1111/2017",
+                                "case_url": "/legalcases/11111111-2222-4333-8444-555555555555",
                                 "status": "Производство по делу завершено",
                                 "messages": [
                                     {
@@ -43,9 +43,9 @@
                         ],
                         "commmon": {
                             "type": "person",
-                            "name_or_fio": "Иванов Иван Иванович",    "inn": "270392288605",
+                            "name_or_fio": "Иванов Иван Иванович",    "inn": "270311112222",
                             "reg_number_type": "ОГРНИП",
-                            "reg_number": "323270000057022",
+                            "reg_number": "323270000011111",
                             "activity": "Торговля розничная, осуществляемая непосредственно при помощи информационно-коммуникационной сети Интернет",
                             "address": null,
                             "status": null,

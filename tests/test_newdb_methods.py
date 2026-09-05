@@ -488,7 +488,7 @@ async def test_records_path_unwraps_the_array_inside_a_row(
     settings, maps = deployment(live_settings, tmp_path, DOCUMENTED_MAP)
     person = {
         "bankruptcy": [
-            {"case_number": "А73-7992/2017", "status": "Производство по делу завершено"},
+            {"case_number": "А73-1111/2017", "status": "Производство по делу завершено"},
             {"case_number": "А73-1/2019", "status": "Введена процедура"},
         ],
         "commmon": {"name_or_fio": "Иванов Иван Иванович", "inn": "770912345601"},
@@ -501,7 +501,7 @@ async def test_records_path_unwraps_the_array_inside_a_row(
 
     assert result.status is ProviderStatus.SUCCESS
     cases = [record for record in result.records if isinstance(record, BankruptcyRecord)]
-    assert [record.case_number for record in cases] == ["А73-7992/2017", "А73-1/2019"]
+    assert [record.case_number for record in cases] == ["А73-1111/2017", "А73-1/2019"]
 
 
 @respx.mock
@@ -799,7 +799,7 @@ async def test_bankruptcy_record_carries_the_inn_it_was_searched_by(
         "commmon": {"name_or_fio": "Тестов Андрей Сергеевич"},
         "bankruptcy": [
             {
-                "case_number": "А73-7992/2017",
+                "case_number": "А73-1111/2017",
                 "status": "Производство по делу завершено",
                 "case_url": "/legalcases/7975d0c7",
             }

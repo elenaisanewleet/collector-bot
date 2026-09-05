@@ -23,12 +23,12 @@ The source files are the raw captures kept outside the repository (they contain
 real people's data and must not be committed):
 
     /tmp/real_bankrot.json                        bankrot_person, one case
-    /tmp/nd_real/bankrot_person_732817727300.json bankrot_person, empty
-    /tmp/nd_real/egrul_ip_770600089967.json       egrul_ip, ИП + upr + uchr
+    /tmp/nd_real/bankrot_person_770000000001.json bankrot_person, empty
+    /tmp/nd_real/egrul_ip_770000000003.json       egrul_ip, ИП + upr + uchr
     /tmp/real_egrul.json                          egrul_ip, ip + ip + docip
-    /tmp/nd_real/egrul_ip_732817727300.json       egrul_ip, empty
+    /tmp/nd_real/egrul_ip_770000000001.json       egrul_ip, empty
     /tmp/real_arbitr.json                         arbitr_person, one case
-    /tmp/nd_real/arbitr_person_732817727300.json  arbitr_person, empty
+    /tmp/nd_real/arbitr_person_770000000001.json  arbitr_person, empty
     /tmp/real_pledge.json                         pledge_person, 13 fnp_urls
     /tmp/nd_poll.json                             pledge_vin, empty
 """
@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -46,55 +47,29 @@ from typing import Any
 # Every entry is "real value from the capture" -> "invented value of the same
 # shape". Longest keys are replaced first so that a value containing another
 # one cannot be half-substituted.
-SUBSTITUTIONS: dict[str, str] = {
-    # --- bankrot_person / egrul_ip subject #1
-    "Пыж Анна Викторовна": "Пыжова Анна Петровна",
-    "ПЫЖ АННА ВИКТОРОВНА": "ПЫЖОВА АННА ПЕТРОВНА",
-    "270392288605": "270311112222",
-    "323270000057022": "323270000011111",
-    "307272011400023": "307272011400022",
-    "106-556-061 42": "111-222-333 44",
-    "27.01.1980": "14.03.1979",
-    "гор. Хабаровск": "гор. Приморск",
-    "680054, г. Хабаровск, ул. Трехгорная, 56, кв. 4": (
-        "680000, г. Приморск, ул. Ягодная, 11, кв. 7"
-    ),
-    "А73-7992/2017": "А73-1111/2017",
-    # --- egrul_ip subject #2 (роли в ЮЛ)
-    "ПАРФЕНЕНКО АНТОН ОРЕСТОВИЧ": "ПАРФЁНОВ АНТОН ОРЕСТОВИЧ",
-    "770600089967": "770600011111",
-    "320774600370587": "320774600311111",
-    "9728012826": "9728011111",
-    "1207700337327": "1207700311111",
-    'ООО "СТАЛЬНОЕ СЕРДЦЕ"': 'ООО "СТАЛЬНОЙ КЛЮЧ"',
-    'ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ "СТАЛЬНОЕ СЕРДЦЕ"': (
-        'ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ "СТАЛЬНОЙ КЛЮЧ"'
-    ),
-    "https://bo.nalog.gov.ru/organizations-card/11400816": (
-        "https://bo.nalog.gov.ru/organizations-card/11400000"
-    ),
-    # --- arbitr_person
-    "Леликов Андрей Викторович": "Тестов Андрей Викторович",
-    "ЛЕЛИКОВ АНДРЕЙ ВИКТОРОВИЧ": "ТЕСТОВ АНДРЕЙ ВИКТОРОВИЧ",
-    "Леликова Андрея Викторовича": "Тестова Андрея Викторовича",
-    "Леликову Андрею Викторовичу": "Тестову Андрею Викторовичу",
-    "Леликова А.В.": "Тестова А.В.",
-    "Леликов А.В.": "Тестов А.В.",
-    "Леликов А. В.": "Тестов А. В.",
-    "644605034188": "644600011111",
-    "А57-10442/2025": "А57-11111/2025",
-    "Саратовская обл., г. Ртищево, ул. Красная, д.22, кв.10": (
-        "Саратовская обл., г. Ртищево, ул. Луговая, д.1, кв.1"
-    ),
-    "412030, Россия, г.Ртищево, Саратовская область , ул.Красная д.6": (
-        "412030, Россия, г.Ртищево, Саратовская область , ул.Луговая д.6"
-    ),
-    "412030, Россия, Ртищево, Саратовская обл., Красная 6": (
-        "412030, Россия, Ртищево, Саратовская обл., Луговая 6"
-    ),
-    "10.05.1985": "10.05.1985",  # pledge probe input, already invented
-    # --- pledge_person (ФИО в params — вымышленные входные данные пробы)
-}
+# Таблица замен НЕ ХРАНИТСЯ В РЕПОЗИТОРИИ, и это не удобство, а требование.
+# Её ключи — настоящие ФИО, ИНН, СНИЛС, адреса и номера дел живых людей: чтобы
+# заменить данные, надо их назвать. Словарь такого вида сам по себе является
+# персональными данными, и в git ему места нет — даже в приватном.
+#
+# Файл задаётся переменной окружения NEWDB_SUBSTITUTIONS и лежит вне дерева
+# репозитория. Формат — JSON: {"настоящее": "вымышленное"}.
+# Без него скрипт не запускается: молча пропустить обезличивание нельзя.
+SUBSTITUTIONS: dict[str, str] = {}
+
+
+def load_substitutions() -> dict[str, str]:
+    path = os.environ.get("NEWDB_SUBSTITUTIONS")
+    if not path:
+        raise SystemExit(
+            "NEWDB_SUBSTITUTIONS не задана. Укажите путь к файлу замен вне репозитория — "
+            "без него фикстуры уйдут в git неанонимизированными."
+        )
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not data:
+        raise SystemExit(f"{path}: ожидался непустой JSON-объект замен")
+    SUBSTITUTIONS.update({str(k): str(v) for k, v in data.items()})
+    return SUBSTITUTIONS
 
 # Vendor access tokens: hex strings that address a person's card or a ЕГРЮЛ
 # extract. Replaced by a hex string of exactly the same length, so the shape of
@@ -163,12 +138,12 @@ def _strip_volatile(payload: Any) -> Any:
 
 FIXTURES: tuple[tuple[str, str], ...] = (
     ("real_bankrot.json", "newdb_live_bankrot_person.json"),
-    ("nd_real/bankrot_person_732817727300.json", "newdb_live_bankrot_person_empty.json"),
-    ("nd_real/egrul_ip_770600089967.json", "newdb_live_egrul_ip.json"),
+    ("nd_real/bankrot_person_770000000001.json", "newdb_live_bankrot_person_empty.json"),
+    ("nd_real/egrul_ip_770000000003.json", "newdb_live_egrul_ip.json"),
     ("real_egrul.json", "newdb_live_egrul_ip_duplicate_registration.json"),
-    ("nd_real/egrul_ip_732817727300.json", "newdb_live_egrul_ip_empty.json"),
+    ("nd_real/egrul_ip_770000000001.json", "newdb_live_egrul_ip_empty.json"),
     ("real_arbitr.json", "newdb_live_arbitr_person.json"),
-    ("nd_real/arbitr_person_732817727300.json", "newdb_live_arbitr_person_empty.json"),
+    ("nd_real/arbitr_person_770000000001.json", "newdb_live_arbitr_person_empty.json"),
     ("real_pledge.json", "newdb_live_pledge_person_unmatched.json"),
     ("nd_poll.json", "newdb_live_pledge_vin_empty.json"),
 )
@@ -179,6 +154,8 @@ def main() -> int:
     parser.add_argument("--source", type=Path, default=Path("/tmp"))
     parser.add_argument("--out", type=Path, default=Path("tests/data"))
     args = parser.parse_args()
+
+    load_substitutions()
 
     written = 0
     for source_name, target_name in FIXTURES:

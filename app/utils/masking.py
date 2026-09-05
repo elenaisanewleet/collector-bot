@@ -95,7 +95,7 @@ def mask_inn(inn: str | None) -> str | None:
 
 
 def mask_snils(snils: str | None) -> str | None:
-    """``106-556-061 42`` -> ``***-***-*** 42``.
+    """``123-456-789 00`` -> ``***-***-*** 42``.
 
     Exists so that a СНИЛС which somehow reaches a log line is unusable there.
     Nothing in this tool reads a СНИЛС as data: the live ``bankrot_person``
