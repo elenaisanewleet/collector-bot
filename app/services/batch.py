@@ -21,16 +21,18 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from decimal import Decimal
 
 from app.config import Settings
 from app.db.models import BatchItem, Debtor
 from app.db.repository import AuditRepository, BatchRepository, DebtorRepository
 from app.db.session import Database
-from app.domain.enums import SearchType
+from app.domain.enums import ProviderName, SearchType
 from app.domain.identity import NameParseError, SearchSubject, parse_fio
 from app.domain.verdict import VERDICT_ORDER, Verdict, VerdictDecision
 from app.logging_setup import get_logger
+from app.providers.base import FetchContext
 from app.services.search import SearchService, build_query_hash
 from app.services.verdict import VerdictEngine
 
@@ -42,17 +44,35 @@ ProgressCallback = Callable[["BatchProgress"], Awaitable[None]]
 
 @dataclass(frozen=True, slots=True)
 class BatchEstimate:
-    """Смета прогона, которую оператор подтверждает до списания средств."""
+    """Смета прогона, которую оператор подтверждает до списания средств.
+
+    Считаются **вызовы**, а не источники. Прежняя формула «должники × число
+    подключённых источников» была неправдой уже без новых методов: ФССП делает
+    вызов на регион, залоги — до двух, а источник, которому нечем искать, не
+    делает ни одного. С веером по компаниям расхождение стало бы кратным, и
+    оператор подтверждал бы одну сумму, а списывалась бы другая.
+
+    Диапазон нужен из-за цепочки: её длина известна только после ответа ФНС,
+    поэтому минимум — это прогон без неё, максимум — с колпаком.
+    """
 
     debtors: int
     cached: int
     to_query: int
     providers_per_debtor: int
     capped: bool
+    calls_min: int = 0
+    calls_max: int = 0
+    per_provider: dict[ProviderName, int] = dataclass_field(default_factory=dict)
 
     @property
     def requests(self) -> int:
-        return self.to_query * self.providers_per_debtor
+        """Верхняя граница — то, к чему оператор должен быть готов."""
+        return self.calls_max
+
+    @property
+    def is_range(self) -> bool:
+        return self.calls_max > self.calls_min
 
 
 @dataclass(slots=True)
@@ -113,29 +133,38 @@ class BatchService:
     # ------------------------------------------------------------- estimate
 
     async def estimate(self) -> BatchEstimate:
-        """Сколько должников и сколько запросов будет стоить прогон."""
+        """Сколько должников и сколько вызовов будет стоить прогон."""
         cap = self._settings.batch_max_debtors
         async with self._database.session() as session:
             total = await DebtorRepository(session).count()
         debtors = min(total, cap)
 
-        cached = await self._count_cached(debtors)
+        scan = await self._scan(debtors)
         providers = len(self._search.registry.configured_names)
         return BatchEstimate(
             debtors=debtors,
-            cached=cached,
-            to_query=max(debtors - cached, 0),
+            cached=scan.cached,
+            to_query=max(debtors - scan.cached, 0),
             providers_per_debtor=providers,
             capped=total > cap,
+            calls_min=scan.calls_min,
+            calls_max=scan.calls_max,
+            per_provider=dict(scan.per_provider),
         )
 
-    async def _count_cached(self, limit: int) -> int:
-        """Сколько должников уже проверялось внутри окна кэша."""
-        if not self._settings.cache_enabled:
-            return 0
+    async def _scan(self, limit: int) -> _Scan:
+        """Один проход по выгрузке: и кэш, и планируемые вызовы.
+
+        Считается в том же цикле, что уже был написан ради кэша: лишних
+        запросов к БД смета не стоит, а без неё оператор подтверждает цифру,
+        которая с фактическим списанием не совпадает.
+        """
         from app.db.repository import SearchRepository
 
-        cached = 0
+        scan = _Scan()
+        context = FetchContext(batch=True)
+        providers = self._search.registry.external
+        cache_enabled = self._settings.cache_enabled
         async with self._database.session() as session:
             debtor_repo = DebtorRepository(session)
             search_repo = SearchRepository(session)
@@ -147,13 +176,25 @@ class BatchService:
                     subject = _subject_for(row)
                     if subject is None:
                         continue
-                    found = await search_repo.find_cached_request(
-                        build_query_hash(subject),
-                        ttl_hours=self._settings.cache_ttl_hours,
-                    )
-                    if found is not None:
-                        cached += 1
-        return cached
+                    if cache_enabled:
+                        found = await search_repo.find_cached_request(
+                            build_query_hash(subject),
+                            ttl_hours=self._settings.cache_ttl_hours,
+                        )
+                        if found is not None:
+                            # Кэшированный должник не опрашивается — и не стоит.
+                            scan.cached += 1
+                            continue
+                    for provider in providers:
+                        planned = provider.planned_calls(subject, context)
+                        ceiling = provider.max_planned_calls(subject, context)
+                        scan.calls_min += planned
+                        scan.calls_max += ceiling
+                        if ceiling:
+                            scan.per_provider[provider.name] = (
+                                scan.per_provider.get(provider.name, 0) + ceiling
+                            )
+        return scan
 
     # ------------------------------------------------------------- run
 
@@ -259,7 +300,9 @@ class BatchService:
         if item.subject is None:
             return None, None, "в карточке нет ни ФИО, ни номера договора"
         try:
-            report = await self._search.search(item.subject, telegram_user_id=item.telegram_user_id)
+            report = await self._search.search(
+                item.subject, telegram_user_id=item.telegram_user_id, batch=True
+            )
         except Exception as exc:
             logger.warning(
                 "batch.debtor_failed", debtor_id=item.debtor_id, error=type(exc).__name__
@@ -279,6 +322,16 @@ class DebtorSnapshot:
     debtor_id: int
     telegram_user_id: int
     subject: SearchSubject | None
+
+
+@dataclass(slots=True)
+class _Scan:
+    """Итог одного прохода по выгрузке."""
+
+    cached: int = 0
+    calls_min: int = 0
+    calls_max: int = 0
+    per_provider: dict[ProviderName, int] = dataclass_field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,6 +371,7 @@ def _subject_for(row: Debtor) -> SearchSubject | None:
         name=name,
         birth_date=row.birth_date,
         phone=row.phone,
+        inn=row.inn,
         contract_number=row.contract_number,
         claim_number=row.claim_number,
         debtor_id=row.external_debtor_id,

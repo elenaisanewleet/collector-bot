@@ -1,0 +1,44 @@
+{
+ "params": {
+  "method": "bankrot_person",
+  "country": "ru"
+ },
+ "requestId": "00000000-0000-4000-8000-000000000001",
+ "method": "",
+ "cost": 1,
+ "state": "complete",
+ "balance": 1,
+ "results": {
+  "bankrot_person": {
+   "result": {
+    "status": 200,
+    "data": [
+     {
+      "bankruptcy": [
+       {
+        "case_number": "А73-7992/2017",
+        "case_url": "https://fedresurs.ru/legalcases/7975d0c7-9c63-41b4-b649-cd17331c759e",
+        "status": "Производство по делу завершено"
+       }
+      ],
+      "commmon": {
+       "type": "person",
+       "name_or_fio": "Пыж Анна Викторовна",
+       "inn": "270392288605",
+       "reg_number_type": "ОГРНИП",
+       "reg_number": "323270000057022",
+       "activity": "Торговля розничная, осуществляемая непосредственно при помощи информационно-коммуникационной сети Интернет Код 47.91.2 Версия ОКВЭД ОК 029-2014",
+       "address": "",
+       "status": "Индивидуальный предприниматель прекратил деятельность в связи с принятием им соответствующего решения",
+       "details_url": "https://fedresurs.ru/persons/19f439eb-3f9c-4d9e-88f8-94704f04d2ca",
+       "snils": "106-556-061 42",
+       "birth_date": "27.01.1980",
+       "birth_place": "гор. Хабаровск",
+       "residential_address": "680054, г. Хабаровск, ул. Трехгорная, 56, кв. 4"
+      }
+     }
+    ]
+   }
+  }
+ }
+}

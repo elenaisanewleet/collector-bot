@@ -157,6 +157,7 @@ class ImportService:
             contract_number=row.contract_number,
             claim_number=row.claim_number,
             debt_amount=row.debt_amount,
+            inn=row.inn,
             address=row.address,
             vehicle_plate=row.vehicle_plate,
             vin=row.vin,

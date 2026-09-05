@@ -36,7 +36,7 @@ from app.domain.models import (
     RecoveryScore,
 )
 from app.logging_setup import get_logger
-from app.providers.base import BaseProvider
+from app.providers.base import NO_CONTEXT, BaseProvider, FetchContext
 from app.providers.internal.base import InternalDebtorProvider
 from app.providers.registry import ProviderRegistry
 from app.services.aggregation import Aggregator
@@ -53,7 +53,6 @@ _RECORDS_ADAPTER: TypeAdapter[list[FactRecord]] = TypeAdapter(list[FactRecord])
 # Records reached through an exact identifier are trusted at this level even
 # without a date of birth: the identifier is our own and unique.
 IDENTIFIER_MATCH_FLOOR = 0.95
-INTERNAL_TIMEOUT_MULTIPLIER = 2.0
 
 
 class SearchService:
@@ -94,9 +93,17 @@ class SearchService:
         *,
         telegram_user_id: int,
         force_refresh: bool = False,
+        batch: bool = False,
     ) -> DebtorReport:
-        """Run a full check and store it. Returns a cached report when fresh."""
+        """Run a full check and store it. Returns a cached report when fresh.
+
+        ``batch`` says this is one debtor out of a run, and it is not cosmetic:
+        sources priced per debtor read it to decide whether they may be called
+        at all, so that a run of eight hundred cannot quietly cost eight hundred
+        extra calls.
+        """
         query_hash = build_query_hash(subject)
+        context = FetchContext(batch=batch)
 
         if not force_refresh and self._settings.cache_enabled:
             cached = await self._load_cached(subject, query_hash)
@@ -109,10 +116,17 @@ class SearchService:
                 return cached
 
         internal_records = await self.lookup_internal(subject)
-        provider_results = await self._run_external(subject)
+        # Три источника — ЕГРИП, банкротство и арбитраж физлица — ищут только по
+        # ИНН физлица, и оператор его не вводит. Если он есть в нашей же
+        # карточке и карточка опознана уверенно, запрос идёт с ним. Ключ кэша
+        # считается до этого: он описывает запрос оператора, а не то, чем мы его
+        # дополнили.
+        enriched = _with_internal_inn(subject, internal_records)
+        provider_results = await self._run_external(enriched, context)
+        provider_results += await self._run_chained(enriched, provider_results, context)
 
         report = self._aggregator.build(
-            subject, provider_results, internal_records=internal_records
+            enriched, provider_results, internal_records=internal_records
         )
         report.recovery_score = self._score_engine.evaluate(report)
 
@@ -181,30 +195,63 @@ class SearchService:
             candidates.extend(await provider.find_by_address(subject.address))
         return candidates, False
 
-    async def _run_external(self, subject: SearchSubject) -> list[ProviderResult]:
-        """Query every external provider concurrently.
+    async def _run_external(
+        self, subject: SearchSubject, context: FetchContext
+    ) -> list[ProviderResult]:
+        """Query every directly-addressable provider concurrently.
 
         Concurrency is capped, each provider is wrapped in its own timeout, and
         every outcome — including a timeout — becomes a ``ProviderResult``. One
         slow source cannot delay or void the rest of the report.
+
+        Chained sources sit out this phase: their input is another source's
+        answer, so they cannot run beside it.
         """
-        providers = self._registry.external
+        providers = [item for item in self._registry.external if not item.is_chained]
         if not providers:
             return []
         results = await asyncio.gather(
-            *(self._guarded_fetch(provider, subject) for provider in providers)
+            *(self._guarded_fetch(provider, subject, context) for provider in providers)
         )
         return list(results)
 
+    async def _run_chained(
+        self,
+        subject: SearchSubject,
+        results: Sequence[ProviderResult],
+        context: FetchContext,
+    ) -> list[ProviderResult]:
+        """Second phase: sources fed by what the first phase found.
+
+        Only one source works this way today — arbitration of the companies the
+        debtor runs or owns, whose ИНН come out of the ФНС answer. It is still a
+        provider and still produces exactly one ``ProviderResult``, so the
+        report lists it beside the rest whether it ran, was switched off, or had
+        nothing to work with.
+        """
+        providers = [item for item in self._registry.external if item.is_chained]
+        if not providers:
+            return []
+        chained_context = FetchContext(batch=context.batch, upstream=tuple(results))
+        chained = await asyncio.gather(
+            *(self._guarded_fetch(provider, subject, chained_context) for provider in providers)
+        )
+        return list(chained)
+
     async def _guarded_fetch(
-        self, provider: BaseProvider, subject: SearchSubject
+        self,
+        provider: BaseProvider,
+        subject: SearchSubject,
+        context: FetchContext = NO_CONTEXT,
     ) -> ProviderResult:
         # A provider-level timeout on top of the HTTP timeout, so a provider that
-        # polls or retries still has a hard ceiling.
-        budget = self._settings.request_timeout_seconds * INTERNAL_TIMEOUT_MULTIPLIER
+        # polls or retries still has a hard ceiling. The ceiling is its own
+        # setting: derived from the single-request timeout it cut asynchronous
+        # methods off mid-poll, after the call had already been billed.
+        budget = self._settings.provider_budget_seconds
         async with self._semaphore:
             try:
-                return await asyncio.wait_for(provider.fetch(subject), timeout=budget)
+                return await asyncio.wait_for(provider.fetch(subject, context), timeout=budget)
             except TimeoutError:
                 logger.warning("provider.budget_exceeded", provider=provider.name.value)
                 return ProviderResult(
@@ -279,6 +326,7 @@ class SearchService:
                     status=ProviderStatus(row.provider_status),
                     fetched_at=row.fetched_at,
                     records=records,
+                    notes=_deserialize_notes(row.notes_json),
                     error_code=row.error_code,
                     error_message=row.error_message,
                     duration_ms=row.duration_ms,
@@ -309,6 +357,41 @@ def _deserialize_records(payload: str) -> list[FactRecord]:
     except ValidationError:
         logger.warning("cache.record_schema_mismatch")
         return []
+
+
+def _with_internal_inn(
+    subject: SearchSubject, records: Sequence[InternalDebtorRecord]
+) -> SearchSubject:
+    """Дополнить субъект ИНН из уверенно опознанной внутренней карточки.
+
+    Только при подтверждённом совпадении: подставить ИНН из «возможно, это он»
+    значит опросить платные источники про другого человека и вписать чужие дела
+    в отчёт.
+    """
+    if subject.inn:
+        return subject
+    inn = next(
+        (record.inn for record in records if record.is_confirmed and record.inn),
+        None,
+    )
+    return subject.model_copy(update={"inn": inn}) if inn else subject
+
+
+def _deserialize_notes(payload: str | None) -> tuple[str, ...]:
+    """Оговорки источника переживают кэш вместе с записями.
+
+    Потерять их — значит на повторе отчёта промолчать про предел цепочки и про
+    «разобрано 10 из 47», то есть выдать неполную проверку за полную.
+    """
+    if not payload:
+        return ()
+    try:
+        raw = json.loads(payload)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(item) for item in raw)
 
 
 def _dedupe_internal(records: Sequence[InternalDebtorRecord]) -> list[InternalDebtorRecord]:

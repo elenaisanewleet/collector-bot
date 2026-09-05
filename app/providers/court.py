@@ -14,6 +14,15 @@ proceeding that competes with ours.
 The method identifies a person by ИНН. Without one this provider reports
 "недостаточно данных" instead of searching by name — an arbitration case
 attached to the wrong person is a wrong reason to drop a debtor.
+
+The answer is a wrapper per subject, not a row per case: ``data[0]`` carries
+``total_count``, ``message``, ``pagination`` and two arrays — ``cases`` (the
+short list) and ``detailed_cases`` (the same cases with their card parsed). The
+map reads the second. The wrapper itself is read here, because two things in it
+decide whether an empty result may be reported as one: a non-empty ``cases``
+beside an empty ``detailed_cases`` means the vendor found cases and parsed none,
+and ``pagination.limit`` is 10, so a debtor with forty cases has thirty nobody
+looked at.
 """
 
 from __future__ import annotations
@@ -24,7 +33,8 @@ from typing import Any
 from app.domain.enums import CourtCaseRole, ProviderName, ProviderStatus
 from app.domain.identity import PersonName, SearchSubject
 from app.domain.models import CourtCase, ProviderResult
-from app.providers.mapping import as_text
+from app.providers.base import ProviderUnavailableError
+from app.providers.mapping import as_text, dig
 from app.providers.newdb import NewDBMethodProvider, individual_inn, inn_params
 from app.utils.dates import parse_date, utcnow
 from app.utils.hashing import normalize_token
@@ -32,6 +42,10 @@ from app.utils.money import parse_amount
 
 NEWDB_METHOD = "arbitr_person"
 MAX_RECORDS = 50
+
+# Ветки обёртки, проверенные на живом ответе.
+CASES_KEY = "cases"
+DETAILED_CASES_KEY = "detailed_cases"
 
 _DEFENDANT_TOKENS = frozenset({"ответчик", "defendant", "должник"})
 _PLAINTIFF_TOKENS = frozenset({"истец", "plaintiff", "заявитель", "взыскатель"})
@@ -72,18 +86,65 @@ class NewDBArbitrationProvider(NewDBMethodProvider):
                 "поиск по одному ФИО дал бы чужие дела"
             )
 
-        rows, raw = await self.rows_for(NEWDB_METHOD, inn_params(inn))
+        rows, containers, raw = await self.rows_and_containers(NEWDB_METHOD, inn_params(inn))
         parsed = [
             case
             for row in rows[:MAX_RECORDS]
             if (case := _to_case(row, subject=subject, searched_inn=inn)) is not None
         ]
+        if not parsed and _found_but_unparsed(containers):
+            raise ProviderUnavailableError(
+                "unexpected_schema",
+                "КАД вернул дела, но ни одно из них не разобрано — "
+                "пустой результат здесь означал бы «дел нет»",
+            )
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.SUCCESS if parsed else ProviderStatus.NO_RESULTS,
             records=list(parsed),
+            notes=_coverage_notes(containers, parsed=len(parsed)),
             raw_response=self.raw_for(raw),
         )
+
+    def planned_calls(self, subject: SearchSubject) -> int:
+        if not self.is_configured or individual_inn(subject) is None:
+            return 0
+        return 1
+
+
+def _found_but_unparsed(containers: Sequence[Any]) -> bool:
+    """The wrapper lists cases and the detailed array is empty."""
+    for container in containers:
+        if not isinstance(container, Mapping):
+            continue
+        listed = container.get(CASES_KEY)
+        detailed = container.get(DETAILED_CASES_KEY)
+        if isinstance(listed, list) and listed and not (detailed or []):
+            return True
+    return False
+
+
+def _coverage_notes(containers: Sequence[Any], *, parsed: int) -> tuple[str, ...]:
+    """«Разобрано N из M» — из полей самой обёртки.
+
+    Без этой строки усечённая страница выглядит как полный ответ: источник
+    отдаёт по десять дел за раз, и «дел больше нет» после десятого — это не то,
+    что он сказал.
+    """
+    notes: list[str] = []
+    for container in containers:
+        if not isinstance(container, Mapping):
+            continue
+        total = container.get("total_count")
+        has_more = dig(container, "pagination.has_more")
+        if isinstance(total, int) and total > parsed:
+            notes.append(
+                f"Источник нашёл дел: {total}, разобрано {parsed}. "
+                "По остальным сведений нет."
+            )
+        elif has_more is True:
+            notes.append("Источник отдал не все дела: следующая страница не запрашивалась.")
+    return tuple(dict.fromkeys(notes))
 
 
 def _to_case(

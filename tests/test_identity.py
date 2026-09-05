@@ -155,6 +155,30 @@ def test_company_name_is_not_matched_to_a_person(matcher: IdentityMatcher) -> No
     assert match_level_for(assessment.confidence) is not MatchLevel.CONFIRMED
 
 
+def test_company_inn_is_not_matched_against_the_person(matcher: IdentityMatcher) -> None:
+    """ИНН компании — десять цифр, ИНН должника — двенадцать.
+
+    Сравнивать их бессмысленно, а штраф за «несовпадение» стирал бы из отчёта
+    ровно ту компанию, ради которой источник и опрашивали: 0.25 − 0.05 − 0.35
+    даёт ноль, слабое совпадение и фильтр блока БИЗНЕС.
+    """
+    from app.domain.enums import BusinessRole, BusinessStatus, EntityType
+    from app.domain.models import BusinessRelation
+
+    record = BusinessRelation(
+        inn="9728012826",
+        name='ООО "СТАЛЬНОЕ СЕРДЦЕ"',
+        entity_type=EntityType.LEGAL_ENTITY,
+        role=BusinessRole.DIRECTOR,
+        status=BusinessStatus.ACTIVE,
+        linked_by_identifier=True,
+    )
+    assessment = matcher.assess(subject_for(birth_date=None, inn="770600089967"), record)
+
+    assert "ИНН не совпадает" not in assessment.reasons
+    assert match_level_for(assessment.confidence) is MatchLevel.CONFIRMED
+
+
 def test_annotate_applies_confidence_floor(matcher: IdentityMatcher) -> None:
     """A record found by contract number keeps its confidence even with no name."""
     record = make_proceeding(name=None, birth_date=None, confidence=0.0)

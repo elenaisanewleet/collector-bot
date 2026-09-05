@@ -15,6 +15,7 @@ from app.db.session import Database
 from app.domain.enums import ProviderName
 from app.logging_setup import get_logger
 from app.providers.base import BaseProvider
+from app.providers.arbitr_legal import NewDBLegalCasesProvider
 from app.providers.court import NewDBArbitrationProvider
 from app.providers.fedresurs import FedresursProvider, NewDBBankruptcyProvider
 from app.providers.fns import FNSProvider, NewDBBusinessProvider
@@ -27,6 +28,7 @@ from app.providers.internal.db_provider import DatabaseInternalDebtorProvider
 from app.providers.mock import build_demo_providers
 from app.providers.newdb import NewDBFieldMaps
 from app.providers.pledge import NewDBPledgeProvider
+from app.providers.property import NewDBPropertyProvider
 from app.providers.vehicle import UnconfiguredVehicleProvider
 
 logger = get_logger(__name__)
@@ -96,8 +98,16 @@ def build_internal_provider(settings: Settings, database: Database) -> InternalD
     return CompositeInternalDebtorProvider(sources)
 
 
-def build_external_providers(settings: Settings) -> list[BaseProvider]:
-    """Choose demo or live adapters, then append the not-yet-connected sources."""
+def build_external_providers(
+    settings: Settings, database: Database | None = None
+) -> list[BaseProvider]:
+    """Choose demo or live adapters, then append the not-yet-connected sources.
+
+    ``database`` is needed by one source only: the chain over the debtor's
+    companies caches by company ИНН rather than by subject, so two debtors from
+    one holding do not pay for the same answer twice. Without it the chain still
+    works and simply pays each time.
+    """
     providers: list[BaseProvider] = []
 
     if settings.app_mode is AppMode.DEMO:
@@ -114,6 +124,11 @@ def build_external_providers(settings: Settings) -> list[BaseProvider]:
         # act on ("опишите метод в NEWDB_FIELD_MAP").
         providers.append(NewDBPledgeProvider(settings, field_maps))
         providers.append(NewDBArbitrationProvider(settings, field_maps))
+        # Разбираются кодом по живому ответу, поэтому гейт у них — настройка, а
+        # не запись в карте. Выключенные, они отвечают NOT_CONFIGURED и говорят,
+        # какой именно флаг это включает.
+        providers.append(NewDBPropertyProvider(settings, field_maps))
+        providers.append(NewDBLegalCasesProvider(settings, field_maps, database=database))
 
     providers.append(UnconfiguredVehicleProvider())
     providers.extend(build_future_providers(exclude={provider.name for provider in providers}))
@@ -143,7 +158,7 @@ def _fns_provider(settings: Settings, field_maps: NewDBFieldMaps) -> BaseProvide
 def build_registry(settings: Settings, database: Database) -> ProviderRegistry:
     registry = ProviderRegistry(
         internal=build_internal_provider(settings, database),
-        external=build_external_providers(settings),
+        external=build_external_providers(settings, database),
     )
     logger.info(
         "providers.ready",

@@ -83,6 +83,7 @@ class InternalDebtorRecord(SourcedFact):
     contract_number: str | None = None
     claim_number: str | None = None
     debt_amount: Decimal | None = None
+    inn: str | None = None
     address: str | None = None
     vehicle_plate: str | None = None
     vin: str | None = None
@@ -156,10 +157,23 @@ class BusinessRelation(SourcedFact):
     role: BusinessRole = BusinessRole.OTHER
     registration_date: date | None = None
     termination_date: date | None = None
+    # ЕГРЮЛ уже отдал этот признак в том же оплаченном ответе. Для взыскателя
+    # он стоит отдельного вызова: банкротство компании при должнике-директоре —
+    # это повод проверить субсидиарную ответственность.
+    bankruptcy_flag: bool = False
+    # Связь получена в ответ на запрос по идентификатору должника (его ИНН), а
+    # не по одному ФИО. Для юрлица это единственное доступное основание:
+    # название ООО не является именем человека, и сопоставлять их не с чем.
+    # Компания, найденная по ФИО, остаётся возможной однофамильческой.
+    linked_by_identifier: bool = False
 
     @property
     def is_active(self) -> bool:
         return self.status is BusinessStatus.ACTIVE
+
+    @property
+    def is_legal_entity(self) -> bool:
+        return self.entity_type is EntityType.LEGAL_ENTITY
 
     @property
     def is_active_sole_proprietor(self) -> bool:
@@ -241,14 +255,88 @@ class VehicleRecord(SourcedFact):
 
 
 class PropertyRecord(SourcedFact):
+    """Объект недвижимости по известному нам адресу или кадастровому номеру.
+
+    Это запись **об объекте**, а не об имуществе должника. ЕГРН сведения о
+    правах конкретного лица выдаёт только самому лицу, суду и приставу, поэтому
+    правообладателя в ответе нет: живой ответ показывает четыре записи о правах
+    и ни одного ФИО. Отсюда :attr:`owner_confirmed`, которое этот источник
+    никогда не выставляет в ``True``.
+    """
+
     kind: Literal["property"] = "property"
     provider: ProviderName = ProviderName.PROPERTY
 
     property_type: str | None = None
     cadastral_number: str | None = None
     address: str | None = None
+    # Осталось ради записей, уже сохранённых в БД; rosreestr его не заполняет —
+    # долей в ответе может быть несколько, и они лежат в ``shares``.
     share: str | None = None
     encumbrances: tuple[str, ...] = Field(default_factory=tuple)
+
+    area: str | None = None
+    cadastral_cost: Decimal | None = None
+    cost_date: date | None = None
+    registered_at: date | None = None
+    cancelled_at: date | None = None
+    rights_count: int = 0
+    shares: tuple[str, ...] = Field(default_factory=tuple)
+    right_types: tuple[str, ...] = Field(default_factory=tuple)
+    # Пустой массив обременений в ответе — это проверено и чисто; отсутствие
+    # ответа — это не проверено. Различать их без флага нечем.
+    encumbrances_checked: bool = False
+    # Несущее поле: принадлежность объекта должнику. Источник его не
+    # подтверждает, поэтому оно остаётся False, и скоринг смотрит именно сюда.
+    owner_confirmed: bool = False
+
+
+class LegalEntityCase(SourcedFact):
+    """Арбитражное дело компании, в которой должник — руководитель или участник.
+
+    Факт о компании, а не о человеке. Матчинг по ФИО к нему неприменим, и блок
+    отчёта его по совпадению не фильтрует: дело ООО заведомо не пройдёт
+    сопоставление с физлицом, а отбросить его значило бы оплатить находку и
+    промолчать о ней.
+
+    Имущество ООО не является имуществом участника (ст. 25 ФЗ-14, ст. 74
+    ФЗ-229): обороты компании — это оценка стоимости доли, а не активы должника.
+    """
+
+    kind: Literal["legal_case"] = "legal_case"
+    provider: ProviderName = ProviderName.COURT_LEGAL
+
+    # ИНН компании ставится кодом — тем, по которому шёл вызов. В разборе
+    # карточки ``parties.debtor.inn`` лежит ИНН процессуального оппонента, и
+    # запись, взявшая ИНН оттуда, привязалась бы к постороннему юрлицу.
+    company_inn: str
+    company_name: str | None = None
+    company_role: BusinessRole = BusinessRole.OTHER
+    company_bankruptcy_flag: bool = False
+
+    case_number: str
+    court_name: str | None = None
+    status: str | None = None
+    is_closed: bool = False
+    case_role: CourtCaseRole = CourtCaseRole.OTHER
+    opponent_name: str | None = None
+    opponent_inn: str | None = None
+    amount: Decimal | None = None
+    enforcement_signal: bool = False
+    personal_asset_risk: str | None = None
+    risk_factors: tuple[str, ...] = Field(default_factory=tuple)
+
+    # Оговорка «разобрано N из M» по одной компании.
+    total_count: int | None = None
+    analyzed_count: int | None = None
+
+    @property
+    def is_active(self) -> bool:
+        return not self.is_closed
+
+    @property
+    def is_claim_against_company(self) -> bool:
+        return self.case_role is CourtCaseRole.DEFENDANT
 
 
 FactRecord = Annotated[
@@ -257,6 +345,7 @@ FactRecord = Annotated[
     | BankruptcyRecord
     | BusinessRelation
     | CourtCase
+    | LegalEntityCase
     | PledgeRecord
     | VehicleRecord
     | PropertyRecord,
@@ -277,6 +366,11 @@ class ProviderResult(BaseModel):
     status: ProviderStatus
     fetched_at: datetime = Field(default_factory=utcnow)
     records: list[FactRecord] = Field(default_factory=list)
+    # Оговорки самого источника: «разобрано 10 из 47», «проверено 3 компании из
+    # 7 — остальные не проверялись». Они сохраняются вместе с результатом и
+    # переживают кэш: предел, о котором отчёт умолчал после перезапуска, — это
+    # та же инверсия, только отложенная.
+    notes: tuple[str, ...] = Field(default_factory=tuple)
     error_code: str | None = None
     error_message: str | None = None
     duration_ms: int = 0
@@ -330,6 +424,7 @@ class DebtorReport(BaseModel):
     bankruptcies: list[BankruptcyRecord] = Field(default_factory=list)
     business_relations: list[BusinessRelation] = Field(default_factory=list)
     court_cases: list[CourtCase] = Field(default_factory=list)
+    legal_entity_cases: list[LegalEntityCase] = Field(default_factory=list)
     pledges: list[PledgeRecord] = Field(default_factory=list)
     vehicles: list[VehicleRecord] = Field(default_factory=list)
     properties: list[PropertyRecord] = Field(default_factory=list)

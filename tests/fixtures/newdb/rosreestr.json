@@ -1,0 +1,140 @@
+{
+ "params": {
+  "method": "rosreestr",
+  "country": "ru"
+ },
+ "requestId": "00000000-0000-4000-8000-000000000001",
+ "method": "",
+ "cost": 1,
+ "state": "complete",
+ "balance": 1,
+ "results": {
+  "rosreestr": {
+   "result": {
+    "status": 200,
+    "data": [
+     {
+      "objectId": null,
+      "databaseName": null,
+      "regionKey": null,
+      "cadNumber": "64:47:040605:229",
+      "cadQuarter": "64:47:040605",
+      "status": "1",
+      "objType": "002001003000",
+      "area": "49.50",
+      "address": {
+       "region": "Саратовская область",
+       "district": null,
+       "city": "Ртищево",
+       "cityType": "г",
+       "urbanDistrict": null,
+       "urbanDistrictType": null,
+       "sovietVillage": null,
+       "sovietVillageType": null,
+       "locality": null,
+       "localityType": null,
+       "street": "Красная",
+       "streetType": "ул",
+       "house": "22",
+       "houseType": "д",
+       "building": null,
+       "buildingType": null,
+       "structure": null,
+       "structureType": null,
+       "apartment": "10",
+       "apartmentType": "кв",
+       "liter": "А",
+       "addition": null,
+       "address": null,
+       "readableAddress": "Саратовская область, г Ртищево, ул Красная, д 22, кв 10",
+       "fiasGuid": null
+      },
+      "regDate": "05.07.2012",
+      "cancelDate": null,
+      "rights": [
+       {
+        "rightType": "001002000000",
+        "rightRegDate": "13.03.2015",
+        "rightNumber": "64-64/015-64/015/011/2015-208/4",
+        "part": "1/5",
+        "ownershipType": "01",
+        "rightTypeDesc": "Общая долевая собственность",
+        "sharedOwnershipType": true
+       },
+       {
+        "rightType": "001002000000",
+        "rightRegDate": "22.05.2015",
+        "rightNumber": "64-64/015-64/015/018/2015-595/3",
+        "part": "2/5",
+        "ownershipType": "01",
+        "rightTypeDesc": "Общая долевая собственность",
+        "sharedOwnershipType": true
+       },
+       {
+        "rightType": "001002000000",
+        "rightRegDate": "13.03.2015",
+        "rightNumber": "64-64/015-64/015/011/2015-208/5",
+        "part": "1/5",
+        "ownershipType": "01",
+        "rightTypeDesc": "Общая долевая собственность",
+        "sharedOwnershipType": true
+       },
+       {
+        "rightType": "001002000000",
+        "rightRegDate": "13.03.2015",
+        "rightNumber": "64-64/015-64/015/011/2015-208/6",
+        "part": "1/5",
+        "ownershipType": "01",
+        "rightTypeDesc": "Общая долевая собственность",
+        "sharedOwnershipType": true
+       }
+      ],
+      "encumbrances": [],
+      "oldNumbers": [
+       {
+        "numType": "Инвентарный номер",
+        "numValue": "63:241:001:003152330:А:10010"
+       },
+       {
+        "numType": "Иной номер",
+        "numValue": "3315"
+       }
+      ],
+      "landCategory": null,
+      "permittedUse": null,
+      "permittedUseByDoc": null,
+      "cadCost": "1444067.96",
+      "cadCostDate": null,
+      "cadCostDeterminationDate": "01.01.2023",
+      "cadCostRegistrationDate": "27.12.2023",
+      "infoUpdateDate": "01.12.2025",
+      "cadEngFIO": null,
+      "cadEngCertNumber": null,
+      "cadEngPhone": null,
+      "floor": null,
+      "undergroundFloor": null,
+      "levelFloor": "04",
+      "ownershipType": null,
+      "oksWallMaterial": null,
+      "oksCommisioningYear": null,
+      "oksYearBuild": null,
+      "purpose": "206002000000",
+      "childCadNumbers": null,
+      "parentCadNumber": null,
+      "mainCharacters": [
+       {
+        "code": "05",
+        "description": "Площадь",
+        "value": 49.5,
+        "unitCode": "012002001000",
+        "unitDescription": "кв.м"
+       }
+      ],
+      "objType_text": "Помещение",
+      "purpose_text": "Жилое"
+     }
+    ]
+   }
+  }
+ }
+}

@@ -69,6 +69,14 @@ STATE_COMPLETE = "complete"
 STATE_FAILED = "failed"
 PENDING_STATES = frozenset({"queued", "in_progress", "restart"})
 
+# ``result.status`` — HTTP-код источника, стоящего за агрегатором, и он лежит
+# РЯДОМ с ``data``, а не внутри неё. Все 29 снятых живьём нормальных ответов
+# несут 200; недоступность ГУВМ приходит как 500 с ``data`` из одной строки, а
+# неразобранный адрес — как 500 с пустой ``data``. Последнее и есть заготовка
+# инверсии: пустой список при упавшем источнике читался бы как «объект не
+# найден». Гейт по 200 закрывает это для всех методов сразу.
+UPSTREAM_OK = 200
+
 # The service reports a bad key and an empty balance through one message; both
 # are actionable by the operator and neither is retryable.
 AUTH_ERROR_MARKERS = ("токен", "token", "баланс", "balance", "x-api-key")
@@ -147,7 +155,7 @@ class NewDBClient:
             raise ProviderUnavailableError(
                 "unexpected_schema", "Ответ NewDB не содержит поля state"
             )
-        return await self._poll(client, method, payload, retry)
+        return await self._poll(client, method, payload, retry, _progress_of(envelope, method))
 
     async def _poll(
         self,
@@ -155,6 +163,7 @@ class NewDBClient:
         method: str,
         payload: Mapping[str, Any],
         retry: RetryPolicy,
+        previous: _Progress,
     ) -> tuple[Any, str]:
         """Re-POST the same requestId until the task settles or the budget ends."""
         for _attempt in range(self._settings.newdb_poll_attempts):
@@ -165,6 +174,16 @@ class NewDBClient:
                 return envelope, raw
             if state == STATE_FAILED:
                 raise _failure_error(envelope)
+
+            progress = _progress_of(envelope, method)
+            if progress.stalled_after(previous):
+                # Живьём это выглядит так: ``restart`` по кругу, ``dateupdated``
+                # замер, а внутри уже лежит терминальная ошибка источника. Ждать
+                # дальше нечего — вызов оплачен, и единственное, что ещё можно
+                # спасти, это диагностику: «ГУВМ лежит», «адрес не разобран».
+                logger.info("newdb.stalled_restart", method=method, status=progress.result_status)
+                raise ProviderUnavailableError("upstream_error", progress.failure_message)
+            previous = progress
 
         logger.info(
             "newdb.poll_timeout", method=method, attempts=self._settings.newdb_poll_attempts
@@ -197,8 +216,59 @@ def _build_payload(method: str, params: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _state_of(envelope: Any) -> str:
+    """Normalized task state.
+
+    The live service answers ``"in progress"`` with a space where the
+    specification writes ``in_progress``. Inside the polling loop the difference
+    was harmless; on the *first* response it sent a perfectly healthy request
+    into ``unexpected_schema``. Normalizing here makes the two one state.
+    """
     state = as_text(dig(envelope, "state"))
-    return state.lower() if state else ""
+    return state.lower().replace(" ", "_") if state else ""
+
+
+def _result_node(envelope: Any, method: str) -> Any:
+    return dig(envelope, f"results.{method}.result")
+
+
+def _result_status(envelope: Any, method: str) -> int | None:
+    status = dig(_result_node(envelope, method), "status")
+    return status if isinstance(status, int) else None
+
+
+@dataclass(frozen=True, slots=True)
+class _Progress:
+    """What one poll saw: whether the task moved, and what the source said."""
+
+    updated_at: str | None
+    result_status: int | None
+    result_error: str | None
+
+    @property
+    def is_terminal_failure(self) -> bool:
+        return self.result_status is not None and self.result_status != UPSTREAM_OK
+
+    @property
+    def failure_message(self) -> str:
+        reason = f" ({self.result_error})" if self.result_error else ""
+        return f"Источник ответил {self.result_status}{reason}"
+
+    def stalled_after(self, previous: _Progress) -> bool:
+        """A repeat of the same terminal error with no movement since last time."""
+        return (
+            self.is_terminal_failure
+            and self.updated_at is not None
+            and self.updated_at == previous.updated_at
+        )
+
+
+def _progress_of(envelope: Any, method: str) -> _Progress:
+    node = _result_node(envelope, method)
+    return _Progress(
+        updated_at=as_text(dig(envelope, f"results.{method}.dateupdated")),
+        result_status=_result_status(envelope, method),
+        result_error=as_text(dig(node, "error")),
+    )
 
 
 def _errors_info(envelope: Any) -> list[Mapping[str, Any]]:
@@ -238,8 +308,17 @@ def _extract_rows(envelope: Any, method: str) -> list[Any]:
     """Read the rows of a completed envelope.
 
     A missing result path on a ``complete`` envelope is a schema problem, not an
-    empty result, and is reported as such.
+    empty result, and is reported as such. So is a non-200 ``result.status``:
+    that is the source behind the aggregator refusing to answer, and the empty
+    ``data`` that comes with it means "we did not look", never "nothing found".
     """
+    status = _result_status(envelope, method)
+    if status is not None and status != UPSTREAM_OK:
+        error = as_text(dig(_result_node(envelope, method), "error"))
+        raise ProviderUnavailableError(
+            "upstream_error",
+            f"Источник ответил {status}" + (f" ({error})" if error else ""),
+        )
     path = result_data_path(method)
     rows = dig(envelope, path)
     if rows is None:
@@ -516,10 +595,37 @@ class NewDBMethodProvider(BaseProvider):
     def is_configured(self) -> bool:
         return self._settings.newdb_configured and bool(self.mapped_methods)
 
+    async def raw_rows_for(
+        self, method: str, *param_sets: Mapping[str, Any]
+    ) -> tuple[list[Any], str]:
+        """Run a method whose rows this code parses itself.
+
+        Used where a field map cannot express the answer: two arrays in
+        different branches of one object, or an array of dictionaries where the
+        map can only dig out scalars. The rule of the project still holds — code
+        may encode only what has been read against a live response.
+        """
+        response = await self._client.call(method, *param_sets)
+        return response.rows, response.raw
+
     async def rows_for(
         self, method: str, *param_sets: Mapping[str, Any]
     ) -> tuple[list[RecordDict], str]:
-        """Run one mapped method and return its rows as flat domain-key dicts.
+        """Run one mapped method and return its rows as flat domain-key dicts."""
+        records, _containers, raw = await self.rows_and_containers(method, *param_sets)
+        return records, raw
+
+    async def rows_and_containers(
+        self, method: str, *param_sets: Mapping[str, Any]
+    ) -> tuple[list[RecordDict], list[Any], str]:
+        """Mapped rows **plus the containers they were read out of**.
+
+        Half the methods answer with a container per subject, and the container
+        carries things the map cannot see: how many records the source claims to
+        have, and sibling branches the map does not read. A provider that only
+        ever sees the mapped rows cannot tell "the register is clean" from "the
+        answer had thirteen notice URLs and not one parsed notice" — which is
+        exactly the case a live response produced.
 
         ``extra_params`` from the map wins over the subject-derived parameters:
         it exists precisely for a deployment whose contract wants something
@@ -544,7 +650,7 @@ class NewDBMethodProvider(BaseProvider):
                 unreadable=mapped.unreadable,
                 parsed=len(mapped.records),
             )
-        return mapped.records, response.raw
+        return mapped.records, response.rows, response.raw
 
     def raw_for(self, raw: str) -> str | None:
         return raw if self._settings.store_raw_responses else None
@@ -559,6 +665,7 @@ __all__ = [
     "NewDBFieldMaps",
     "NewDBMethodProvider",
     "NewDBResponse",
+    "UPSTREAM_OK",
     "individual_inn",
     "inn_params",
     "person_params",
