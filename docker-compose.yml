@@ -10,12 +10,6 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    # Куда публиковать веб-отчёты. По умолчанию только на петлевой адрес: на
-    # рабочей машине наружу торчать незачем. На сервере значение задаётся в
-    # .env (WEB_BIND=0.0.0.0:80), и правка живёт там же, где остальные
-    # настройки, — иначе следующий rsync снова снесёт проброс порта.
-    ports:
-      - "${WEB_BIND:-127.0.0.1:8080}:8080"
     environment:
       # Keep the database on the mounted volume rather than in the container.
       DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/var/collector_bot.db}
@@ -25,10 +19,15 @@ services:
       WEB_HOST: 0.0.0.0
       WEB_PORT: ${WEB_PORT:-8080}
     ports:
-      # Только на петлю хоста: снаружи страницу публикует reverse-proxy с TLS.
-      # Отдать 8080 в мир по http означает ссылку с персданными и токеном
-      # открытым текстом.
-      - "127.0.0.1:${WEB_PORT:-8080}:8080"
+      # По умолчанию только на петлю хоста: снаружи страницу публикует
+      # reverse-proxy с TLS. Отдать порт в мир по http означает ссылку с
+      # персданными и токеном открытым текстом.
+      #
+      # WEB_BIND переопределяет адрес и порт публикации — он нужен ровно на
+      # время, пока домен и сертификат не подняты, и задаётся в .env на
+      # сервере, а не правкой этого файла: правка здесь переживёт ровно до
+      # следующей выкладки.
+      - "${WEB_BIND:-127.0.0.1:${WEB_PORT:-8080}}:8080"
     volumes:
       - bot-data:/app/var
       # Drop customer exports here to import them without rebuilding.
