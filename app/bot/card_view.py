@@ -72,29 +72,73 @@ NOT_ASKED = "Это «не спрашивали», а не «не найдено
 #: ничего».
 NEXT_LABEL = "Дальше"
 
-#: Сам вопрос, одной строкой и повелительным наклонением. Не «Телефон» с
-#: пояснением, что с ним делать, — а прямо то, что нужно сделать.
-STEP_TITLES: dict[str, str] = {
+#: Сам вопрос — одной строкой и повелительным наклонением, для каждого поля.
+#: Не «Телефон» с пояснением, зачем он нужен, а прямо то, что надо сделать.
+#: Один вопрос на экран: «напишите что вы знаете» и сводка всех полей разом —
+#: ровно то, на что жаловались.
+ASK_TITLES: dict[str, str] = {
     Field.PHONE.value: "Напишите номер телефона.",
     Field.LAST_NAME.value: "Напишите фамилию.",
     Field.FIRST_NAME.value: "Напишите имя.",
+    Field.MIDDLE_NAME.value: "Напишите отчество.",
+    Field.FIO.value: "Напишите фамилию, имя и отчество.",
+    Field.BIRTH_DATE.value: "Напишите дату рождения.",
+    Field.INN.value: "Напишите ИНН.",
+    Field.PASSPORT.value: "Напишите серию и номер паспорта.",
+    Field.AUTO.value: "Напишите госномер или VIN.",
+    Field.CONTRACT.value: "Напишите номер договора или заявки.",
+    Field.ADDRESS.value: "Напишите адрес.",
 }
 
-#: Пример показывается на каждом шаге: «везде показывается пример как заполнять,
-#: но ты можешь просто нажать дальше».
+#: Пример на каждом экране: «везде показывается пример как заполнять, но ты
+#: можешь просто нажать дальше».
 #:
-#: Телефон нарочно без плюса, скобок и дефисов. Номер принимается в любой записи
-#: — это проверено шестью формами одного номера, — и показывать образец с
-#: разделителями значит намекать на формат, которого нет. Оператор набирает
-#: одиннадцать цифр подряд, и именно так пример и выглядит.
-STEP_EXAMPLES: dict[str, str] = {
+#: Телефон нарочно без плюса, скобок и дефисов. Номер принимается в любой
+#: записи — это проверено шестью формами одного номера, — и образец с
+#: разделителями намекал бы на формат, которого нет.
+ASK_EXAMPLES: dict[str, str] = {
     Field.PHONE.value: "89160000000",
     Field.LAST_NAME.value: "Клочкова",
     Field.FIRST_NAME.value: "Елена",
+    Field.MIDDLE_NAME.value: "Николаевна",
+    Field.FIO.value: "Клочкова Елена Николаевна",
+    Field.BIRTH_DATE.value: "24.11.1994",
+    Field.INN.value: "770123456789",
+    Field.PASSPORT.value: "4510 123456",
+    Field.AUTO.value: "А123ВС777",
+    Field.CONTRACT.value: "ЭВ-2026/000082",
+    Field.ADDRESS.value: "Москва, Дмитровское шоссе, 27, кв. 20",
 }
 
-STEP_HEAD = "{title}"
-STEP_EXAMPLE = "Например: {example}"
+#: Короткое имя поля для фраз вроде «уточните фамилию». Отдельно от вопроса:
+#: «Уточните напишите фамилию.» — не по-русски.
+ASK_NOUNS: dict[str, str] = {
+    Field.PHONE.value: "телефон",
+    Field.LAST_NAME.value: "фамилию",
+    Field.FIRST_NAME.value: "имя",
+    Field.MIDDLE_NAME.value: "отчество",
+    Field.FIO.value: "ФИО",
+    Field.BIRTH_DATE.value: "дату рождения",
+    Field.INN.value: "ИНН",
+    Field.PASSPORT.value: "паспорт",
+    Field.AUTO.value: "госномер или VIN",
+    Field.CONTRACT.value: "номер договора",
+    Field.ADDRESS.value: "адрес",
+}
+
+#: Короткая оговорка под вопросом — только там, где она меняет поведение
+#: человека. Паспорт и телефон это персональные данные, и то, что бот их не
+#: хранит, надо сказать ДО ввода, а не в справке. Остальным полям такой строки
+#: не положено: приписка к каждому вопросу — снова полотно.
+ASK_NOTES: dict[str, str] = {
+    Field.PASSPORT.value: "Номер не сохраняю и сообщение удалю.",
+    Field.PHONE.value: "Номер не сохраняю, только маску.",
+}
+
+ASK_EXAMPLE = "Например: {example}"
+ASK_SKIPPABLE = "Не знаете — «Пропустить»."
+#: На трёх основных шагах кнопка называется «Дальше», на доборе поля —
+#: «Пропустить». Подпись в тексте обязана совпадать с подписью на кнопке.
 STEP_SKIPPABLE = f"Не знаете — «{NEXT_LABEL}»."
 
 #: Опознали в выгрузке ровно одного — вопросов больше нет.
@@ -323,48 +367,47 @@ def _text(
     conflict: PersonName | None,
     store_sensitive: bool,
 ) -> str:
-    step = card.step
-    if step is not None:
-        # На шаге — только вопрос, и ничего больше. Сводка всех полей рядом с
-        # вопросом давала экран, где три строки подряд повторяли «жду — Фамилия
-        # Имя Отчество», а под ними висели прочерки полей, которых никто не
-        # спрашивал. Ровно на это и жаловались: «огромное сообщение, где надо всё
-        # ввести». Собранное показывается позже, в карточке, где оно уместно.
-        step_lines: list[str] = []
+    """Текст карточки. Пока чего-то ждём — только вопрос, и ничего больше.
+
+    Сводка всех полей рядом с вопросом и была тем «полотном»: она печатала
+    прочерки полей, которых никто не спрашивал, три одинаковые строки «жду —
+    Фамилия Имя Отчество» подряд и телефон вместе с оговоркой, что телефон не
+    хранится. Собранное показывается одной строкой сверху, полная карточка — на
+    экране без вопроса, где ей и место.
+    """
+    # Конфликт имён и разбор десяти цифр — тоже вопросы, но со своими
+    # вариантами ответа, поэтому у каждого свой короткий текст.
+    if conflict is not None:
+        return "\n".join(
+            [
+                CONFLICT.format(current=_current_name(card), incoming=conflict.full),
+                CONFLICT_WHY,
+            ]
+        )
+
+    if card.awaiting_field == _AWAITING_TEN:
+        return "\n".join([TEN_QUESTION.format(digits=card.pending_ten or ""), TEN_WHY])
+
+    pending = card.step.value if card.step is not None else card.awaiting_field
+    if pending:
+        lines: list[str] = []
         # Одной строкой — то, что уже принято. Без неё оператор набирает фамилию
-        # и получает в ответ следующий вопрос, никак не подтверждающий, что
-        # предыдущий ответ вообще дошёл. Строка короткая и только про
-        # заполненное: прочерки полей, которых не спрашивали, и были той самой
-        # простынёй.
+        # и получает следующий вопрос, ничем не подтверждающий, что предыдущий
+        # ответ дошёл.
         collected = _collected(card)
         if collected:
-            step_lines.extend((collected, ""))
+            lines.extend((collected, ""))
         if notice:
-            step_lines.extend((notice, ""))
-        step_lines.extend(_step_lines(step))
-        return "\n".join(step_lines)
+            lines.extend((notice, ""))
+        skip_label = NEXT_LABEL if card.step is not None else "Пропустить"
+        lines.extend(_ask_lines(pending, skip_label=skip_label))
+        return "\n".join(lines)
 
     lines = [_head(card), ""]
     lines.extend(_rows(card))
     lines.append("")
-
-    if conflict is not None:
-        lines.append(CONFLICT.format(current=_current_name(card), incoming=conflict.full))
-        lines.append(CONFLICT_WHY)
-        return "\n".join(lines)
-
-    if card.awaiting_field == _AWAITING_TEN:
-        lines.append(TEN_QUESTION.format(digits=card.pending_ten or ""))
-        lines.append(TEN_WHY)
-        return "\n".join(lines)
-
     if notice:
         lines.extend((notice, ""))
-
-    if card.awaiting_field:
-        lines.append(_hint(card.awaiting_field, store_sensitive=store_sensitive))
-        return "\n".join(lines)
-
     lines.append(DASH_MEANING)
     lines.append("")
     lines.extend(_coverage_lines(card, registry))
@@ -374,20 +417,31 @@ def _text(
     return "\n".join(lines)
 
 
-def _step_lines(step: Field) -> list[str]:
-    """Один шаг: как называется, пример, зачем и что «Дальше» тоже ответ.
+def _ask_lines(field_name: str, *, skip_label: str) -> list[str]:
+    """Один вопрос: что написать, пример и что можно не писать.
 
-    Пример и «Дальше» стоят на каждом шаге без исключений. Это дословное
-    требование, и оно про доверие: оператор, который не знает, можно ли
-    пропустить, впишет что-нибудь наугад — и карточка получит мусор вместо
-    прочерка, то есть «не нашли» вместо «не спрашивали».
+    Экран один и тот же и для трёх основных шагов, и для добора поля кнопкой.
+    Раньше это были два разных рендера: шаг спрашивал коротко, а добор поля
+    печатал всю сводку карточки плюс абзац-объяснение — «Телефон: +7 (985)
+    ***-**-45 — сам номер не храню, пришлите заново», три одинаковые строки
+    «жду — Фамилия Имя Отчество» и прочерки полей, которых никто не спрашивал.
+    Один вопрос на экран значит один вопрос на экран, из какой бы двери в него
+    ни вошли.
+
+    Пример и «пропустить» стоят всегда. Это про доверие: оператор, не знающий,
+    можно ли пропустить, впишет что-нибудь наугад — и карточка получит мусор
+    вместо прочерка, то есть «не нашли» вместо «не спрашивали».
     """
-    return [
-        STEP_HEAD.format(title=STEP_TITLES[step.value]),
+    lines = [
+        ASK_TITLES.get(field_name, "Напишите значение."),
         "",
-        STEP_EXAMPLE.format(example=STEP_EXAMPLES[step.value]),
-        STEP_SKIPPABLE,
+        ASK_EXAMPLE.format(example=ASK_EXAMPLES.get(field_name, "")),
+        f"Не знаете — «{skip_label}».",
     ]
+    note = ASK_NOTES.get(field_name)
+    if note:
+        lines.extend(("", note))
+    return lines
 
 
 def _menu_lines(card: Card, registry: ProviderRegistry) -> list[str]:

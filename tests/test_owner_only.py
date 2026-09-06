@@ -370,7 +370,8 @@ async def test_start_keeps_the_batch_button_for_the_owner(
 ) -> None:
     await feed(dispatcher, bot, message=make_message("/start", user_id=OPERATOR_ID))
 
-    assert "batch:start" in callbacks(sent)
+    # Инлайн-меню на приветствии убрано: у сообщения бывает либо инлайн, либо
+    # нижняя клавиатура, и второе сообщение с объяснением интерфейса ушло.
     keyboard = next(markup for markup in sent.markups if getattr(markup, "keyboard", None))
     labels = [button.text for row in keyboard.keyboard for button in row]
     assert BUTTON_BATCH in labels

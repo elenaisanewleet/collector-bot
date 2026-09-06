@@ -259,7 +259,7 @@ def _ambiguous(found: card_identify.Identified, card: Card) -> str | None:
     step = card.step
     if step is None:
         return f"{head} {card_view.FOUND_MANY_STUCK}"
-    asked = card_view.STEP_TITLES[step.value].lower()
+    asked = card_view.ASK_NOUNS[step.value]
     return f"{head} {card_view.FOUND_MANY_ASK.format(field=asked)}"
 
 

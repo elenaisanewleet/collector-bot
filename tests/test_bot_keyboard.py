@@ -20,11 +20,11 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import ReplyKeyboardMarkup
 
-from app.bot.handlers.start import KEYBOARD_HINT
 from app.bot.keyboards import (
     BUTTON_BATCH,
     BUTTON_HELP,
     BUTTON_HISTORY,
+    BUTTON_MORE,
     BUTTON_SEARCH,
     BUTTON_SOURCES,
     MENU_MORE,
@@ -63,7 +63,7 @@ def test_keyboard_holds_between_three_and_five_buttons() -> None:
 
     # Две: проверить человека и проверить всю базу. Было пять, и четыре из них
     # повторяли инлайн-меню — это и назвали «кучей кнопок».
-    assert labels == [BUTTON_SEARCH, BUTTON_BATCH]
+    assert labels == [BUTTON_SEARCH, BUTTON_BATCH, BUTTON_MORE]
 
 
 # Всё, что человек может набрать с русской или английской раскладки. Значок в
@@ -118,24 +118,26 @@ async def test_start_delivers_the_keyboard(
     assert len(keyboards) == 1
     # Не весь REPLY_BUTTONS: там остались подписи снятых кнопок — они ещё висят
     # у тех, кто не нажимал /start после сокращения, и обработчики им нужны.
-    assert _labels(keyboards[0]) == [BUTTON_SEARCH, BUTTON_BATCH]
-    # И сказано, что это такое: «нажми туда» без «туда» — половина подсказки.
-    assert sent.contains(KEYBOARD_HINT)
+    assert _labels(keyboards[0]) == [BUTTON_SEARCH, BUTTON_BATCH, BUTTON_MORE]
+    # Одним сообщением: отдельная строка «внизу постоянные кнопки» объясняла
+    # интерфейс вместо того, чтобы работать, и была вторым экраном на /start.
+    assert len(sent.texts) == 1
 
 
 async def test_the_welcome_keeps_its_inline_menu(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """У сообщения не бывает обеих клавиатур сразу, и инлайн-меню важнее.
+    """У сообщения не бывает обеих клавиатур сразу, и выбрана нижняя.
 
-    Поэтому нижняя приезжает следующим сообщением, а не вместо приветственного
-    меню: там десять пунктов, из которых в нижние кнопки влезло пять.
+    Раньше на приветствии висело инлайн-меню, а нижняя клавиатура приезжала
+    вторым сообщением с объяснением, что это такое. Пунктов в меню осталось
+    три, и все три влезли вниз — второе сообщение стало ни к чему.
     """
     await feed(dispatcher, bot, message=make_message("/start"))
 
     first = sent.markups[0]
-    assert first is not None
-    assert not isinstance(first, ReplyKeyboardMarkup)
+    assert isinstance(first, ReplyKeyboardMarkup)
+    assert len(sent.texts) == 1
 
 
 async def test_the_keyboard_is_sent_once_per_start(

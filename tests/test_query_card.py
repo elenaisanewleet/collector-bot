@@ -441,7 +441,7 @@ async def test_a_different_surname_is_never_merged_silently(
     await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
 
     assert "другой человек или исправление?" in last(sent)
-    assert "Фамилия: Петров" in last(sent)
+    assert "Петров Пётр Петрович" in last(sent)
     assert "Это исправление" in buttons(sent)
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:keep"))
@@ -562,7 +562,7 @@ async def test_an_old_report_button_pours_its_subject_into_the_card(
 
     assert "Фамилия: Тестов" in last(sent)
     assert "Дата рождения: 12.03.1985" in last(sent)
-    assert "ИНН: жду — 12 цифр" in last(sent)
+    assert "Напишите ИНН." in last(sent)
 
     await feed(dispatcher, bot, message=make_message("770912345601"))
     row = await card_of(container)

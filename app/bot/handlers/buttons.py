@@ -39,12 +39,15 @@ from app.bot.handlers.help import send_help
 from app.bot.handlers.history import send_history
 from app.bot.handlers.query_card import start_person_card
 from app.bot.handlers.sources import send_sources
+from app.bot.handlers.start import CHOOSE_OTHER
 from app.bot.keyboards import (
     BUTTON_BATCH,
     BUTTON_HELP,
     BUTTON_HISTORY,
+    BUTTON_MORE,
     BUTTON_SEARCH,
     BUTTON_SOURCES,
+    more_menu,
 )
 from app.container import Container
 
@@ -84,6 +87,12 @@ def build_router() -> Router:
         """
         await reset_state(state)
         await start_person_card(message, container, user_id)
+
+    @router.message(F.text == BUTTON_MORE)
+    async def press_more(message: Message, container: Container, user_id: int) -> None:
+        """Редкие способы поиска. Состояние не трогаем: это чтение меню."""
+        owner = container.access_service.is_owner(user_id)
+        await message.answer(CHOOSE_OTHER, reply_markup=more_menu(owner=owner))
 
     @router.message(F.text == BUTTON_HISTORY)
     async def press_history(

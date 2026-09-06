@@ -13,7 +13,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aiogram.types import FSInputFile, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    FSInputFile,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardMarkup,
+)
 
 from app.logging_setup import get_logger
 
@@ -35,7 +40,10 @@ def banner_available() -> bool:
 
 
 async def send_welcome(
-    message: Message, text: str, *, reply_markup: InlineKeyboardMarkup | None = None
+    message: Message,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
 ) -> None:
     """Приветствие с баннером, а без баннера — то же приветствие текстом."""
     photo = _photo()

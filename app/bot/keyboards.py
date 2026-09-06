@@ -71,6 +71,7 @@ BUTTON_SEARCH = "Проверить человека"
 BUTTON_HISTORY = "История проверок"
 BUTTON_SOURCES = "Откуда данные"
 BUTTON_HELP = "Как это работает"
+BUTTON_MORE = "Другие способы поиска"
 
 # Нижняя клавиатура — только две кнопки, и это осознанное сокращение: всё, что
 # читают один раз, ушло в меню. Остальные подписи остаются здесь, потому что
@@ -78,6 +79,7 @@ BUTTON_HELP = "Как это работает"
 REPLY_BUTTONS: tuple[str, ...] = (
     BUTTON_SEARCH,
     BUTTON_BATCH,
+    BUTTON_MORE,
     BUTTON_HISTORY,
     BUTTON_SOURCES,
     BUTTON_HELP,
@@ -110,12 +112,18 @@ def main_reply_keyboard(*, owner: bool) -> ReplyKeyboardMarkup:
     и виден только владельцу: кнопка, которая отвечает «нельзя», — обещание,
     которого бот не держит, а нажимают её первой.
 
+    Третьей — дверь к редким способам поиска. Она здесь, а не в инлайн-меню,
+    потому что инлайн-меню на приветствии убрано: у сообщения бывает либо
+    инлайн-клавиатура, либо нижняя, и ради нижней уходило второе сообщение с
+    объяснением интерфейса. Один экран вместо двух, и ничего не потеряно.
+
     ``owner`` без значения по умолчанию намеренно: забытый аргумент должен
     ломаться на mypy, а не показывать чужую кнопку живому человеку.
     """
     rows = [[KeyboardButton(text=BUTTON_SEARCH)]]
     if owner:
         rows.append([KeyboardButton(text=BUTTON_BATCH)])
+    rows.append([KeyboardButton(text=BUTTON_MORE)])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,

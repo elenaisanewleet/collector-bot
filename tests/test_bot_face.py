@@ -78,7 +78,11 @@ async def test_start_sends_the_banner_with_the_menu(
     path, caption = sent.photos[0]
     assert path.endswith("welcome.jpg")
     assert caption is not None
-    assert container.settings.app_name in caption
+    # Названия приложения в приветствии нет: «Collector Bot» латиницей над
+    # русским текстом ничего не сообщает — имя бота Telegram печатает в шапке
+    # чата сам.
+    assert container.settings.app_name not in caption
+    assert "стоит ли тратить пошлину" in caption
     assert sent.markups[0] is not None
 
 

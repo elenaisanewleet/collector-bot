@@ -39,7 +39,8 @@ async def test_start_shows_the_main_menu(
 ) -> None:
     await feed(dispatcher, bot, message=make_message("/start"))
 
-    assert sent.contains(container.settings.app_name)
+    # Название приложения убрано: латиница над русским текстом на первом экране.
+    assert not sent.contains(container.settings.app_name)
     # Приветствие говорит, что делать, а не описывает себя, и укладывается в
     # одно действие: нажать кнопку и прислать телефон.
     assert sent.contains("Нажмите «Проверить человека»")
@@ -204,7 +205,7 @@ async def test_the_phone_has_its_own_button_and_opens_nothing_external(
     assert "+ Телефон" in buttons(sent)
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:phone"))
-    assert sent.contains("Во внешние реестры он не уходит")
+    assert sent.contains("Напишите номер телефона")
 
     await feed(dispatcher, bot, message=make_message("+7 916 123 45 67"))
     # В карточку едет маска, полный номер — только в память процесса.
@@ -617,9 +618,9 @@ async def test_the_passport_button_masks_the_number_and_feeds_the_bridge(
     await collect_and_run(dispatcher, bot)
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:passport"))
 
-    assert sent.contains("Серия и номер паспорта, 10 цифр")
-    assert sent.contains("номер не сохраняю")
-    assert sent.contains("Ваше сообщение с номером я удалю")
+    assert sent.contains("Напишите серию и номер паспорта")
+    assert sent.contains("Номер не сохраняю")
+    assert sent.contains("сообщение удалю")
 
     await feed(dispatcher, bot, message=make_message("4509123456"))
     assert not sent.contains("4509123456")
@@ -660,7 +661,7 @@ async def test_adding_an_inn_reruns_with_a_different_query_hash(
     before = next(iter(container.subject_store._items.values()))[0]
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:inn"))
-    assert sent.contains("ИНН физлица")
+    assert sent.contains("Напишите ИНН")
 
     await feed(dispatcher, bot, message=make_message("770912345601"))
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
