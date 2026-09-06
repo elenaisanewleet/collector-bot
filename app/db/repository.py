@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, Select, delete, func, select, update
+from sqlalchemy import CursorResult, Select, and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -468,19 +468,27 @@ class ShareLinkRepository:
         found: ShareLink | None = await self._session.scalar(stmt)
         return found
 
-    async def find_for_target(self, kind: str, target_id: int) -> ShareLink | None:
-        """Действующая ссылка на тот же отчёт — чтобы не плодить новые."""
-        stmt = (
-            select(ShareLink)
-            .where(
-                ShareLink.kind == kind,
-                ShareLink.target_id == target_id,
-                ShareLink.expires_at > utcnow(),
-                ShareLink.revoked_at.is_(None),
-            )
-            .order_by(ShareLink.created_at.desc())
-            .limit(1)
-        )
+    async def find_for_target(
+        self, kind: str, target_id: int, *, telegram_user_id: int | None = None
+    ) -> ShareLink | None:
+        """Действующая ссылка на тот же отчёт — чтобы не плодить новые.
+
+        ``telegram_user_id`` обязателен везде, где ссылку собираются
+        переиспользовать: кэш отчётов общий на всех операторов, поэтому второй
+        сотрудник, проверивший того же должника, получал ссылку, выданную
+        первому, — и своей командой ``/revoke`` погасить её не мог. Без
+        оператора (``None``) метод отвечает на другой вопрос — «жива ли вообще
+        хоть одна ссылка на эту цель».
+        """
+        conditions = [
+            ShareLink.kind == kind,
+            ShareLink.target_id == target_id,
+            ShareLink.expires_at > utcnow(),
+            ShareLink.revoked_at.is_(None),
+        ]
+        if telegram_user_id is not None:
+            conditions.append(ShareLink.telegram_user_id == telegram_user_id)
+        stmt = select(ShareLink).where(*conditions).order_by(ShareLink.created_at.desc()).limit(1)
         found: ShareLink | None = await self._session.scalar(stmt)
         return found
 
@@ -492,18 +500,27 @@ class ShareLinkRepository:
         link.last_opened_at = utcnow()
         await self._session.flush()
 
-    async def revoke(self, *, kind: str, target_id: int) -> int:
-        """Погасить все живые ссылки на один отчёт или прогон."""
+    async def revoke(
+        self, *, kind: str, target_id: int, telegram_user_id: int | None = None
+    ) -> int:
+        """Погасить живые ссылки на один отчёт или прогон.
+
+        ``telegram_user_id`` сужает отзыв до ссылок этого оператора. Считаются и
+        гасятся только непросроченные: иначе бот отчитывался бы «отозвано 1» за
+        адрес, который и так уже не открывался.
+        """
+        conditions = [
+            ShareLink.kind == kind,
+            ShareLink.target_id == target_id,
+            ShareLink.revoked_at.is_(None),
+            ShareLink.expires_at > utcnow(),
+        ]
+        if telegram_user_id is not None:
+            conditions.append(ShareLink.telegram_user_id == telegram_user_id)
         result = cast(
             "CursorResult[Any]",
             await self._session.execute(
-                update(ShareLink)
-                .where(
-                    ShareLink.kind == kind,
-                    ShareLink.target_id == target_id,
-                    ShareLink.revoked_at.is_(None),
-                )
-                .values(revoked_at=utcnow())
+                update(ShareLink).where(*conditions).values(revoked_at=utcnow())
             ),
         )
         return result.rowcount or 0
@@ -524,10 +541,73 @@ class ShareLinkRepository:
         )
         return result.rowcount or 0
 
+    async def live_targets(self, *, telegram_user_id: int) -> list[tuple[str, int]]:
+        """Цели, на которые у оператора сейчас есть живые ссылки."""
+        stmt = (
+            select(ShareLink.kind, ShareLink.target_id)
+            .where(
+                ShareLink.telegram_user_id == telegram_user_id,
+                ShareLink.revoked_at.is_(None),
+                ShareLink.expires_at > utcnow(),
+            )
+            .distinct()
+        )
+        rows = await self._session.execute(stmt)
+        return [(kind, target_id) for kind, target_id in rows.all()]
+
+    async def count_live_of_others(
+        self, targets: Sequence[tuple[str, int]], *, telegram_user_id: int
+    ) -> int:
+        """Сколько живых ссылок на те же цели выдано другим операторам.
+
+        Нужно, чтобы ответ на ``/revoke`` не врал: свои адреса погашены, а отчёт
+        всё ещё открывается по ссылке коллеги, и человек об этом обязан узнать
+        от бота, а не от того, кому эта ссылка попадёт.
+        """
+        if not targets:
+            return 0
+        same_target = or_(
+            *(
+                and_(ShareLink.kind == kind, ShareLink.target_id == target_id)
+                for kind, target_id in targets
+            )
+        )
+        stmt = (
+            select(func.count())
+            .select_from(ShareLink)
+            .where(
+                same_target,
+                ShareLink.telegram_user_id != telegram_user_id,
+                ShareLink.revoked_at.is_(None),
+                ShareLink.expires_at > utcnow(),
+            )
+        )
+        return await self._session.scalar(stmt) or 0
+
     async def purge_expired(self) -> int:
         result = cast(
             "CursorResult[Any]",
             await self._session.execute(delete(ShareLink).where(ShareLink.expires_at <= utcnow())),
+        )
+        return result.rowcount or 0
+
+    async def purge_orphaned_reports(self, *, kind: str) -> int:
+        """Убрать ссылки, за которыми уже нет отчёта.
+
+        Ретеншен удаляет историю проверок, но ссылки на неё оставлял: строка
+        живёт до конца TTL и всё это время хранит связку «оператор → какой
+        отчёт он смотрел» — ровно ту карту доступа, которую ретеншен отчитался
+        удалившей. Открыть по такой ссылке уже нечего, так что гасить её нечем,
+        кроме удаления.
+        """
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                delete(ShareLink).where(
+                    ShareLink.kind == kind,
+                    ShareLink.target_id.not_in(select(SearchRequest.id)),
+                )
+            ),
         )
         return result.rowcount or 0
 

@@ -40,6 +40,24 @@ class ShareTarget:
     target_id: int
 
 
+@dataclass(frozen=True, slots=True)
+class RevokeOutcome:
+    """Итог отзыва.
+
+    Двух чисел, а не одного, потому что «отозвано ноль» и «отозвано ноль, а
+    отчёт всё ещё открывается» — разные новости, и вторую человек обязан
+    услышать: отзыв здесь единственная аварийная кнопка, и уйти после неё с
+    верой в мёртвую ссылку хуже, чем не нажать её вовсе.
+
+    ``left_to_others`` — живые ссылки на те же отчёты, выданные другим
+    операторам. Погасить их этот человек не может: у каждого свой адрес, и
+    чужой не он пересылал.
+    """
+
+    revoked: int
+    left_to_others: int = 0
+
+
 class ShareLinkService:
     def __init__(self, settings: Settings, database: Database) -> None:
         self._settings = settings
@@ -54,11 +72,18 @@ class ShareLinkService:
     ) -> str | None:
         """Выдать ссылку. ``None`` — если веб-отчёты выключены.
 
-        По умолчанию переиспользует действующую ссылку на тот же отчёт: иначе
-        каждое открытие плодило бы новый адрес, и отозвать их все стало бы
-        нечем. Явный перевыпуск (``reuse=False``) сначала гасит старую — иначе
-        «выдать новую и забыть прежнюю» не работало бы, а именно этого от
-        перевыпуска и ждут.
+        По умолчанию переиспользует действующую ссылку этого же оператора на
+        тот же отчёт: иначе каждое открытие плодило бы новый адрес, и отозвать
+        их все стало бы нечем. Явный перевыпуск (``reuse=False``) сначала гасит
+        старую — иначе «выдать новую и забыть прежнюю» не работало бы, а именно
+        этого от перевыпуска и ждут.
+
+        Именно «этого же оператора». Кэш отчётов общий: второй сотрудник,
+        проверивший того же должника, попадал в кэш, нового запроса не
+        появлялось, и бот присылал ему ссылку, выданную первому. Пересланная не
+        туда, она не гасилась его ``/revoke`` — тот честно не находил ни одной
+        своей ссылки и отвечал «отзывать нечего». Своя ссылка у каждого — и есть
+        то, что делает аварийную кнопку рабочей.
         """
         if not self.enabled:
             return None
@@ -70,11 +95,17 @@ class ShareLinkService:
             # хранить её вечно незачем.
             purged = await repo.purge_expired()
             if reuse:
-                existing = await repo.find_for_target(target.kind.value, target.target_id)
+                existing = await repo.find_for_target(
+                    target.kind.value, target.target_id, telegram_user_id=telegram_user_id
+                )
                 if existing is not None:
                     return self.url_for(existing.token, target.kind)
             else:
-                await repo.revoke(kind=target.kind.value, target_id=target.target_id)
+                await repo.revoke(
+                    kind=target.kind.value,
+                    target_id=target.target_id,
+                    telegram_user_id=telegram_user_id,
+                )
             link = await repo.create(
                 token=secrets.token_urlsafe(TOKEN_BYTES),
                 kind=target.kind.value,
@@ -134,11 +165,18 @@ class ShareLinkService:
             )
             return link
 
-    async def revoke(self, target: ShareTarget, *, telegram_user_id: int) -> int:
-        """Погасить ссылки на один отчёт. Возвращает, сколько закрыто."""
+    async def revoke(self, target: ShareTarget, *, telegram_user_id: int) -> RevokeOutcome:
+        """Погасить свои ссылки на один отчёт."""
         async with self._database.session() as session:
             repo = ShareLinkRepository(session)
-            count = await repo.revoke(kind=target.kind.value, target_id=target.target_id)
+            count = await repo.revoke(
+                kind=target.kind.value,
+                target_id=target.target_id,
+                telegram_user_id=telegram_user_id,
+            )
+            others = await repo.count_live_of_others(
+                [(target.kind.value, target.target_id)], telegram_user_id=telegram_user_id
+            )
             if count:
                 await AuditRepository(session).record(
                     telegram_user_id=telegram_user_id,
@@ -146,13 +184,21 @@ class ShareLinkService:
                     entity_id=f"{target.kind.value}:{target.target_id}",
                     detail=f"links:{count}",
                 )
-        logger.info("share.revoked", kind=target.kind.value, count=count)
-        return count
+        logger.info("share.revoked", kind=target.kind.value, count=count, others=others)
+        return RevokeOutcome(revoked=count, left_to_others=others)
 
-    async def revoke_all(self, *, telegram_user_id: int) -> int:
-        """Погасить все живые ссылки оператора."""
+    async def revoke_all(self, *, telegram_user_id: int) -> RevokeOutcome:
+        """Погасить все живые ссылки оператора.
+
+        Чужие ссылки на те же отчёты не трогает — их пересылал не он, и у
+        коллеги за таким адресом может стоять уже отправленный юристу отчёт. Но
+        и молчать о них нельзя: считаются они до отзыва своих, потому что после
+        отличить «моя» от «чужой» в отчёте уже не по чему.
+        """
         async with self._database.session() as session:
             repo = ShareLinkRepository(session)
+            targets = await repo.live_targets(telegram_user_id=telegram_user_id)
+            others = await repo.count_live_of_others(targets, telegram_user_id=telegram_user_id)
             count = await repo.revoke_all(telegram_user_id=telegram_user_id)
             if count:
                 await AuditRepository(session).record(
@@ -160,5 +206,5 @@ class ShareLinkService:
                     action="share.revoked_all",
                     detail=f"links:{count}",
                 )
-        logger.info("share.revoked_all", user_id=telegram_user_id, count=count)
-        return count
+        logger.info("share.revoked_all", user_id=telegram_user_id, count=count, others=others)
+        return RevokeOutcome(revoked=count, left_to_others=others)

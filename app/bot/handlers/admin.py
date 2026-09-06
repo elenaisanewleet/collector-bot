@@ -101,16 +101,27 @@ def build_router() -> Router:
 
         Сценарий ровно один и он бытовой: переслал не туда. До этой команды
         утёкшая ссылка жила до конца TTL, и сделать с ней было нечего.
+
+        Ответ обязан совпадать с тем, что произошло, вплоть до чужих ссылок на
+        те же отчёты: уйти отсюда с верой в мёртвый адрес, который жив, — хуже,
+        чем не нажимать кнопку вовсе.
         """
-        count = await container.share_service.revoke_all(telegram_user_id=user_id)
-        if not count:
-            await message.answer("Действующих ссылок нет — отзывать нечего.")
-            return
-        noun = pluralize_ru(count, "ссылка", "ссылки", "ссылок")
-        await message.answer(
-            f"Отозвано {count} {noun}. Старые адреса больше не открываются — "
-            "запросите отчёт заново, бот выдаст новый."
-        )
+        outcome = await container.share_service.revoke_all(telegram_user_id=user_id)
+        if outcome.revoked:
+            noun = pluralize_ru(outcome.revoked, "ссылка", "ссылки", "ссылок")
+            lines = [
+                f"Отозвано {outcome.revoked} {noun}. Старые адреса больше не открываются — "
+                "запросите отчёт заново, бот выдаст новый."
+            ]
+        else:
+            lines = ["Действующих ссылок нет — отзывать нечего."]
+        if outcome.left_to_others:
+            lines.append(
+                "Но на те же отчёты действуют ссылки других сотрудников: "
+                f"{outcome.left_to_others}. Эти адреса продолжают открываться — "
+                "отозвать их может только тот, кому их выдал бот."
+            )
+        await message.answer("\n\n".join(lines))
 
     @router.message(Command("audit"))
     async def handle_audit(message: Message, container: Container) -> None:
