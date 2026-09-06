@@ -23,8 +23,9 @@ from app.providers.internal.csv_schema import (
     CsvFormatError,
     DebtorRow,
     RowError,
+    TotalsRow,
     decode_csv_bytes,
-    iter_rows,
+    read_table,
 )
 from app.providers.internal.xlsx import (
     LEGACY_XLS_MESSAGE,
@@ -38,6 +39,59 @@ from app.utils.masking import mask_phone
 logger = get_logger(__name__)
 
 MAX_REPORTED_ERRORS = 5
+# Сколько номеров строк показываем в примере к однотипному замечанию.
+MAX_REPORTED_LINES = 3
+
+
+@dataclass(slots=True)
+class _Group:
+    """Однотипные замечания: текст без конкретного значения — и все строки."""
+
+    sample: str
+    line_numbers: list[int] = field(default_factory=list)
+
+
+def _split_message(message: str) -> tuple[str, str]:
+    """Разделить замечание на вид и конкретное значение.
+
+    «birth_date: не распознана дата «31.02.1980»» — это вид «не распознана
+    дата»; иначе каждое кривое значение образовало бы свою группу, и триста
+    испорченных дат снова выглядели бы как пять разных мелочей.
+    """
+    kind, separator, detail = message.partition(" «")
+    return (kind, "«" + detail) if separator else (message, "")
+
+
+def _render_groups(groups: dict[str, _Group]) -> list[str]:
+    """Однотипные замечания — одной строкой со счётчиком.
+
+    Показ первых пяти замечаний без счётчика врал: потеря телефона у трёхсот
+    должников выглядела как пять мелких придирок. Частое идёт первым — именно
+    оно означает, что сломана колонка, а не строка.
+    """
+    lines: list[str] = []
+    ordered = sorted(groups.items(), key=lambda item: (-len(item[1].line_numbers), item[0]))
+    for kind, group in ordered[:MAX_REPORTED_ERRORS]:
+        line_numbers = group.line_numbers
+        if len(line_numbers) == 1:
+            lines.append(f"строка {line_numbers[0]}: {kind} {group.sample}".rstrip())
+            continue
+        if group.sample:
+            example = f"строка {line_numbers[0]}: {group.sample}"
+        else:
+            listed = ", ".join(str(number) for number in line_numbers[:MAX_REPORTED_LINES])
+            example = f"строки {listed}"
+        lines.append(f"{kind} — строк: {len(line_numbers)} (например, {example})")
+    hidden = len(ordered) - MAX_REPORTED_ERRORS
+    if hidden > 0:
+        lines.append(f"…и ещё видов замечаний: {hidden}")
+    return lines
+
+
+def _remember(groups: dict[str, _Group], line_number: int, message: str) -> None:
+    kind, sample = _split_message(message)
+    group = groups.setdefault(kind, _Group(sample=sample))
+    group.line_numbers.append(line_number)
 
 
 @dataclass(slots=True)
@@ -50,13 +104,42 @@ class ImportReport:
     updated: int = 0
     skipped: int = 0
     failed: int = 0
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
+    # Итоговые строки отчёта 1С: не должники и не ошибки.
+    ignored_totals: int = 0
+    # Заголовки, содержимое которых не импортировано. Главная строка отчёта:
+    # словарь синонимов всегда неполон, и продукт обязан назвать, чего он не
+    # понял, — иначе выброшенное ФИО читается как «300 строк, 0 ошибок».
+    unknown_columns: list[str] = field(default_factory=list)
+    # Строки, схлопнутые в одну запись при несовпадающих данных: вероятные
+    # однофамильцы, а не дубли.
+    collapsed_conflicts: list[str] = field(default_factory=list)
+    # Замечания к файлу целиком: имя листа, итоговые строки, вторые колонки.
+    notes: list[str] = field(default_factory=list)
+    error_groups: dict[str, _Group] = field(default_factory=dict)
+    warning_groups: dict[str, _Group] = field(default_factory=dict)
 
     def add_error(self, line_number: int, message: str) -> None:
         self.failed += 1
-        if len(self.errors) < MAX_REPORTED_ERRORS:
-            self.errors.append(f"строка {line_number}: {message}")
+        _remember(self.error_groups, line_number, message)
+
+    def add_warning(self, line_number: int, message: str) -> None:
+        _remember(self.warning_groups, line_number, message)
+
+    @property
+    def warning_count(self) -> int:
+        return len(self.notes) + sum(
+            len(group.line_numbers) for group in self.warning_groups.values()
+        )
+
+    @property
+    def errors(self) -> list[str]:
+        return _render_groups(self.error_groups)
+
+    @property
+    def warnings(self) -> list[str]:
+        # Замечания по файлу идут первыми и не обрезаются: их единицы, и каждое
+        # говорит, что импорт принял решение за оператора.
+        return [*self.notes, *_render_groups(self.warning_groups)]
 
 
 class ImportService:
@@ -85,7 +168,7 @@ class ImportService:
             # В книге обычно несколько листов, и выбор делаем мы, а не оператор.
             # Молчаливый выбор — способ импортировать справочник вместо выгрузки
             # и не узнать об этом; название листа делает выбор проверяемым.
-            report.warnings.insert(0, f"прочитан лист «{sheet.name}»")
+            report.notes.insert(0, f"прочитан лист «{sheet.name}»")
             return report
         text = decode_csv_bytes(payload)
         return await self.import_text(text, telegram_user_id=telegram_user_id)
@@ -100,8 +183,20 @@ class ImportService:
         report = ImportReport()
         # Rows are collected before touching the database so a format error in
         # the header fails the whole file cleanly, before any partial write.
-        parsed: list[DebtorRow] = []
-        for line_number, item in iter_rows(text):
+        table = read_table(text)
+        report.unknown_columns = list(table.header.unknown)
+        for label in table.header.duplicates:
+            report.notes.append(f"колонка {label} — импортирована только первая")
+
+        totals_lines: list[int] = []
+        parsed: list[tuple[int, DebtorRow]] = []
+        for line_number, item in table.rows:
+            if isinstance(item, TotalsRow):
+                # Итоговая строка отчёта — не должник: как запись она завышала
+                # счётчик импортированных и уезжала в массовый прогон.
+                report.ignored_totals += 1
+                totals_lines.append(line_number)
+                continue
             report.total_rows += 1
             if report.total_rows > self._settings.max_import_rows:
                 report.add_error(line_number, "превышен лимит строк на импорт")
@@ -109,9 +204,17 @@ class ImportService:
             if isinstance(item, RowError):
                 report.add_error(line_number, item.message)
                 continue
-            if item.warnings and len(report.warnings) < MAX_REPORTED_ERRORS:
-                report.warnings.append(f"строка {line_number}: {'; '.join(item.warnings)}")
-            parsed.append(item)
+            for warning in item.warnings:
+                # Каждое замечание — отдельно, иначе однотипные не группируются.
+                report.add_warning(line_number, warning)
+            parsed.append((line_number, item))
+
+        if totals_lines:
+            example = ", ".join(str(number) for number in totals_lines[:MAX_REPORTED_LINES])
+            label = "строка" if len(totals_lines) == 1 else "строки"
+            report.notes.append(
+                f"итоговых строк отчёта пропущено: {report.ignored_totals} ({label} {example})"
+            )
 
         await self._store(parsed, report)
 
@@ -122,7 +225,8 @@ class ImportService:
                     action="import.csv",
                     detail=(
                         f"всего {report.total_rows}, импортировано {report.imported}, "
-                        f"пропущено {report.skipped}, ошибок {report.failed}"
+                        f"пропущено {report.skipped}, ошибок {report.failed}, "
+                        f"нераспознанных колонок {len(report.unknown_columns)}"
                     ),
                 )
 
@@ -132,24 +236,35 @@ class ImportService:
             imported=report.imported,
             skipped=report.skipped,
             failed=report.failed,
+            unknown_columns=len(report.unknown_columns),
         )
         return report
 
-    async def _store(self, rows: list[DebtorRow], report: ImportReport) -> None:
+    async def _store(self, rows: list[tuple[int, DebtorRow]], report: ImportReport) -> None:
         if not rows:
             return
         # Collapse duplicates inside the file itself first, so the last
         # occurrence wins deterministically rather than by insertion race.
-        deduped: dict[str, DebtorRow] = {}
-        for row in rows:
+        deduped: dict[str, tuple[int, DebtorRow]] = {}
+        for line_number, row in rows:
             key = row.dedup_key
-            if key in deduped:
+            previous = deduped.get(key)
+            if previous is not None:
                 report.skipped += 1
-            deduped[key] = row
+                if not row.debtor_id and previous[1].comparable != row.comparable:
+                    # Одинаковый составной ключ при разных данных — почти всегда
+                    # тёзки, а не повтор. «Пропущено: 1» об этом не говорит, а в
+                    # суд с чужими производствами идти нельзя. Совпадение по
+                    # коду должника сюда не относится: это ключ самого заказчика.
+                    report.collapsed_conflicts.append(
+                        f"строки {previous[0]} и {line_number}: "
+                        f"«{row.full_name or row.contract_number}»"
+                    )
+            deduped[key] = (line_number, row)
 
         async with self._database.session() as session:
             repo = DebtorRepository(session)
-            for key, row in deduped.items():
+            for key, (_line_number, row) in deduped.items():
                 _, created = await repo.upsert(self._to_model(row, key))
                 report.imported += 1
                 if created:

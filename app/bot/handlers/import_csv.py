@@ -38,9 +38,15 @@ ASK_DOCUMENT = (
     "Обязательна хотя бы одна из: fio или contract_number.\n"
     "Подойдёт выгрузка из 1С как есть: лишние колонки не мешают, "
     "названия распознаются по-русски, шапка может быть не первой строкой.\n"
+    "Колонки, названия которых распознать не удалось, будут перечислены в отчёте.\n"
     "CSV — в кодировке UTF-8 или Windows-1251."
 )
 NOT_A_DOCUMENT = "Нужно отправить файл документом (не фото и не текстом)."
+# Выгрузка 1С — это под сотню колонок, из которых нам нужны единицы. Перечень
+# нераспознанных обрезаем, но всегда с числом: важно не «какие именно», а
+# «сколько и есть ли среди них нужная».
+MAX_LISTED_COLUMNS = 12
+MAX_LISTED_COLLAPSES = 5
 WRONG_TYPE = "Похоже, это не выгрузка. Ожидается файл Excel (.xlsx) или CSV."
 DOWNLOAD_FAILED = "Не удалось скачать файл. Попробуйте ещё раз."
 
@@ -67,6 +73,15 @@ async def _download(message: Message, document: Document) -> bytes | None:
     return buffer.read()
 
 
+def _listing(items: list[str], limit: int) -> list[str]:
+    """Список с обрезкой, но без потери счёта: хвост назван числом."""
+    lines = [f"• {item}" for item in items[:limit]]
+    hidden = len(items) - limit
+    if hidden > 0:
+        lines.append(f"• …и ещё {hidden}")
+    return lines
+
+
 def render_import_report(report: ImportReport) -> str:
     lines = [
         "Импорт завершён.",
@@ -79,13 +94,35 @@ def render_import_report(report: ImportReport) -> str:
     if report.created or report.updated:
         lines.append("")
         lines.append(f"Новых записей: {report.created}, обновлено: {report.updated}")
+    if report.unknown_columns:
+        # Самый важный раздел отчёта. Выгрузка 1С называет колонки как угодно, и
+        # непонятая колонка раньше исчезала молча: файл без распознанного ФИО
+        # импортировался как «300 строк, 0 ошибок», а проверки по человеку потом
+        # выдавали пустые разделы — «не проверено», неотличимое от «чисто».
+        lines.append("")
+        lines.append(
+            f"Не распознаны колонки ({len(report.unknown_columns)}) — "
+            "данные из них не импортированы:"
+        )
+        lines.extend(_listing(report.unknown_columns, MAX_LISTED_COLUMNS))
+        lines.append(
+            "Если среди них есть ФИО, договор, телефон, ИНН или сумма долга — "
+            "переименуйте колонку и пришлите файл снова."
+        )
+    if report.collapsed_conflicts:
+        lines.append("")
+        lines.append(
+            f"Объединены строки с одинаковым ФИО без даты рождения и договора "
+            f"({len(report.collapsed_conflicts)}) — проверьте, не однофамильцы ли это:"
+        )
+        lines.extend(_listing(report.collapsed_conflicts, MAX_LISTED_COLLAPSES))
     if report.errors:
         lines.append("")
-        lines.append("Ошибочные строки:")
+        lines.append(f"Ошибочные строки (всего {report.failed}):")
         lines.extend(f"• {item}" for item in report.errors)
     if report.warnings:
         lines.append("")
-        lines.append("Предупреждения:")
+        lines.append(f"Предупреждения (всего {report.warning_count}):")
         lines.extend(f"• {item}" for item in report.warnings)
     return "\n".join(lines)
 

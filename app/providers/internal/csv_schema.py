@@ -5,12 +5,20 @@ currency symbols, and some rows are simply broken. The rules here are permissive
 about shape and strict about identity — a row is accepted when it carries at
 least a name or a contract number, and rejected otherwise, because a row with
 neither cannot be matched to anything.
+
+Второе правило такое же жёсткое: разбор шапки ничего не выбрасывает молча.
+Колонка, которой нет в словаре синонимов, попадает в :class:`HeaderMapping` и
+дальше в отчёт оператору. Иначе выгрузка с колонкой «ФИО должника» вместо «ФИО»
+импортируется как «300 строк, 0 ошибок» — без имён, и разделы по человеку в
+отчёте для суда окажутся пустыми, то есть «не проверено» прочитается «чисто».
 """
 
 from __future__ import annotations
 
 import csv
 import io
+import re
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -39,57 +47,154 @@ CANONICAL_COLUMNS = (
     "contract_number",
     "claim_number",
     "debt_amount",
-    "inn",
     "address",
     "vehicle_plate",
     "vin",
     "created_at",
 )
 
-# Aliases seen in practice, so an export does not have to be renamed by hand.
+# Синонимы пишутся так, как их печатает 1С, — со словами, точками и «№».
+# Ключи нормализуются один раз при импорте модуля (см. ``_ALIAS_INDEX``), поэтому
+# «Гос. номер», «гос номер» и «ГосНомер» попадают в одну и ту же запись.
+#
+# Заказчик переименовывает колонки как хочет, и словарь всегда будет неполным.
+# Поэтому он не единственная защита: всё нераспознанное перечисляется оператору
+# в отчёте об импорте (см. :class:`HeaderMapping`). Раньше такая колонка просто
+# исчезала, и выгрузка без распознанного ФИО импортировалась как «300 строк,
+# 0 ошибок» — с пустыми разделами по человеку, которые читаются как «чисто».
 COLUMN_ALIASES: dict[str, str] = {
     "id": "debtor_id",
     "debtorid": "debtor_id",
     "external_id": "debtor_id",
     "код": "debtor_id",
+    "код 1С": "debtor_id",
+    "код должника": "debtor_id",
+    "код контрагента": "debtor_id",
+    "идентификатор": "debtor_id",
     "fio": "fio",
     "name": "fio",
     "full_name": "fio",
     "фио": "fio",
+    "ф.и.о.": "fio",
+    "фио должника": "fio",
+    "фио клиента": "fio",
+    "фио контрагента": "fio",
+    "фамилия имя отчество": "fio",
+    "полное имя": "fio",
+    "наименование должника": "fio",
+    "наименование контрагента": "fio",
+    # Выгрузка из 1С часто вообще не содержит слова «ФИО»: колонка называется
+    # по роли человека в документе.
+    "должник": "fio",
+    "контрагент": "fio",
+    "клиент": "fio",
+    "плательщик": "fio",
+    "ответчик": "fio",
     "birthdate": "birth_date",
     "dob": "birth_date",
     "birth": "birth_date",
-    "дата_рождения": "birth_date",
+    "дата рождения": "birth_date",
+    "дата рожд.": "birth_date",
+    "др": "birth_date",
     "phone": "phone",
     "tel": "phone",
     "телефон": "phone",
+    "тел.": "phone",
+    "номер телефона": "phone",
+    "телефон номер": "phone",
+    "контактный телефон": "phone",
+    "мобильный телефон": "phone",
+    "мобильный": "phone",
+    "сотовый": "phone",
     # ИНН физлица. Ради него колонка и заводится: без него банкротство, статус
     # ИП и арбитраж не проверяются вовсе — эти источники ищут только по нему.
     # Выгрузка из 1С его обычно содержит, а импорт до сих пор молча выбрасывал.
     "inn": "inn",
     "инн": "inn",
     "innfiz": "inn",
+    "инн должника": "inn",
+    "инн физлица": "inn",
+    "инн контрагента": "inn",
     "contract": "contract_number",
     "contract_no": "contract_number",
     "договор": "contract_number",
+    "дог.": "contract_number",
+    "номер договора": "contract_number",
+    "договор номер": "contract_number",
+    "контракт": "contract_number",
+    "номер контракта": "contract_number",
     "claim": "claim_number",
     "заявка": "claim_number",
+    "номер заявки": "claim_number",
+    "заявка номер": "claim_number",
     "amount": "debt_amount",
     "debt": "debt_amount",
     "долг": "debt_amount",
     "sum": "debt_amount",
+    "сумма долга": "debt_amount",
+    "сумма задолженности": "debt_amount",
+    "задолженность": "debt_amount",
+    "остаток долга": "debt_amount",
+    "остаток задолженности": "debt_amount",
+    "текущий долг": "debt_amount",
+    "долг руб.": "debt_amount",
+    # Голая «Сумма» сюда намеренно не попадает: в выгрузке ею называют и оплату,
+    # и начисление, и госпошлину. Молча взять чужую сумму как долг — попасть с
+    # ней в отчёт для суда; не взять — увидеть «Сумма» в списке нераспознанных.
     "address": "address",
     "адрес": "address",
+    "адрес регистрации": "address",
+    "адрес проживания": "address",
+    "адрес должника": "address",
+    "адрес фактический": "address",
+    "фактический адрес": "address",
+    "место жительства": "address",
     "plate": "vehicle_plate",
     "gosnomer": "vehicle_plate",
     "госномер": "vehicle_plate",
+    "гос. номер": "vehicle_plate",
+    "государственный номер": "vehicle_plate",
+    "регистрационный знак": "vehicle_plate",
+    "гос. рег. знак": "vehicle_plate",
+    "грз": "vehicle_plate",
+    "номер тс": "vehicle_plate",
+    "номер автомобиля": "vehicle_plate",
     "vin": "vin",
+    "вин": "vin",
+    "vin номер": "vin",
+    "номер vin": "vin",
+    "vin код": "vin",
     "created": "created_at",
+    "дата создания": "created_at",
+    "дата записи": "created_at",
 }
 
 SUPPORTED_ENCODINGS = ("utf-8-sig", "utf-8", "cp1251")
 SUPPORTED_DELIMITERS = ",;\t"
 MAX_FIELD_LENGTH = 512
+
+# Итоговая строка отчёта 1С в первой значимой колонке. Как должник она даёт
+# лишнюю запись и завышает счётчик импортированных.
+TOTALS_MARKERS = frozenset(
+    {
+        "итого",
+        "итог",
+        "всего",
+        "итого по отчету",
+        "всего по отчету",
+        "общий итог",
+        "итоговая строка",
+    }
+)
+
+# 1С пишет шапку слитно («СуммаДолга», «ФИОДолжника») не реже, чем словами.
+_CAMEL_BOUNDARIES = (
+    re.compile(r"(?<=[a-zа-яё0-9])(?=[A-ZА-ЯЁ])"),
+    re.compile(r"(?<=[A-ZА-ЯЁ])(?=[A-ZА-ЯЁ][a-zа-яё])"),
+)
+# Всё, что в заголовке служит оформлением, а не смыслом: точки в сокращениях,
+# кавычки, скобки, дефисы, подчёркивания.
+_HEADER_PUNCTUATION = re.compile(r"""[.,:;!?()\[\]{}«»"'`/\\|+\-_]+""")
 
 
 class CsvFormatError(ValueError):
@@ -119,24 +224,88 @@ class DebtorRow:
         """Deterministic identity for upserts.
 
         ``debtor_id`` wins when present — it is the customer's own key. Otherwise
-        the normalized name, date of birth and contract number form a stable
-        composite, so re-importing the same export updates rows instead of
-        multiplying them.
+        в ключ идут все опознавательные поля строки, а не только ФИО, дата
+        рождения и договор: при пустых дате рождения и договоре двум разным
+        Ивановым Иванам Ивановичам доставался один ключ, второй затирал первого,
+        и в отчёте это выглядело как «Пропущено: 1» — неотличимо от дубля. На
+        сотнях должников однофамильцы неизбежны, а склеенный должник уносит в
+        суд чужие долги и чужие исполнительные производства.
+
+        Цена — та же строка с дописанным телефоном приедет как новая запись, но
+        это видимая лишняя строка, а не невидимо слитые люди.
         """
         if self.debtor_id:
             return stable_hash("id", self.debtor_id)
-        return stable_hash(
-            "composite",
+        return stable_hash("composite", *self.identity_parts)
+
+    @property
+    def identity_parts(self) -> tuple[str | None, ...]:
+        """Поля, по которым строка считается тем же должником."""
+        return (
             self.full_name,
             self.birth_date.isoformat() if self.birth_date else None,
             self.contract_number,
+            self.inn,
+            self.phone,
+            self.vehicle_plate,
+            self.vin,
+            self.address,
         )
+
+    @property
+    def comparable(self) -> tuple[object, ...]:
+        """Содержательная часть строки — чтобы отличить повтор от разных строк.
+
+        Долг и заявка в ключ не входят (одному человеку их можно дописать), но
+        различие в них означает, что схлопнулись не копии, и об этом надо
+        сказать оператору.
+        """
+        return (*self.identity_parts, self.debt_amount, self.claim_number)
 
 
 @dataclass(slots=True)
 class RowError:
     line_number: int
     message: str
+
+
+@dataclass(frozen=True, slots=True)
+class TotalsRow:
+    """Итоговая строка отчёта («Итого», «Всего»), а не должник.
+
+    Молча пропустить её нельзя: оператор должен видеть, что строка была и что
+    решение принял импорт, а не он.
+    """
+
+    line_number: int
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class HeaderMapping:
+    """Разбор шапки: что распознано и что выброшено.
+
+    ``unknown`` и ``duplicates`` существуют ради отчёта оператору. Никакой
+    словарь синонимов не покроет всех выгрузок 1С, поэтому единственная честная
+    защита — назвать колонки, содержимое которых не импортировано.
+    """
+
+    columns: dict[int, str | None]
+    unknown: tuple[str, ...]
+    duplicates: tuple[str, ...]
+
+    @property
+    def known(self) -> set[str]:
+        return {value for value in self.columns.values() if value}
+
+
+@dataclass(frozen=True, slots=True)
+class DebtorTable:
+    """Шапка отдельно от строк: об отброшенных колонках надо рассказать до того,
+    как что-то будет записано."""
+
+    header: HeaderMapping
+    rows: Iterator[tuple[int, DebtorRow | RowError | TotalsRow]]
 
 
 def decode_csv_bytes(payload: bytes) -> str:
@@ -160,18 +329,72 @@ def _detect_delimiter(sample: str) -> str:
         return ","
 
 
+def _normalize_key(name: str) -> str:
+    """Заголовок — к виду, в котором его ищут в словаре синонимов.
+
+    Приводится всё оформление, из-за которого «ФИО» распознавалось, а «Ф.И.О.»
+    и «ФИО  должника» — нет: неразрывные и повторные пробелы, точки в
+    сокращениях, кавычки, «№» словом, ё/е, слитная запись 1С.
+    """
+    # «№» разворачивается до NFKC: нормализация превратила бы его в «No», и
+    # «№ договора» перестало бы совпадать с «номер договора».
+    text = name.replace("№", " номер ")
+    text = unicodedata.normalize("NFKC", text).replace("﻿", "").replace("\xa0", " ")
+    for pattern in _CAMEL_BOUNDARIES:
+        text = pattern.sub(" ", text)
+    text = _HEADER_PUNCTUATION.sub(" ", text)
+    text = text.casefold().replace("ё", "е")
+    return "_".join(text.split())
+
+
+# Словарь синонимов написан по-человечески, а сравнение идёт по нормализованной
+# форме — иначе каждый синоним пришлось бы вносить во всех написаниях сразу.
+_ALIAS_INDEX: dict[str, str] = {
+    _normalize_key(alias): canonical for alias, canonical in COLUMN_ALIASES.items()
+}
+
+
 def normalize_header(name: str) -> str | None:
-    key = name.strip().lower().lstrip("﻿").replace(" ", "_")
+    key = _normalize_key(name)
     if key in CANONICAL_COLUMNS:
         return key
-    return COLUMN_ALIASES.get(key)
+    return _ALIAS_INDEX.get(key)
 
 
-def iter_rows(text: str) -> Iterator[tuple[int, DebtorRow | RowError]]:
-    """Yield ``(line_number, row_or_error)`` for every data line.
+def parse_header(header: list[str]) -> HeaderMapping:
+    """Сопоставить колонки файла с полями должника.
 
-    A malformed row produces a :class:`RowError` and the iteration continues —
-    one bad line must never abort an import of several hundred good ones.
+    При двух колонках на одно поле выигрывает первая: раньше побеждала
+    последняя — «НомерДокументаРасчетов» затирал «Договор», и никто об этом не
+    узнавал. Проигравшая колонка попадает в отчёт, а не в тишину.
+    """
+    columns: dict[int, str | None] = {}
+    unknown: list[str] = []
+    duplicates: list[str] = []
+    taken: dict[str, str] = {}
+    for index, name in enumerate(header):
+        label = " ".join(name.split())
+        canonical = normalize_header(name)
+        if canonical is None:
+            columns[index] = None
+            if label:
+                unknown.append(label)
+            continue
+        if canonical in taken:
+            columns[index] = None
+            duplicates.append(f"«{label}» дублирует «{taken[canonical]}»")
+            continue
+        taken[canonical] = label
+        columns[index] = canonical
+    return HeaderMapping(columns=columns, unknown=tuple(unknown), duplicates=tuple(duplicates))
+
+
+def read_table(text: str) -> DebtorTable:
+    """Прочитать шапку сразу, строки — лениво.
+
+    Шапка разбирается до первой строки данных: ошибка в ней должна свалить файл
+    целиком, до любой частичной записи, а перечень выброшенных колонок нужен
+    отчёту независимо от того, дочитали ли мы строки.
     """
     if not text.strip():
         raise CsvFormatError("Файл пуст.")
@@ -183,23 +406,58 @@ def iter_rows(text: str) -> Iterator[tuple[int, DebtorRow | RowError]]:
     except StopIteration as exc:
         raise CsvFormatError("В файле нет заголовка.") from exc
 
-    mapping = {index: normalize_header(name) for index, name in enumerate(header)}
-    known = {value for value in mapping.values() if value}
+    mapping = parse_header(header)
+    known = mapping.known
+    # Отказ называет непонятые заголовки: иначе оператор видит «не распознано»
+    # и не знает, ту ли колонку переименовывать.
+    found = ("В файле: " + ", ".join(mapping.unknown[:10])) if mapping.unknown else ""
     if not known:
         raise CsvFormatError(
             "Не распознана ни одна колонка. Ожидаются, например: "
-            + ", ".join(CANONICAL_COLUMNS[:5])
+            f"{', '.join(CANONICAL_COLUMNS[:5])}. {found}".strip()
         )
     if not ({"fio", "contract_number"} & known):
-        raise CsvFormatError("Нужна хотя бы одна из колонок: fio или contract_number.")
+        raise CsvFormatError(
+            f"Нужна хотя бы одна из колонок: fio или contract_number. {found}".strip()
+        )
 
+    return DebtorTable(header=mapping, rows=_iter_data_rows(reader, mapping))
+
+
+def iter_rows(text: str) -> Iterator[tuple[int, DebtorRow | RowError | TotalsRow]]:
+    """Yield ``(line_number, row_or_error)`` for every data line.
+
+    A malformed row produces a :class:`RowError` and the iteration continues —
+    one bad line must never abort an import of several hundred good ones.
+    """
+    return read_table(text).rows
+
+
+def _iter_data_rows(
+    reader: Iterator[list[str]], mapping: HeaderMapping
+) -> Iterator[tuple[int, DebtorRow | RowError | TotalsRow]]:
     for line_number, raw_row in enumerate(reader, start=2):
         if not any(cell.strip() for cell in raw_row):
             continue
+        totals = _totals_label(raw_row)
+        if totals is not None:
+            yield line_number, TotalsRow(line_number=line_number, label=totals)
+            continue
         try:
-            yield line_number, _build_row(mapping, raw_row)
+            yield line_number, _build_row(mapping.columns, raw_row)
         except ValueError as exc:
             yield line_number, RowError(line_number=line_number, message=str(exc))
+
+
+def _totals_label(raw_row: list[str]) -> str | None:
+    """«Итого» в первой значимой колонке — подпись итоговой строки, иначе ``None``."""
+    for cell in raw_row:
+        text = cell.strip()
+        if not text:
+            continue
+        key = " ".join(_HEADER_PUNCTUATION.sub(" ", text).casefold().replace("ё", "е").split())
+        return text if key in TOTALS_MARKERS else None
+    return None
 
 
 def _build_row(mapping: dict[int, str | None], raw_row: list[str]) -> DebtorRow:
@@ -222,7 +480,6 @@ def _build_row(mapping: dict[int, str | None], raw_row: list[str]) -> DebtorRow:
     row.phone = _parse_optional_phone(values.get("phone"), row)
     row.inn = _parse_optional_inn(values.get("inn"), row)
     row.debt_amount = _parse_optional_amount(values.get("debt_amount"), row)
-    row.inn = _parse_optional_inn(values.get("inn"), row)
     row.address = normalize_address(values.get("address"))
     row.vehicle_plate = _parse_optional_plate(values.get("vehicle_plate"), row)
     row.vin = _parse_optional_vin(values.get("vin"), row)
@@ -238,7 +495,9 @@ def _clean_name(raw: str | None, row: DebtorRow) -> str | None:
     except NameParseError:
         # Keep the raw value: an unparseable name is still worth storing and
         # displaying, it just cannot participate in structured name matching.
-        row.warnings.append("fio: не разобрано в формате «Фамилия Имя Отчество»")
+        # Без кавычек: в кавычках отчёт показывает конкретное значение поля, а
+        # тут это часть самой формулировки.
+        row.warnings.append("fio: не разобрано в формате Фамилия Имя Отчество")
         return " ".join(raw.split()) or None
 
 
