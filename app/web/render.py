@@ -44,22 +44,31 @@ from app.domain.enums import (
     ScoreCategory,
 )
 from app.domain.models import (
+    BusinessRelation,
     DebtorReport,
     InheritanceCase,
     InternalDebtorRecord,
+    PropertyRecord,
     ProviderResult,
 )
 from app.domain.scoring import PROVIDER_CONFIDENCE_WEIGHTS
 from app.domain.verdict import FEE_BASIS_TITLES, VERDICT_TITLES, VerdictDecision
 from app.services.reporting import (
+    COMPANY_ASSETS_DISCLAIMER,
     COURT_SCOPE_NOTE,
     DEMO_BANNER,
     INHERITANCE_SCOPE_NOTE,
+    INTERNAL_NOT_FOUND,
     NO_FACTORS_NOTE,
+    NO_PROPERTY_FOUND,
+    NO_PROPERTY_FOUND_WITHOUT_ADDRESS,
+    OWNERSHIP_DISCLAIMER,
     PLEDGE_SCOPE_NOTE,
+    PROPERTY_SCOPE_NOTE,
     SourceState,
     SourceStateCode,
     empty_reason,
+    property_unanswered_line,
     source_state,
     unanswered_line,
 )
@@ -450,7 +459,9 @@ def internal_section(report: DebtorReport) -> str:
         return section(
             "internal",
             "Наши данные",
-            '<p class="empty">Совпадений во внутренней базе нет.</p>' + _checked_note(result),
+            # Формулировка слово в слово та же, что в чате: один и тот же
+            # должник не должен получать два описания одной и той же пустоты.
+            _empty_body(result, INTERNAL_NOT_FOUND, found=0, noun="запись"),
             state=state,
         )
     facts = _facts_grid(_internal_facts(record))
@@ -631,7 +642,12 @@ def business_section(report: DebtorReport) -> str:
     if unchecked:
         return section("business", "Бизнес", unchecked, state=state)
 
-    usable = [item for item in report.business_relations if item.is_usable]
+    # Тот же отбор, что в чате (``reporting._business_block``): юрлицо по ФИО не
+    # сопоставляется вовсе — название ООО не является именем человека, — и
+    # фильтр по ``is_usable`` прятал со страницы найденную по ИНН должника
+    # компанию под подписью «сопоставить не удалось ни одну». Найденное,
+    # показанное как ненайденное, — и именно эту страницу печатают.
+    usable = [item for item in report.business_relations if item.is_usable or item.is_legal_entity]
     if not usable:
         return section(
             "business",
@@ -648,7 +664,10 @@ def business_section(report: DebtorReport) -> str:
     rows = [
         (
             cell(BUSINESS_ROLE_TITLES.get(item.role, "связь"), label="Роль"),
-            cell(item.name, label="Наименование"),
+            # ``person_name`` первым — как в чате: у живых строк ``egrul_ip``
+            # ``name`` пуст, ФИО лежит в нём, и найденное ИП должника уходило на
+            # страницу строкой «— ИНН».
+            cell(item.person_name or item.name, label="Наименование"),
             cell(item.inn, label="ИНН", numeric=True, copy=True),
             raw_cell(_business_status(item.status), label="Статус"),
             raw_cell(match_tag(item.match_level), label="Совпадение"),
@@ -659,8 +678,59 @@ def business_section(report: DebtorReport) -> str:
         "business",
         "Бизнес",
         table(("Роль", "Наименование", "ИНН", "Статус", "Совпадение"), rows)
+        + _company_cases(report, usable)
         + _checked_note(result),
         state=state,
+    )
+
+
+def _company_cases(report: DebtorReport, relations: Sequence[BusinessRelation]) -> str:
+    """Арбитраж компаний должника — подразделом внутри «Бизнеса», как и в чате.
+
+    На странице его не было вовсе: цепочка оплачивается отдельными вызовами, и
+    дебиторка ООО должника — это актив, на который обращают взыскание, — до
+    распечатки не доходила. Отдельным верхнеуровневым разделом рядом с «Судами»
+    он стоять не может по той же причине, что и в тексте: иск к ООО должника —
+    не иск к должнику.
+    """
+    result = report.result_for(ProviderName.COURT_LEGAL)
+    if result is None:
+        return ""
+    state = source_state(result)
+    lines: list[str] = []
+    for item in relations:
+        if not item.inn:
+            continue
+        title = item.person_name or item.name or item.inn
+        if state.is_unchecked:
+            # Причина, а не одно «не проверено» на все состояния: подпись берётся
+            # из общей таблицы, той же, что кормит список источников.
+            lines.append(f"{title}: арбитраж не проверен — {state.label}")
+            continue
+        cases = [case for case in report.legal_entity_cases if case.company_inn == item.inn]
+        if not cases:
+            lines.append(f"{title}: арбитражных дел не найдено")
+            continue
+        against = [case for case in cases if case.is_claim_against_company]
+        by_company = [case for case in cases if not case.is_claim_against_company]
+        amount = sum((case.amount or 0) for case in by_company)
+        suffix = f" на {format_amount(amount)}" if amount else ""
+        lines.append(
+            f"{title}: дел {len(cases)}, компания истец — {len(by_company)}{suffix} "
+            f"(дебиторка), исков к компании — {len(against)}"
+        )
+        lines.extend(
+            f"{title}: сигнал принудительного взыскания по делу {case.case_number}"
+            for case in cases
+            if case.enforcement_signal
+        )
+    if not lines:
+        return ""
+    body = "".join(f'<p class="note">{e(line)}</p>' for line in lines)
+    return (
+        '<p class="note">Арбитраж компаний должника:</p>'
+        + body
+        + f'<p class="empty unchecked">{e(COMPANY_ASSETS_DISCLAIMER)}</p>'
     )
 
 
@@ -827,6 +897,119 @@ def _inheritance_table(items: Sequence[InheritanceCase]) -> str:
         ("Дело", "Наследодатель", "Рождение", "Смерть", "Состояние", "Нотариус", "Совпадение"),
         rows,
     )
+
+
+PROPERTY_TITLE = "Объект по адресу (ЕГРН)"
+
+
+def property_section(report: DebtorReport) -> str:
+    """Объект по адресу (ЕГРН).
+
+    Раздела на странице не было вовсе, хотя в текстовом отчёте он есть, и это
+    расхождение стоило больше остальных: кадастровый номер — единственное, что
+    физически вписывается в ходатайство приставу об обращении взыскания, — не
+    попадал ни на экран, ни в распечатку, которую несут в дело. При этом блок
+    «Источники» строку «Объект по адресу (ЕГРН)» показывал, и страница
+    противоречила сама себе — источник спрошен, а раздела нет.
+
+    Заголовок называет объект, а не «Недвижимость»: правообладателя ЕГРН не
+    раскрывает, и :data:`OWNERSHIP_DISCLAIMER` стоит рядом с каждой найденной
+    записью по той же причине, что и в чате.
+    """
+    result = report.result_for(ProviderName.PROPERTY)
+    state = source_state(result)
+    scope = f'<p class="note scope">{e(PROPERTY_SCOPE_NOTE)}</p>'
+    address = report.subject.address
+    unanswered = property_unanswered_line(result, address=address)
+    if unanswered:
+        body = f'<p class="empty unchecked">{e(unanswered)}</p>'
+        return section("property", PROPERTY_TITLE, body + scope, state=state)
+
+    checked = (
+        f'<p class="note">Проверен адрес из нашей карточки: {e(address)}</p>' if address else ""
+    )
+    if not report.properties:
+        return section(
+            "property",
+            PROPERTY_TITLE,
+            checked
+            + _empty_body(
+                result,
+                NO_PROPERTY_FOUND if address else NO_PROPERTY_FOUND_WITHOUT_ADDRESS,
+                found=0,
+                noun="объект",
+                scope=scope,
+            ),
+            state=state,
+        )
+
+    rows = [
+        (
+            cell(item.property_type or "объект недвижимости", label="Объект"),
+            cell(item.cadastral_number, label="Кадастровый номер", numeric=True, copy=True),
+            cell(item.area, label="Площадь", numeric=True, right=True),
+            cell(_property_cost(item), label="Кадастровая стоимость", numeric=True, right=True),
+            cell(_property_encumbrances(item), label="Обременения"),
+            cell(_property_rights(item), label="Права"),
+        )
+        for item in report.properties
+    ]
+    ownership = f'<p class="empty unchecked">{e(OWNERSHIP_DISCLAIMER)}</p>'
+    return section(
+        "property",
+        PROPERTY_TITLE,
+        checked
+        + table(
+            (
+                "Объект",
+                "Кадастровый номер",
+                "Площадь",
+                "Кадастровая стоимость",
+                "Обременения",
+                "Права",
+            ),
+            rows,
+        )
+        + ownership
+        + _checked_note(result, scope=scope),
+        state=state,
+    )
+
+
+def _property_cost(item: PropertyRecord) -> str:
+    """Стоимость снятого с учёта объекта не печатается.
+
+    Обратить взыскание на несуществующий объект нельзя, и цифра рядом с ним
+    читается как оценка актива — того же решения держится текстовый отчёт
+    (``reporting._property_lines``).
+    """
+    if item.cancelled_at:
+        return f"снят с учёта {format_date(item.cancelled_at)}"
+    if item.cadastral_cost is None:
+        return "—"
+    date_note = f" (на {format_date(item.cost_date)})" if item.cost_date else ""
+    return f"{format_amount(item.cadastral_cost)}{date_note}"
+
+
+def _property_encumbrances(item: PropertyRecord) -> str:
+    """Пустой массив обременений и его отсутствие — разные ответы.
+
+    Первое проверено и чисто, второе не проверено вовсе; на флаге
+    ``encumbrances_checked`` держится вся разница.
+    """
+    if item.encumbrances:
+        return "; ".join(item.encumbrances)
+    return "не зарегистрировано" if item.encumbrances_checked else "не проверено"
+
+
+def _property_rights(item: PropertyRecord) -> str:
+    if not item.rights_count:
+        # Не «объект ничей»: сведений о правах в ответе просто нет.
+        return "сведений о правах в ответе нет"
+    kinds = ", ".join(text.lower() for text in item.right_types) or "право собственности"
+    noun = pluralize_ru(item.rights_count, "запись", "записи", "записей")
+    shares = f" (доли {', '.join(item.shares)})" if item.shares else ""
+    return f"{kinds}, {item.rights_count} {noun}{shares}"
 
 
 def court_section(report: DebtorReport) -> str:
@@ -1010,6 +1193,7 @@ def build_blocks(report: DebtorReport) -> list[Block]:
         Block("bankruptcy", "Банкротство", bankruptcy_section(report)),
         Block("pledge", "Залоги", pledge_section(report)),
         Block("inheritance", "Наследственные дела", inheritance_section(report)),
+        Block("property", PROPERTY_TITLE, property_section(report)),
         Block("court", "Суды", court_section(report)),
         Block("business", "Бизнес", business_section(report)),
         Block("sources", "Источники", sources_section(report)),

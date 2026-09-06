@@ -89,17 +89,42 @@ OWNERSHIP_DISCLAIMER = (
     "ЕГРН не раскрывает правообладателя. Принадлежность объекта должнику\n"
     "НЕ подтверждена: по этому адресу он может быть только зарегистрирован."
 )
-NO_PROPERTY_FOUND = (
-    "По указанному адресу объект в ЕГРН не найден. Это не значит, что у должника "
-    "нет недвижимости: по ФИО Росреестр сведения о правах не выдаёт."
+# Границы источника, обязательные в каждой ветке раздела — та же роль, что у
+# PLEDGE_SCOPE_NOTE и COURT_SCOPE_NOTE у соседей. ЕГРН отвечает про объект по
+# конкретному адресу, а не про человека, и пустой ответ здесь не является
+# утверждением об остальной его недвижимости.
+PROPERTY_SCOPE_NOTE = (
+    "Росреестр ищет по адресу или кадастровому номеру и по ФИО сведения о правах\n"
+    "не выдаёт: об остальной недвижимости должника этот раздел не говорит ничего."
 )
+# «По этому адресу», а не «по указанному»: строкой выше стоит сам адрес, и без
+# неё эта фраза ссылалась на адрес, которого могло не быть вовсе.
+NO_PROPERTY_FOUND = "По этому адресу объект в ЕГРН не найден."
+# Тот же пустой ответ, но назвать проверенный адрес нечем: в карточке его нет.
+# Достижимо на отчёте, поднятом из кэша с необогащённым субъектом, и до правки
+# такой раздел ссылался на «указанный адрес», которого никто не указывал.
+NO_PROPERTY_FOUND_WITHOUT_ADDRESS = (
+    "Объект в ЕГРН не найден, но по какому адресу искали — отчёт назвать не может: "
+    "адреса в карточке должника нет."
+)
+# Почему ЕГРН не спрашивали, когда причина — пустой адрес. Провайдер называет её
+# сам (``property.NO_ADDRESS_REFUSAL``), но результат из кэша его текста не
+# несёт, а общее «недостаточно данных» не подсказывает, что чинится это
+# оператором: адрес надо дописать в карточку.
+NO_ADDRESS_REPORT_LINE = "Не проверено: в карточке должника нет адреса, а по ФИО Росреестр не ищет."
 # Имущество ООО не является имуществом участника: взыскание обращается на долю
 # в уставном капитале, а обороты компании — лишь оценка её стоимости.
+#
+# Без отступов: ту же оговорку печатает веб-страница, а отступ там — это два
+# пробела внутри абзаца, а не подраздел. Отступ подраздела в чате добавляет
+# _indent на месте.
 COMPANY_ASSETS_DISCLAIMER = (
-    "  Имущество ООО не является имуществом участника. Взыскание обращается\n"
-    "  на долю в уставном капитале (ст. 74 ФЗ-229, ст. 25 ФЗ-14); обороты\n"
-    "  компании — лишь оценка стоимости доли."
+    "Имущество ООО не является имуществом участника. Взыскание обращается\n"
+    "на долю в уставном капитале (ст. 74 ФЗ-229, ст. 25 ФЗ-14); обороты\n"
+    "компании — лишь оценка стоимости доли."
 )
+# Пустой ответ внутренней базы — одними словами в чате и на странице.
+INTERNAL_NOT_FOUND = "Совпадений во внутренней базе не найдено."
 DISCLAIMER = "Оценка является аналитической и не заменяет юридическую проверку."
 # Подписи состояния «источник подключён / не подключён» и строка, которой это
 # состояние печатается в отчёте. Живут здесь по той же причине, что и
@@ -112,6 +137,22 @@ EMPTY_LABEL = "проверено, записей нет"
 NOT_CONFIGURED_REPORT_LINE = "Не проверено: источник не подключён."
 DEMO_BANNER = "⚠️ ДЕМО-РЕЖИМ: данные вымышленные, внешние источники не опрашивались."
 NO_FACTORS_NOTE = "Факторов для оценки недостаточно — источники не дали данных."
+# Коды отказа, которые обязаны читаться без словаря. Блок ИСТОЧНИКИ печатает
+# «недоступно (poll_timeout)», а разделы печатали одно «источник временно
+# недоступен» на все коды сразу: закончившийся баланс NewDB, отвергнутый ключ и
+# не успевший ответить источник — три разные беды с тремя разными действиями, и
+# первые две оператор чинит сам, если ему сказать. Код в скобках остаётся: по
+# нему ищут в логах и он совпадает с блоком ИСТОЧНИКИ.
+ERROR_REASONS: dict[str, str] = {
+    "payment_required": "у поставщика данных закончились оплаченные запросы",
+    "unauthorized": "поставщик данных отверг ключ доступа",
+    "rejected": "источник отклонил запрос",
+    "rate_limited": "поставщик ограничил частоту запросов",
+    "poll_timeout": "источник не успел подготовить ответ",
+    "timeout": "источник не ответил вовремя",
+    "connection_error": "до источника не удалось достучаться",
+    "server_error": "источник ответил ошибкой на своей стороне",
+}
 
 
 # ---------------------------------------------------------------- состояния источника
@@ -219,10 +260,15 @@ def unanswered_line(
             detail = (result.error_message if result else None) or "недостаточно данных"
             return f"Не проверено: {detail}.{_bridge_note(bridge)}"
         case SourceStateCode.UNAVAILABLE:
-            return "Не проверено: источник временно недоступен."
+            code = result.error_code if result else None
+            if not code:
+                return "Не проверено: источник временно недоступен."
+            reason = ERROR_REASONS.get(code, "источник временно недоступен")
+            return f"Не проверено: {reason} ({code})."
         case _:
             code = (result.error_code if result else None) or "unknown"
-            return f"Не проверено: ошибка обращения к источнику ({code})."
+            reason = ERROR_REASONS.get(code, "ошибка обращения к источнику")
+            return f"Не проверено: {reason} ({code})."
 
 
 def answered_count(report: DebtorReport) -> tuple[int, int]:
@@ -292,7 +338,23 @@ def render_internal_card(record: InternalDebtorRecord) -> str:
 def _internal_block(report: DebtorReport) -> str:
     record = report.internal_record
     if record is None:
-        return "НАШИ ДАННЫЕ\nСовпадений во внутренней базе не найдено."
+        # Своя база проходит тот же разбор состояний, что и внешние источники, —
+        # ровно как на веб-странице (``render.internal_section``). Раздел его не
+        # делал вовсе: упавшая БД, нечитаемая выгрузка 1С и не подключённый
+        # источник печатались как «совпадений не найдено», то есть как
+        # проверенное отсутствие должника в нашей же базе. Ветка стоит после
+        # ``record is None``, а не до: найденную запись состояние источника
+        # отменить не может, и терять её здесь нельзя.
+        result = report.result_for(ProviderName.INTERNAL)
+        unanswered = unanswered_line(result)
+        if unanswered:
+            return f"НАШИ ДАННЫЕ\n{unanswered}"
+        return "\n".join(
+            [
+                "НАШИ ДАННЫЕ",
+                *empty_reason(result, found=0, noun="запись", empty_line=INTERNAL_NOT_FOUND),
+            ]
+        )
 
     lines = ["НАШИ ДАННЫЕ"]
     lines.extend(_internal_lines(record))
@@ -473,8 +535,13 @@ def _company_cases_lines(item: BusinessRelation, report: DebtorReport) -> list[s
     if result is None or not item.inn:
         return []
     cases = [case for case in report.legal_entity_cases if case.company_inn == item.inn]
-    if not result.status.is_answered:
-        return ["  Арбитраж компании: не проверено"]
+    state = source_state(result)
+    if state.is_unchecked:
+        # Причина, а не одно «не проверено» на все состояния: подпись берётся из
+        # общей таблицы, той же, что кормит блок ИСТОЧНИКИ, — иначе строка тут
+        # говорит «не проверено», а список источников десятью строками ниже
+        # объясняет, что кончился баланс.
+        return [f"  Арбитраж компании: не проверено — {state.label}"]
     if not cases:
         return ["  Арбитраж компании: дел не найдено"]
 
@@ -495,7 +562,7 @@ def _company_cases_lines(item: BusinessRelation, report: DebtorReport) -> list[s
     for case in cases[:MAX_LISTED_CASES]:
         if case.enforcement_signal:
             lines.append(f"    — сигнал принудительного взыскания по делу {case.case_number}")
-    lines.append(COMPANY_ASSETS_DISCLAIMER)
+    lines.extend(f"  {line}" for line in COMPANY_ASSETS_DISCLAIMER.split("\n"))
     return lines
 
 
@@ -504,7 +571,10 @@ def _pledge_block(report: DebtorReport) -> str:
     header = "ЗАЛОГИ"
     unanswered = unanswered_line(result)
     if unanswered:
-        return f"{header}\n{unanswered}"
+        # Оговорка охвата печатается и здесь: страница её в этой ветке печатала,
+        # а текст — нет, и один и тот же должник получал два разных описания
+        # одного и того же непроверенного источника.
+        return "\n".join([header, unanswered, PLEDGE_SCOPE_NOTE])
 
     usable = [item for item in report.pledges if item.is_usable]
     if not usable:
@@ -647,23 +717,41 @@ def _property_block(report: DebtorReport) -> str:
     лицу, суду и приставу. Всё, что здесь напечатано, поэтому сопровождается
     оговоркой о непринадлежности; убрать её значит превратить справку об
     объекте в утверждение об имуществе.
+
+    Состояний источника здесь столько же, сколько у ФССП и банкротства, и
+    печатаются они так же — через :func:`unanswered_line`. До этой ветки раздел
+    не спрашивал состояние вовсе: все шесть — не подключён, кончился баланс,
+    отвергнут ключ, не дождались ответа, нечего было спросить, ответил пусто —
+    давали побайтово одну строку «по указанному адресу объект не найден» с
+    отметкой о минуте проверки, которой не было. В проде ``ROSREESTR_ENABLED``
+    не задан, то есть это печаталось у каждого должника, а лист «Скачать
+    текстом» несут в суд.
     """
     result = report.result_for(ProviderName.PROPERTY)
     header = "ОБЪЕКТ ПО АДРЕСУ (ЕГРН)"
-    if not report.properties:
-        return _empty_block(
-            header,
-            result,
-            NO_PROPERTY_FOUND,
-            found=0,
-            noun="объект",
-            tail=OWNERSHIP_DISCLAIMER,
-        )
+    address = report.subject.address
+    unanswered = property_unanswered_line(result, address=address)
+    if unanswered:
+        return "\n".join([header, unanswered, PROPERTY_SCOPE_NOTE])
 
     lines = [header]
-    queried = report.subject.address
-    if queried:
-        lines.append(f"Проверен адрес из нашей карточки: {truncate(queried, 160)}")
+    if address:
+        lines.append(f"Проверен адрес из нашей карточки: {truncate(address, 160)}")
+    if not report.properties:
+        # «Не найдено» осмысленно, только если названо, ГДЕ не найдено: источник
+        # ищет по адресу, а не по человеку.
+        lines.extend(
+            empty_reason(
+                result,
+                found=0,
+                noun="объект",
+                empty_line=NO_PROPERTY_FOUND if address else NO_PROPERTY_FOUND_WITHOUT_ADDRESS,
+            )
+        )
+        lines.append(PROPERTY_SCOPE_NOTE)
+        lines.append(_checked_at(result))
+        return "\n".join(line for line in lines if line)
+
     for item in report.properties[:MAX_LISTED_PROPERTIES]:
         lines.extend(_property_lines(item))
     hidden = len(report.properties) - MAX_LISTED_PROPERTIES
@@ -671,8 +759,28 @@ def _property_block(report: DebtorReport) -> str:
         lines.append(f"…и ещё {hidden}")
     lines.extend(_source_notes(result))
     lines.append(OWNERSHIP_DISCLAIMER)
+    lines.append(PROPERTY_SCOPE_NOTE)
     lines.append(_checked_at(result))
     return "\n".join(lines)
+
+
+def property_unanswered_line(result: ProviderResult | None, *, address: str | None) -> str | None:
+    """«Не проверено» для ЕГРН — с отдельной веткой на «адреса нет».
+
+    Провайдер различает адрес до дома и отсутствие адреса сам
+    (``property.HOUSE_LEVEL_REFUSAL`` против ``NO_ADDRESS_REFUSAL``), и его текст
+    печатает общая :func:`unanswered_line`. Но результат, поднятый из кэша,
+    сообщения не несёт, и тогда остаётся голое «недостаточно данных» — строка,
+    по которой оператор не поймёт, что не хватает именно адреса в карточке и что
+    дописать его может он сам.
+    """
+    line = unanswered_line(result)
+    if line is None:
+        return None
+    no_message = result is None or not result.error_message
+    if source_state(result).code is SourceStateCode.INSUFFICIENT and not address and no_message:
+        return NO_ADDRESS_REPORT_LINE
+    return line
 
 
 def _property_lines(item: PropertyRecord) -> list[str]:
@@ -719,7 +827,9 @@ def _court_block(report: DebtorReport) -> str:
     header = "СУДЫ (АРБИТРАЖ)"
     unanswered = unanswered_line(result, bridge=report.result_for(ProviderName.INN_BRIDGE))
     if unanswered:
-        return f"{header}\n{unanswered}"
+        # Как и в ЗАЛОГАХ: оговорку охвата страница в этой ветке печатала, а
+        # текст — нет.
+        return "\n".join([header, unanswered, COURT_SCOPE_NOTE])
 
     usable = [item for item in report.court_cases if item.is_usable]
     if not usable:
