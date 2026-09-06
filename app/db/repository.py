@@ -28,6 +28,7 @@ from app.db.models import (
     ShareLink,
     VendorCacheEntry,
 )
+from app.domain.identity import normalize_phone
 from app.domain.models import InternalDebtorRecord, ProviderResult, RecoveryScore
 from app.utils.dates import utcnow
 from app.utils.hashing import normalize_token, stable_hash
@@ -698,5 +699,25 @@ def debtor_to_record(debtor: Debtor) -> InternalDebtorRecord:
 
 
 def phone_hash(phone: str | None) -> str | None:
-    """Hash used to look a debtor up by phone without storing the number."""
-    return stable_hash("phone", phone) if phone else None
+    """Hash used to look a debtor up by phone without storing the number.
+
+    Номер приводится к ``+7XXXXXXXXXX`` до хеширования, иначе две стороны
+    сравнения расходятся. Так и было: при импорте хешировался уже приведённый
+    номер из выгрузки, а при поиске — то, что набрал оператор. Совпадение
+    случалось лишь при посимвольном равенстве, и «89263248600» не находил
+    должника, записанного как «+79263248600».
+
+    Молчала эта поломка тем же способом, что и все опасные здесь: источник
+    отвечал «отработал, совпадений нет». Ненайденный по телефону должник
+    выглядел как отсутствующий в выгрузке, ИНН из 1С не подтягивался, и
+    остальные реестры отказывались искать без него — при том что ТЗ описывает
+    ровно этот ввод: «ФИО + номер телефона».
+
+    Нормализация живёт здесь, а не у вызывающих: обе стороны обязаны считать
+    хеш одинаково, и договорённость, которую надо помнить в двух местах, уже
+    один раз не сработала. Номер, не похожий на российский, хешируется как
+    есть — пусть лучше не найдётся, чем совпадёт с чужим.
+    """
+    if not phone:
+        return None
+    return stable_hash("phone", normalize_phone(phone) or phone)
