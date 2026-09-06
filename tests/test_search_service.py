@@ -475,3 +475,59 @@ def test_a_ten_digit_inn_never_reaches_the_card() -> None:
     assert isinstance(row, DebtorRow)
     assert row.inn is None
     assert any("inn" in warning for warning in row.warnings)
+
+
+async def test_a_source_that_never_answered_is_rechecked_not_replayed(
+    container: Container,
+) -> None:
+    """Молчание источника не консервируется в кэше на сутки.
+
+    Оператор, увидевший «ФССП не ответила», повторяет проверку — и до этой
+    правки получал тот же провал из кэша, потому что кэш хранит запрос целиком
+    и не смотрит, ответили ли по нему источники. Хуже того: починка на нашей
+    стороне ничего не меняла до истечения суток. Ровно так и случилось на
+    сервере — после исправления поиска по телефону тот же номер продолжал
+    отдавать «недостаточно данных» из отчёта, снятого до починки.
+
+    Это тот же запрет, что и всюду здесь, только растянутый во времени: «не
+    проверено» с отметкой «из кэша» читается как установленный факт.
+    """
+    subject = subject_for("Тестов Андрей Сергеевич", date(1985, 3, 12))
+    await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+
+    async with container.database.session() as session:
+        repo = SearchRepository(session)
+        request = await repo.find_cached_request(build_query_hash(subject), ttl_hours=24)
+        assert request is not None
+        row = next(
+            row
+            for row in await repo.results_for_request(request.id)
+            if row.provider == ProviderName.FSSP.value
+        )
+        row.provider_status = ProviderStatus.UNAVAILABLE.value
+        row.error_code = "timeout"
+        await session.commit()
+
+    again = await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+
+    assert not again.from_cache, "неотвеченный источник подали из кэша вместо новой проверки"
+    fssp = again.result_for(ProviderName.FSSP)
+    assert fssp is not None
+    assert fssp.status is not ProviderStatus.UNAVAILABLE
+
+
+async def test_a_source_switched_off_by_settings_still_caches(container: Container) -> None:
+    """«Не подключён» — устойчивое состояние, а не молчание.
+
+    Повторная проверка выключенного источника ничего не изменит: он выключен
+    настройкой, а не сетью. Считать такой отчёт непригодным для кэша значило бы
+    отменить кэш вовсе — не подключён хоть один источник почти всегда.
+    """
+    subject = subject_for("Тестов Андрей Сергеевич", date(1985, 3, 12))
+    first = await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+    assert any(
+        result.status is ProviderStatus.NOT_CONFIGURED for result in first.provider_results
+    ), "в этой конфигурации нет ни одного неподключённого источника — проверка бессмысленна"
+
+    second = await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+    assert second.from_cache
