@@ -96,6 +96,45 @@ async def request_json(
     Returns the decoded payload plus the raw body text, so a caller running with
     ``STORE_RAW_RESPONSES`` enabled can persist exactly what arrived.
     """
+    response = await request_raw(
+        client, method, url, params=params, json_body=json_body, retry=retry, provider=provider
+    )
+    return _decode(response), response.text
+
+
+async def request_text(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    params: Mapping[str, Any] | None = None,
+    retry: RetryPolicy | None = None,
+    provider: str = "unknown",
+) -> str:
+    """Perform a request and return the body as text.
+
+    Same retry loop and the same classification as :func:`request_json`, minus
+    the JSON decode. Exists for one shape of source: the one whose JSON endpoint
+    is guarded by a CSRF token that has to be read off an HTML page first. A
+    second retry loop written next to this one would drift from it, and the
+    difference between "the site was down" and "the register is empty" is
+    exactly what these loops encode.
+    """
+    response = await request_raw(client, method, url, params=params, retry=retry, provider=provider)
+    return response.text
+
+
+async def request_raw(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    params: Mapping[str, Any] | None = None,
+    json_body: Mapping[str, Any] | None = None,
+    retry: RetryPolicy | None = None,
+    provider: str = "unknown",
+) -> httpx.Response:
+    """The retry loop itself: one accepted response, or a :class:`ProviderError`."""
     policy = retry or RetryPolicy()
     last_error: ProviderError | None = None
 
@@ -111,7 +150,7 @@ async def request_json(
         else:
             error = _classify(response, provider=provider)
             if error is None:
-                return _decode(response), response.text
+                return response
             if not _is_retryable(error):
                 raise error
             last_error = error

@@ -34,6 +34,7 @@ from app.domain.models import (
     CourtCase,
     DebtorReport,
     EnforcementProceeding,
+    InheritanceCase,
     InternalDebtorRecord,
     PledgeRecord,
     PropertyRecord,
@@ -62,6 +63,24 @@ PLEDGE_SCOPE_NOTE = (
 # подавал», а иски к физлицу идут в суд общей юрисдикции.
 COURT_SCOPE_NOTE = "Суды общей юрисдикции этот источник не покрывает."
 MAX_LISTED_PROPERTIES = 3
+MAX_LISTED_INHERITANCE = 5
+# Границы реестра наследственных дел, обе обязательны и обе печатаются в каждой
+# ветке раздела.
+#
+# Первая — про то, как источник ищет: только по ФИО, всех однофамильцев разом,
+# и отбор по дате рождения делаем мы, а не он. Без неё найденная запись
+# читается как запись о должнике.
+#
+# Вторая — про то, чего пустой ответ не значит. Наследственное дело заводится
+# по заявлению наследника, поэтому «дел не найдено» не является даже слабым
+# доказательством того, что должник жив. Ровно поэтому у источника нет и
+# положительного фактора в оценке.
+INHERITANCE_SCOPE_NOTE = (
+    "Реестр ФНП ищет только по ФИО и возвращает всех однофамильцев; отбор по дате\n"
+    "рождения выполнен на нашей стороне, а в самих записях её часто нет.\n"
+    "Наследственное дело открывается по заявлению наследника — его отсутствие\n"
+    "НЕ означает, что должник жив."
+)
 
 # Обязательная строка блока ЕГРН. Источник не называет правообладателя, и любой
 # текст рядом с найденным объектом читается как «нашли имущество должника», если
@@ -229,6 +248,7 @@ def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
     blocks.append(_bankruptcy_block(report))
     blocks.append(_business_block(report))
     blocks.append(_pledge_block(report))
+    blocks.append(_inheritance_block(report))
     blocks.append(_property_block(report))
     blocks.append(_court_block(report))
     blocks.append(_score_block(report.recovery_score))
@@ -520,6 +540,83 @@ def _pledge_lines(item: PledgeRecord) -> list[str]:
         lines.append(f"  Уведомление: {item.registration_number}")
     if item.registered_at:
         lines.append(f"  Зарегистрирован: {format_date(item.registered_at)}")
+    lines.append(f"  {_match_note(item.match_level)}")
+    return lines
+
+
+def _inheritance_block(report: DebtorReport) -> str:
+    """Наследственные дела — и границы того, что этот реестр вообще знает.
+
+    Раздел не называется «наследственные дела должника» и не может так
+    называться: реестр ищет по одному ФИО и возвращает всех однофамильцев.
+    Поэтому подтверждённая запись подписана прямым выводом («должник умер»), а
+    возможная — оговоркой, и оговорка охвата печатается в обеих ветках.
+
+    Оговорка идёт через ``tail``, а не через ``result.notes``: notes у пустого
+    раздела печатаются ВМЕСТО счётчика найденного (см. :func:`empty_reason`), и
+    строка про границы источника стёрла бы фразу «в реестре найдено 1730 дел» —
+    ровно ту, ради которой раздел и написан.
+    """
+    result = report.result_for(ProviderName.INHERITANCE)
+    header = "НАСЛЕДСТВЕННЫЕ ДЕЛА"
+    unanswered = unanswered_line(result)
+    if unanswered:
+        return "\n".join([header, unanswered, INHERITANCE_SCOPE_NOTE])
+
+    usable = [item for item in report.inheritance_cases if item.is_usable]
+    if not usable:
+        return _empty_block(
+            header,
+            result,
+            "Наследственных дел по этому ФИО не найдено.",
+            found=len(report.inheritance_cases),
+            noun="дело",
+            tail=INHERITANCE_SCOPE_NOTE,
+        )
+
+    confirmed = [item for item in usable if item.is_confirmed]
+    notes = _source_notes(result)
+    lines = [header]
+    if confirmed:
+        # Главный вывод — первой строкой, до перечисления. Ради него источник и
+        # подключён: иск к умершему суд не примет.
+        lines.append(
+            "Должник умер: дата рождения в записи реестра совпала. "
+            "Требование предъявляется наследникам."
+        )
+    else:
+        # Ни одного подтверждённого — значит, ниже идут однофамильцы, и сказать
+        # об этом надо ДО списка, а не после. Список дел с фамилией должника,
+        # начинающийся без объяснения, читается как список его дел, и подпись
+        # «возможное совпадение» под каждой строкой этого не перебивает.
+        lines.extend(notes)
+        notes = []
+    for item in usable[:MAX_LISTED_INHERITANCE]:
+        lines.extend(_inheritance_lines(item))
+    hidden = len(usable) - MAX_LISTED_INHERITANCE
+    if hidden > 0:
+        lines.append(f"…и ещё {hidden}")
+    lines.extend(notes)
+    lines.append(INHERITANCE_SCOPE_NOTE)
+    lines.append(_checked_at(result))
+    return "\n".join(lines)
+
+
+def _inheritance_lines(item: InheritanceCase) -> list[str]:
+    state = "открыто" if item.is_open else "закрыто"
+    lines = [f"• Дело {item.case_number or 'без номера'} — {state}"]
+    if item.deceased_name:
+        lines.append(f"  Наследодатель: {truncate(item.deceased_name, 90)}")
+    if item.death_date:
+        lines.append(f"  Дата смерти: {format_date(item.death_date)}")
+    if item.case_date:
+        lines.append(f"  Дело открыто: {format_date(item.case_date)}")
+    if item.notary_name:
+        # Контакт нотариуса — единственный практический следующий шаг: круг
+        # наследников знает он, и больше никто.
+        lines.append(f"  Нотариус: {truncate(item.notary_name, 90)}")
+    if item.chamber_name:
+        lines.append(f"  Палата: {truncate(item.chamber_name, 90)}")
     lines.append(f"  {_match_note(item.match_level)}")
     return lines
 

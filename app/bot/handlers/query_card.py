@@ -350,6 +350,10 @@ def _came_back_empty(report: DebtorReport) -> bool:
         report.pledges,
         report.vehicles,
         report.properties,
+        # Только подтверждённые: реестр наследственных дел ищет по одному ФИО,
+        # и найденный однофамилец — не факт о должнике. Прогон, в котором нашлись
+        # только они, по-прежнему стоит переспросить другим ключом.
+        report.confirmed_inheritance_cases,
     )
     if not any(facts):
         return True

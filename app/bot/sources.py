@@ -24,6 +24,7 @@ from app.services.reporting import (
     CONNECTED_LABEL,
     COURT_SCOPE_NOTE,
     EMPTY_LABEL,
+    INHERITANCE_SCOPE_NOTE,
     NOT_CONFIGURED_LABEL,
     NOT_CONFIGURED_REPORT_LINE,
     PLEDGE_SCOPE_NOTE,
@@ -97,8 +98,9 @@ SOURCE_NOTES: dict[ProviderName, str] = {
         "Требует законного доступа к реестру, его у сервиса нет."
     ),
     ProviderName.INHERITANCE: (
-        "Реестр наследственных дел: не открыто ли наследство после должника\n"
-        "и не перешёл ли долг к наследникам."
+        "Реестр наследственных дел ФНП: не открыто ли наследство после должника.\n"
+        "Если должник умер, иск к нему суд не примет — требование предъявляют\n"
+        "наследникам в пределах стоимости наследства.\n" + INHERITANCE_SCOPE_NOTE
     ),
 }
 

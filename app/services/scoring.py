@@ -39,6 +39,7 @@ from app.domain.scoring import (
     BASE_SCORE,
     CLAIM_AGAINST_DEBTOR_PENALTY,
     COMPLETED_BANKRUPTCY_PENALTY,
+    CONFIRMED_PROBATE_CASE_PENALTY,
     CONFIRMED_PROPERTY_BONUS,
     CONFIRMED_VEHICLE_BONUS,
     ENFORCEMENT_AMOUNT_PENALTIES,
@@ -73,6 +74,7 @@ class RecoveryScoreEngine:
         factors.extend(_business_factors(report))
         factors.extend(_pledge_factors(report))
         factors.extend(_court_factors(report))
+        factors.extend(_inheritance_factors(report))
         factors.extend(_asset_factors(report))
 
         total = BASE_SCORE + sum(factor.delta for factor in factors)
@@ -435,6 +437,55 @@ def _court_factors(report: DebtorReport) -> list[ScoreFactor]:
     ]
 
 
+# ---------------------------------------------------------------- наследство
+
+
+def _inheritance_factors(report: DebtorReport) -> list[ScoreFactor]:
+    """Подтверждённое наследственное дело — сильный минус. Всё остальное — ноль.
+
+    Гейт здесь ``is_confirmed``, а не ``is_usable``, и это единственно
+    возможный вариант. Реестр ФНП ищет ТОЛЬКО по ФИО и возвращает всех
+    однофамильцев; «возможное совпадение» здесь достаётся любой записи с
+    полным совпадением имени и без даты рождения, то есть постороннему
+    человеку. Минус за неё обнулил бы балл живого должника из-за того, что
+    кто-то с его фамилией умер в 1976 году, и сделал бы это молча — число
+    проходит в вердикт и в расчёт пошлины, не оставляя строки в отчёте.
+    Единственный такой же гейт в этом файле — ``_asset_factors``: возможное
+    совпадение по квартире не является квартирой.
+
+    Положительного фактора у источника нет вовсе, ни при каком ответе, и это
+    не забывчивость. Наследственное дело заводится ПО ЗАЯВЛЕНИЮ НАСЛЕДНИКА:
+    должник, умерший месяц назад, умерший без наследников или чьи наследники не
+    дошли до нотариуса, даёт пустой ответ реестра. «Дел не найдено» здесь не
+    доказывает даже слабо, что человек жив, и платить за это баллами значило бы
+    начислять плюс за утверждение, которого источник не делал.
+    """
+    result = report.result_for(ProviderName.INHERITANCE)
+    if result is None or not result.is_answered:
+        # Недоступен, упал, ответил непонятным — ни плюса, ни минуса. Причина
+        # уходит в «Ограничения оценки» через _confidence.
+        return []
+
+    confirmed = report.confirmed_inheritance_cases
+    if not confirmed:
+        return []
+
+    record = confirmed[0]
+    case = f", дело {record.case_number}" if record.case_number else ""
+    died = f" (смерть {record.death_date.strftime('%d.%m.%Y')})" if record.death_date else ""
+    return [
+        ScoreFactor(
+            name="confirmed_probate_case",
+            delta=CONFIRMED_PROBATE_CASE_PENALTY,
+            reason=(
+                f"открыто наследственное дело{case}{died}: должник умер, "
+                "взыскание идёт к наследникам в пределах стоимости наследства"
+            ),
+            source=ProviderName.INHERITANCE,
+        )
+    ]
+
+
 # ---------------------------------------------------------------- assets
 
 
@@ -600,6 +651,12 @@ def _unanswered_note(provider: ProviderName, result: ProviderResult | None) -> s
 
 
 def _has_only_probable_matches(report: DebtorReport) -> bool:
+    # Наследственных дел здесь намеренно нет. У остальных источников
+    # «возможное совпадение» — это признак слабой идентификации всего отчёта; у
+    # реестра ФНП, который ищет по одному ФИО, это штатный ответ, и попадание
+    # сюда роняло бы уверенность у каждого должника, у которого нашёлся
+    # однофамилец. Про однофамильцев отчёт говорит своим разделом и оговоркой
+    # источника, а не общим множителем.
     matched: Sequence[object] = [
         *report.enforcement_proceedings,
         *report.bankruptcies,

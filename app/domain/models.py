@@ -346,6 +346,62 @@ class LegalEntityCase(SourcedFact):
         return self.case_role is CourtCaseRole.DEFENDANT
 
 
+class InheritanceCase(SourcedFact):
+    """Наследственное дело из реестра Федеральной нотариальной палаты.
+
+    Для взыскателя это самый дорогой из фактов, которые можно не узнать: если
+    должник умер, иск к нему суд не примет (производство прекращается), а
+    требование предъявляется наследникам или к наследственному имуществу в
+    пределах его стоимости. Год судиться с покойным — это потерянная пошлина и
+    потерянный срок.
+
+    **Реестр ищет только по ФИО и возвращает всех однофамильцев разом.**
+    Проверено живьём: «Иванов Иван Иванович» — 1730 дел в одном ответе, и
+    передача даты рождения в запрос их число не меняет. Поэтому отбор идёт на
+    нашей стороне, и поэтому же :attr:`deceased_birth_date` часто ``None``:
+    сам реестр его во многих записях не заполняет. Запись без даты рождения
+    матчер подтвердить не может по построению (нет уточняющего идентификатора —
+    потолок 0.55, «возможное совпадение»), и это правильный ответ: она может
+    относиться к должнику, а может к любому из тысячи однофамильцев.
+
+    Из ответа сюда переносится не всё. Адрес умершего, номер и дата актовой
+    записи о смерти, адрес и телефон нотариуса — персональные данные людей,
+    которые к нашему должнику отношения, скорее всего, не имеют; хранить их
+    ради того, чтобы напечатать в отчёте «возможное совпадение», нельзя.
+    """
+
+    kind: Literal["inheritance"] = "inheritance"
+    provider: ProviderName = ProviderName.INHERITANCE
+
+    deceased_name: str | None = None
+    # В реестре часто пусто — см. докстроку класса.
+    deceased_birth_date: date | None = None
+    # А вот дата смерти есть всегда: это реестр наследственных дел.
+    death_date: date | None = None
+    case_number: str | None = None
+    case_date: date | None = None
+    case_close_date: date | None = None
+    notary_name: str | None = None
+    chamber_name: str | None = None
+    district_name: str | None = None
+
+    @property
+    def is_open(self) -> bool:
+        """Дело не закрыто: наследники ещё оформляются, круг их не определён."""
+        return self.case_close_date is None
+
+    def contradicts_birth_date(self, birth_date: date | None) -> bool:
+        """Умереть до собственного рождения нельзя — значит, это другой человек.
+
+        Единственный различитель, который работает там, где реестр не назвал
+        дату рождения, а таких записей большинство. Догадок здесь нет вовсе:
+        должник 1985 года рождения не может быть человеком, умершим в 1976-м,
+        а реестр ведётся с семидесятых, и таких записей среди однофамильцев
+        много.
+        """
+        return bool(birth_date and self.death_date and self.death_date < birth_date)
+
+
 FactRecord = Annotated[
     InternalDebtorRecord
     | EnforcementProceeding
@@ -355,7 +411,8 @@ FactRecord = Annotated[
     | LegalEntityCase
     | PledgeRecord
     | VehicleRecord
-    | PropertyRecord,
+    | PropertyRecord
+    | InheritanceCase,
     Field(discriminator="kind"),
 ]
 
@@ -456,6 +513,7 @@ class DebtorReport(BaseModel):
     court_cases: list[CourtCase] = Field(default_factory=list)
     legal_entity_cases: list[LegalEntityCase] = Field(default_factory=list)
     pledges: list[PledgeRecord] = Field(default_factory=list)
+    inheritance_cases: list[InheritanceCase] = Field(default_factory=list)
     vehicles: list[VehicleRecord] = Field(default_factory=list)
     properties: list[PropertyRecord] = Field(default_factory=list)
     provider_results: list[ProviderResult] = Field(default_factory=list)
@@ -481,6 +539,18 @@ class DebtorReport(BaseModel):
     @property
     def active_pledges(self) -> list[PledgeRecord]:
         return [item for item in self.pledges if item.is_active and item.is_usable]
+
+    @property
+    def confirmed_inheritance_cases(self) -> list[InheritanceCase]:
+        """Только подтверждённые — и только они значат «должник умер».
+
+        Гейт здесь ``is_confirmed``, а не ``is_usable``, в отличие от соседних
+        свойств, и это не перестраховка. Реестр ФНП ищет по одному ФИО, поэтому
+        «возможное совпадение» здесь означает буквально «однофамилец, различить
+        нечем», и таких на распространённом имени тысячи. Подтвердить запись
+        может только совпавшая дата рождения.
+        """
+        return [item for item in self.inheritance_cases if item.is_confirmed]
 
     @property
     def claims_against_debtor(self) -> list[CourtCase]:

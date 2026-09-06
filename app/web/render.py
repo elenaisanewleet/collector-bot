@@ -45,6 +45,7 @@ from app.domain.enums import (
 )
 from app.domain.models import (
     DebtorReport,
+    InheritanceCase,
     InternalDebtorRecord,
     ProviderResult,
 )
@@ -53,6 +54,7 @@ from app.domain.verdict import FEE_BASIS_TITLES, VERDICT_TITLES, VerdictDecision
 from app.services.reporting import (
     COURT_SCOPE_NOTE,
     DEMO_BANNER,
+    INHERITANCE_SCOPE_NOTE,
     NO_FACTORS_NOTE,
     PLEDGE_SCOPE_NOTE,
     SourceState,
@@ -736,6 +738,84 @@ def _pledge_status(status: PledgeStatus) -> str:
     return f'<span class="tag {tone}">{e(title)}</span>'
 
 
+def inheritance_section(report: DebtorReport) -> str:
+    """Наследственные дела.
+
+    Подтверждённые и возможные разведены намеренно и по-разному. Подтверждённое
+    дело — таблицей и с прямым выводом над ней: должник умер, иск к нему не
+    подать. Возможные — за свёрнутым блоком с честным заголовком «однофамильцы,
+    сопоставить не удалось»: реестр ищет по одному ФИО, и таблица чужих дел
+    на первом экране читается как «вот что нашли про него», чего никакой чип в
+    последней колонке не перебивает. На печати блок раскрывается вместе со
+    всеми — скрытая строка не должна превращаться в потерянный факт.
+    """
+    result = report.result_for(ProviderName.INHERITANCE)
+    state = source_state(result)
+    scope = f'<p class="note scope">{e(INHERITANCE_SCOPE_NOTE)}</p>'
+    unchecked = _unchecked(result)
+    if unchecked:
+        return section("inheritance", "Наследственные дела", unchecked + scope, state=state)
+
+    usable = [item for item in report.inheritance_cases if item.is_usable]
+    if not usable:
+        return section(
+            "inheritance",
+            "Наследственные дела",
+            _empty_body(
+                result,
+                "Наследственных дел по этому ФИО не найдено.",
+                found=len(report.inheritance_cases),
+                noun="дело",
+                scope=scope,
+            ),
+            state=state,
+        )
+
+    confirmed = [item for item in usable if item.is_confirmed]
+    probable = [item for item in usable if not item.is_confirmed]
+    body = ""
+    if confirmed:
+        body += (
+            '<p class="empty unchecked">Должник умер: дата рождения в записи реестра '
+            "совпала. Иск к нему суд не примет — требование предъявляется наследникам "
+            "или к наследственному имуществу.</p>"
+        ) + _inheritance_table(confirmed)
+    else:
+        # Оговорки источника («найдено 1730, сопоставить не удалось ни одного»)
+        # печатаются ДО таблицы, когда подтверждать нечего: иначе список дел с
+        # фамилией должника открывает раздел без объяснения, чей он.
+        notes = result.notes if result is not None else ()
+        body += "".join(f'<p class="note">{e(note)}</p>' for note in notes)
+    if probable:
+        noun = "однофамилец" if len(probable) == 1 else "однофамильцев"
+        body += (
+            f'<details class="note"><summary>{len(probable)} {noun}: '
+            "сопоставить с должником не удалось</summary>"
+            f"{_inheritance_table(probable)}</details>"
+        )
+    return section(
+        "inheritance",
+        "Наследственные дела",
+        body + _checked_note(result, scope=scope, notes=bool(confirmed)),
+        state=state,
+    )
+
+
+def _inheritance_table(items: Sequence[InheritanceCase]) -> str:
+    rows = [
+        (
+            cell(item.case_number, label="Дело", numeric=True, copy=True),
+            cell(item.deceased_name, label="Наследодатель"),
+            cell(format_date(item.death_date), label="Смерть", numeric=True),
+            cell("открыто" if item.is_open else "закрыто", label="Состояние"),
+            cell(item.notary_name, label="Нотариус"),
+            raw_cell(match_tag(item.match_level), label="Совпадение"),
+        )
+        for item in items
+    ]
+    return table(("Дело", "Наследодатель", "Смерть", "Состояние", "Нотариус", "Совпадение"), rows)
+
+
 def court_section(report: DebtorReport) -> str:
     """Арбитраж — и только он, о чём раздел говорит прямо."""
     result = report.result_for(ProviderName.COURT)
@@ -916,6 +996,7 @@ def build_blocks(report: DebtorReport) -> list[Block]:
         Block("fssp", "ФССП", enforcement_section(report)),
         Block("bankruptcy", "Банкротство", bankruptcy_section(report)),
         Block("pledge", "Залоги", pledge_section(report)),
+        Block("inheritance", "Наследственные дела", inheritance_section(report)),
         Block("court", "Суды", court_section(report)),
         Block("business", "Бизнес", business_section(report)),
         Block("sources", "Источники", sources_section(report)),

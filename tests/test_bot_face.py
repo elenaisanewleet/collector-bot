@@ -170,11 +170,19 @@ def test_sources_screen_shows_live_state(container: Container) -> None:
 
 def test_sources_screen_keeps_the_scope_notes(container: Container) -> None:
     """«Залоги — подключено» без оговорки обещает больше, чем бот проверяет."""
-    from app.services.reporting import COURT_SCOPE_NOTE, PLEDGE_SCOPE_NOTE
+    from app.services.reporting import (
+        COURT_SCOPE_NOTE,
+        INHERITANCE_SCOPE_NOTE,
+        PLEDGE_SCOPE_NOTE,
+    )
 
     screen = sources_screen(container, debtors=0)
     assert PLEDGE_SCOPE_NOTE in screen
     assert COURT_SCOPE_NOTE in screen
+    # Реестр наследственных дел ищет по одному ФИО и отвечает про всех
+    # однофамильцев: без этой оговорки экран обещает проверку конкретного
+    # человека, которой источник не делает.
+    assert INHERITANCE_SCOPE_NOTE in screen
 
 
 def test_sources_screen_separates_unchecked_from_clean(container: Container) -> None:

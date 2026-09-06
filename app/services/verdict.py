@@ -41,6 +41,7 @@ class VerdictEngine:
 
         for rule in (
             self._active_bankruptcy,
+            self._debtor_deceased,
             self._unverified_identity,
             self._silent_sources,
             self._no_debt_amount,
@@ -83,6 +84,56 @@ class VerdictEngine:
             # списания в никуда. FeeBasis.NONE говорит, что платить её не нужно.
             state_fee=self._fee_for(debt) if debt and debt > 0 else None,
             fee_basis=FeeBasis.NONE,
+            confidence=confidence,
+        )
+
+    def _debtor_deceased(
+        self, report: DebtorReport, debt: Decimal | None, confidence: float
+    ) -> VerdictDecision | None:
+        """Подтверждённое наследственное дело: ответчика больше нет.
+
+        Своим правилом, а не через балл. −35 отправили бы дело в
+        ``_low_prospects``, но до него стоят ``_no_debt_amount``,
+        ``_fee_outweighs_debt`` и ``_company_exposure``, любое из которых
+        перехватило бы решение и напечатало про пошлину и долю в ООО там, где
+        речь про смерть должника. А без правила вовсе бесспорный долг дал бы
+        «подавать иск» — иск, который суд не примет.
+
+        REVIEW, а не DROP. Долг не исчезает: он переходит к наследникам в
+        пределах стоимости наследства, и следующий шаг известен и выполним —
+        запрос нотариусу, который ведёт дело, за кругом наследников. DROP
+        читался бы как «списать» и стоил бы взыскателю ровно столько же, сколько
+        иск к покойному.
+
+        Источник в ``DECISIVE_PROVIDERS`` при этом НЕ добавлен: реестр отвечает
+        только с российских адресов, и деплой вне РФ иначе вечно отвечал бы
+        «проверить руками» по всем должникам подряд.
+        """
+        confirmed = report.confirmed_inheritance_cases
+        if not confirmed:
+            return None
+        record = confirmed[0]
+        case = f"дело {record.case_number}" if record.case_number else "наследственное дело"
+        died = f", смерть {record.death_date.strftime('%d.%m.%Y')}" if record.death_date else ""
+        notary = f"; нотариус: {record.notary_name}" if record.notary_name else ""
+        return VerdictDecision(
+            verdict=Verdict.REVIEW,
+            headline=(
+                "Открыто наследственное дело: должник умер. Иск к нему суд не примет — "
+                "требование предъявляется наследникам или к наследственному имуществу "
+                "в пределах его стоимости."
+            ),
+            reasons=(
+                VerdictReason(
+                    code="confirmed_probate_case",
+                    text=f"{case}{died}{notary}",
+                    source=ProviderName.INHERITANCE,
+                ),
+            ),
+            debt_amount=debt,
+            # Пошлина считается: взыскание не отменяется, оно адресуется иначе.
+            state_fee=self._fee_for(debt) if debt and debt > 0 else None,
+            fee_basis=self._basis_for(debt) if debt and debt > 0 else FeeBasis.NONE,
             confidence=confidence,
         )
 

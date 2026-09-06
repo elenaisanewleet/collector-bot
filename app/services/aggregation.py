@@ -17,6 +17,7 @@ from app.domain.models import (
     CourtCase,
     DebtorReport,
     EnforcementProceeding,
+    InheritanceCase,
     InternalDebtorRecord,
     LegalEntityCase,
     PledgeRecord,
@@ -69,6 +70,8 @@ def _dispatch(report: DebtorReport, record: SourcedFact) -> None:
         report.legal_entity_cases.append(record)
     elif isinstance(record, PledgeRecord):
         report.pledges.append(record)
+    elif isinstance(record, InheritanceCase):
+        report.inheritance_cases.append(record)
     elif isinstance(record, VehicleRecord):
         report.vehicles.append(record)
     elif isinstance(record, PropertyRecord):
@@ -89,6 +92,9 @@ def _sort_report(report: DebtorReport) -> None:
     report.bankruptcies.sort(key=lambda item: (-item.match_confidence, not item.is_active))
     report.business_relations.sort(key=lambda item: (-item.match_confidence, not item.is_active))
     report.pledges.sort(key=lambda item: (-item.match_confidence, not item.is_active))
+    # Сначала подтверждённые, потом незакрытые дела: открытое дело значит, что
+    # круг наследников ещё определяется, и нотариус на связи.
+    report.inheritance_cases.sort(key=lambda item: (-item.match_confidence, not item.is_open))
     report.court_cases.sort(
         key=lambda item: (
             -item.match_confidence,

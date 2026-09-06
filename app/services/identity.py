@@ -40,6 +40,7 @@ from app.domain.models import (
     BusinessRelation,
     CourtCase,
     EnforcementProceeding,
+    InheritanceCase,
     InternalDebtorRecord,
     LegalEntityCase,
     PledgeRecord,
@@ -176,6 +177,19 @@ class IdentityMatcher:
         record_inn = _record_inn(record)
         record_phone = _record_phone(record)
 
+        if _died_before_birth(subject, record):
+            # Второй различитель, и единственный, который вообще работает при
+            # пустой дате рождения в записи. Дата смерти в реестре
+            # наследственных дел есть всегда; человек, умерший раньше, чем
+            # родился должник, — это заведомо другой человек, и никакое
+            # совпадение ФИО этого не перевешивает. Ветка симметрична
+            # несовпадению дат рождения ниже и стоит перед ним намеренно:
+            # у записи с пустой BirthDate до той ветки дело не доходит.
+            return MatchAssessment(
+                confidence=CONFLICTING_BIRTH_DATE_CONFIDENCE,
+                reasons=("дата смерти раньше даты рождения должника",),
+            )
+
         name_value, reasons = self._name_component(subject.name, record_name)
         confidence = name_value
         identifier_agreed = False
@@ -288,6 +302,8 @@ def _record_name(record: SourcedFact) -> str | None:
         return record.pledgor_name
     if isinstance(record, CourtCase):
         return record.participant_name
+    if isinstance(record, InheritanceCase):
+        return record.deceased_name
     if isinstance(record, BusinessRelation):
         # ``person_name`` заполняется провайдером только для строк, которые
         # описывают человека (секции ip / upr / uchr у ``egrul_ip``). Название
@@ -318,7 +334,16 @@ def _record_birth_date(record: SourcedFact) -> date | None:
         return record.debtor_birth_date
     if isinstance(record, PledgeRecord):
         return record.pledgor_birth_date
+    if isinstance(record, InheritanceCase):
+        # Часто ``None``, и это свойство самого реестра, а не пробел разбора:
+        # запись без даты рождения остаётся неподтверждаемой по построению.
+        return record.deceased_birth_date
     return None
+
+
+def _died_before_birth(subject: SearchSubject, record: SourcedFact) -> bool:
+    """Дисквалификация по дате смерти. Правило живёт в самой записи."""
+    return isinstance(record, InheritanceCase) and record.contradicts_birth_date(subject.birth_date)
 
 
 def _is_about_a_company(record: SourcedFact) -> bool:

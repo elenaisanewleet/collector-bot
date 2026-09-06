@@ -22,6 +22,7 @@ from app.providers.fns import FNSProvider, NewDBBusinessProvider
 from app.providers.fssp import FSSPProvider
 from app.providers.future import build_future_providers
 from app.providers.identity_bridge import InnBridgeProvider, PassportInnProvider
+from app.providers.inheritance import NotariatInheritanceProvider
 from app.providers.internal.base import InternalDebtorProvider
 from app.providers.internal.composite import CompositeInternalDebtorProvider
 from app.providers.internal.csv_provider import CSVInternalDebtorProvider
@@ -147,6 +148,11 @@ def build_external_providers(
         # какой именно флаг это включает.
         providers.append(NewDBPropertyProvider(settings, field_maps))
         providers.append(NewDBLegalCasesProvider(settings, field_maps, database=database))
+        # Единственный источник не из NewDB и единственный бесплатный: реестр
+        # наследственных дел ФНП. Ключа не требует, за настройкой стоимости не
+        # прячется; ``INHERITANCE_ENABLED`` включает его там, где сервис вообще
+        # отвечает — он доступен только с российских адресов.
+        providers.append(NotariatInheritanceProvider(settings))
 
     providers.append(UnconfiguredVehicleProvider())
     providers.extend(build_future_providers(exclude={provider.name for provider in providers}))
