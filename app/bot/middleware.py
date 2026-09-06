@@ -11,6 +11,13 @@ nothing else — so an attempt is visible without recording what was asked.
 и кнопками. Это единственное, что посторонний может вызвать в боте, и оно не
 доходит ни до одного хендлера и ни до одного платного запроса — заявка пишется
 здесь же, в middleware.
+
+Границ здесь две, и вторая появилась не от подозрительности. Допущенный — это
+чаще всего сотрудник, и одиночная проверка ему открыта. Но «Проверить всю базу»
+одним нажатием уводит в платные источники всю выгрузку заказчика, а импорт
+правит ту базу, по которой решают, на кого подавать в суд. Поэтому дорогое и
+опасное закрыто отдельно — :class:`OwnerOnlyMiddleware`, — и закрыто по
+владельцам, а не по списку допущенных.
 """
 
 from __future__ import annotations
@@ -24,9 +31,12 @@ from aiogram.types import CallbackQuery, Message, TelegramObject, User
 from app.bot.access_view import (
     REQUEST_PENDING,
     REQUEST_SENT,
+    OwnerOnlyAction,
     notify_owners_of_request,
+    refuse_owner_only,
     request_throttled,
 )
+from app.container import Container
 from app.logging_setup import get_logger
 from app.services.access import AccessService, RequestOutcome
 
@@ -140,6 +150,42 @@ async def _refuse(event: TelegramObject) -> None:
         await event.answer(ACCESS_DENIED_MESSAGE)
     elif isinstance(event, CallbackQuery):
         await event.answer(ACCESS_DENIED_MESSAGE, show_alert=True)
+
+
+class OwnerOnlyMiddleware(BaseMiddleware):
+    """Пускает к хендлерам роутера только владельца.
+
+    Вешается на роутер целиком, а не проверкой в каждом хендлере: у прогона по
+    базе четыре входа (команда, инлайн-кнопка, подтверждение сметы, выгрузка), у
+    импорта — три, и проверка, размноженная по семи местам, однажды окажется
+    забытой в восьмом. Отсюда же условие: под этим роутером не должно быть ни
+    одного хендлера, открытого допущенным.
+
+    Middleware роутерная (inner), а не диспетчерная: она срабатывает только
+    когда апдейт УЖЕ подошёл хендлеру этого роутера, поэтому чужие сообщения
+    идут дальше по цепочке нетронутыми — иначе роутер импорта, стоящий выше
+    свободного ввода, глотал бы чужой текст.
+    """
+
+    def __init__(self, action: OwnerOnlyAction) -> None:
+        self._action = action
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        user_id = data.get("user_id")
+        container = data.get("container")
+        if isinstance(container, Container) and container.access_service.is_owner(user_id):
+            return await handler(event, data)
+
+        # Логируем ровно то же, что и отказ на входе в бота: кто, и ничего о том,
+        # что он хотел сделать.
+        logger.warning("access.owner_only_denied", user_id=user_id, action=self._action.title)
+        await refuse_owner_only(event, action=self._action, user_id=user_id)
+        return None
 
 
 class DependencyMiddleware(BaseMiddleware):

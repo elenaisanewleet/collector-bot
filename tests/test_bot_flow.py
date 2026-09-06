@@ -50,23 +50,27 @@ async def test_start_shows_the_main_menu(
 
 
 async def test_outsider_is_refused_and_reaches_no_handler(
-    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+    unowned_dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    await feed(dispatcher, bot, message=make_message("/start", user_id=OUTSIDER_ID))
+    await feed(unowned_dispatcher, bot, message=make_message("/start", user_id=OUTSIDER_ID))
 
     assert sent.texts == [ACCESS_DENIED_MESSAGE]
 
 
 async def test_outsider_cannot_start_a_search(
-    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+    unowned_dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
     """The refused update must leave no trace: no search request, no history."""
     from app.db.repository import SearchRepository
 
     await feed(
-        dispatcher, bot, message=make_message("Тестов Андрей Сергеевич", user_id=OUTSIDER_ID)
+        unowned_dispatcher,
+        bot,
+        message=make_message("Тестов Андрей Сергеевич", user_id=OUTSIDER_ID),
     )
-    await feed(dispatcher, bot, callback_query=make_callback("menu:person", user_id=OUTSIDER_ID))
+    await feed(
+        unowned_dispatcher, bot, callback_query=make_callback("menu:person", user_id=OUTSIDER_ID)
+    )
 
     async with container.database.session() as session:
         history = await SearchRepository(session).recent_for_user(OUTSIDER_ID)
@@ -862,11 +866,11 @@ async def test_batch_export_sends_a_file(
 
 
 async def test_outsider_cannot_start_a_batch(
-    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+    unowned_dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
     await container.import_service.import_file(container.settings.internal_csv_path)
 
-    await feed(dispatcher, bot, message=make_message("/batch", user_id=OUTSIDER_ID))
+    await feed(unowned_dispatcher, bot, message=make_message("/batch", user_id=OUTSIDER_ID))
 
     assert sent.texts == [ACCESS_DENIED_MESSAGE]
 

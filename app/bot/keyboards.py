@@ -81,8 +81,16 @@ REPLY_BUTTONS: tuple[str, ...] = (
     BUTTON_HELP,
 )
 
+# То же без «Проверить всю базу». Прогон по всей выгрузке доступен только
+# владельцу, а кнопка, которая отвечает «нельзя», — это не забота о безопасности,
+# а обещание, которого бот не держит: допущенный сотрудник жмёт её первой, она
+# стоит верхней.
+ALLOWED_REPLY_BUTTONS: tuple[str, ...] = tuple(
+    label for label in REPLY_BUTTONS if label != BUTTON_BATCH
+)
 
-def main_reply_keyboard() -> ReplyKeyboardMarkup:
+
+def main_reply_keyboard(*, owner: bool) -> ReplyKeyboardMarkup:
     """Постоянная клавиатура под полем ввода.
 
     ``is_persistent=True`` — чтобы Telegram не сворачивал её в иконку: свёрнутая
@@ -94,10 +102,14 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
     занимает место на экране всегда, поэтому в ней только то, что нажимают
     каждый день. Всё остальное — импорт, госномер, VIN, адрес, паспорт —
     осталось в инлайн-меню за «🔍 Проверить одного».
+
+    ``owner`` не имеет значения по умолчанию намеренно: забытый аргумент должен
+    ломаться на mypy, а не показывать чужую кнопку живому человеку.
     """
+    rows = [[KeyboardButton(text=BUTTON_BATCH)]] if owner else []
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BUTTON_BATCH)],
+            *rows,
             [KeyboardButton(text=BUTTON_SEARCH), KeyboardButton(text=BUTTON_HISTORY)],
             [KeyboardButton(text=BUTTON_SOURCES), KeyboardButton(text=BUTTON_HELP)],
         ],
@@ -107,11 +119,31 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def main_menu() -> InlineKeyboardMarkup:
+def main_menu(*, owner: bool) -> InlineKeyboardMarkup:
+    """Инлайн-меню. Дорогое и опасное — только владельцу.
+
+    Прогон по всей базе и импорт выгрузки закрыты
+    :class:`~app.bot.middleware.OwnerOnlyMiddleware`, и меню обязано это
+    повторять: кнопка, которая всем отвечает «нельзя», — обещание, которого бот
+    не держит, а нажимают её первой, она стоит верхней.
+
+    ``owner`` без значения по умолчанию: забытый аргумент должен ломаться на
+    mypy, а не показывать чужую кнопку живому человеку.
+    """
     buttons = [
         # Массовая проверка стоит первой: это главный сценарий продукта,
         # а поиск одного человека — частный случай.
-        [InlineKeyboardButton(text="📊 Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start")],
+        *(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="📊 Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start"
+                    )
+                ]
+            ]
+            if owner
+            else []
+        ),
         [_menu_button("👤 Физлицо", SearchType.PERSON)],
         [
             _menu_button("🚘 Госномер", SearchType.VEHICLE_PLATE),
@@ -126,7 +158,11 @@ def main_menu() -> InlineKeyboardMarkup:
             _menu_button("📄 Договор / заявка", SearchType.CONTRACT),
         ],
         [
-            InlineKeyboardButton(text="📥 Импорт CSV", callback_data=f"{MENU_PREFIX}:import"),
+            *(
+                [InlineKeyboardButton(text="📥 Импорт CSV", callback_data=f"{MENU_PREFIX}:import")]
+                if owner
+                else []
+            ),
             InlineKeyboardButton(text="🕘 История", callback_data=f"{MENU_PREFIX}:history"),
         ],
         # Последним рядом — то, что читают, а не запускают. До этих двух экранов

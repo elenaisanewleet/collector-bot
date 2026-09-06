@@ -32,6 +32,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from app.bot.access_view import BATCH_ACTION, refuse_owner_only
 from app.bot.common import reset_state
 from app.bot.handlers.batch import offer_batch
 from app.bot.handlers.help import send_help
@@ -59,12 +60,22 @@ def build_router() -> Router:
     router = Router(name="buttons")
 
     @router.message(F.text == BUTTON_BATCH)
-    async def press_batch(message: Message, state: FSMContext, container: Container) -> None:
+    async def press_batch(
+        message: Message, state: FSMContext, container: Container, user_id: int
+    ) -> None:
+        if not container.access_service.is_owner(user_id):
+            # Кнопки у допущенного нет, но подпись — обычный текст, а нижняя
+            # клавиатура живёт на стороне Telegram и переживает и смену прав, и
+            # пересылку: нажатие обязано упереться в ту же проверку, что /batch.
+            await refuse_owner_only(message, action=BATCH_ACTION, user_id=user_id)
+            return
         # Состояние не чистим: offer_batch либо ставит своё, либо чистит сам.
         await offer_batch(message, state, container)
 
     @router.message(F.text == BUTTON_SEARCH)
-    async def press_search(message: Message, state: FSMContext) -> None:
+    async def press_search(
+        message: Message, state: FSMContext, container: Container, user_id: int
+    ) -> None:
         """То же, что ``/search``: типов проверки семь, в нижние кнопки они не влезут.
 
         Кнопка ведёт не в ввод ФИО, а в инлайн-меню. Иначе проверка по номеру
@@ -72,7 +83,9 @@ def build_router() -> Router:
         недостижима с клавиатуры.
         """
         await reset_state(state)
-        await message.answer(CHOOSE_TYPE, reply_markup=main_menu())
+        await message.answer(
+            CHOOSE_TYPE, reply_markup=main_menu(owner=container.access_service.is_owner(user_id))
+        )
 
     @router.message(F.text == BUTTON_HISTORY)
     async def press_history(
@@ -86,7 +99,7 @@ def build_router() -> Router:
         await send_sources(message, container)
 
     @router.message(F.text == BUTTON_HELP)
-    async def press_help(message: Message, container: Container) -> None:
-        await send_help(message, container)
+    async def press_help(message: Message, container: Container, user_id: int) -> None:
+        await send_help(message, container, owner=container.access_service.is_owner(user_id))
 
     return router

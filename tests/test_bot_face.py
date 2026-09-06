@@ -326,7 +326,9 @@ def test_report_button_and_handler_share_one_payload() -> None:
 def test_menu_offers_the_reading_screens() -> None:
     from app.bot.keyboards import main_menu
 
-    payloads = [button.callback_data for row in main_menu().inline_keyboard for button in row]
+    payloads = [
+        button.callback_data for row in main_menu(owner=True).inline_keyboard for button in row
+    ]
     assert "menu:sources" in payloads
     assert "menu:help" in payloads
 
@@ -338,10 +340,10 @@ def test_command_menu_and_help_cannot_diverge(container: Container) -> None:
     """Один список на синюю кнопку и на справку — второй разъехался бы."""
     from app.bot.handlers.help import help_text
 
-    text = help_text(container)
+    text = help_text(container, owner=True)
     for name, _title in BOT_COMMANDS:
         assert f"/{name}" in text
-    assert commands_help().startswith("КОМАНДЫ")
+    assert commands_help(owner=True).startswith("КОМАНДЫ")
 
 
 def test_commands_are_valid_for_telegram() -> None:

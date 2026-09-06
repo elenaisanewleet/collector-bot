@@ -17,6 +17,22 @@ from typing import Annotated
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Владельцы этой поставки — в коде, а не только в ``.env``.
+#
+# Так вышло из-за конкретной поломки: на сервере строка OWNER_TELEGRAM_USER_IDS
+# осталась пустой, а от неё зависит не только режим одобрения, но и всё дорогое
+# в боте — прогон по всей базе, импорт выгрузки, выгрузка очереди. Пустая строка
+# в ``.env`` означает «настройку не заполнили», а не «владельцев нет», и читать
+# её как второе значит открыть тысячу платных обращений и персональные данные
+# всех должников любому, кто нашёл бота.
+#
+# Убрать владельца — правкой этого списка. Сказать «владельцев правда нет» —
+# значением :data:`NO_OWNERS`, иначе это невыразимо.
+DEFAULT_OWNER_USER_IDS: frozenset[int] = frozenset({979904739, 1190527666, 41082373})
+
+#: OWNER_TELEGRAM_USER_IDS=- — владельцев нет, и это осознанное решение.
+NO_OWNERS = "-"
+
 
 class AppMode(StrEnum):
     """Which provider set the registry assembles.
@@ -292,13 +308,20 @@ class Settings(BaseSettings):
 
     @property
     def owner_user_ids(self) -> frozenset[int]:
-        """Кому уходят заявки на доступ и кто может их одобрять.
+        """Кому уходят заявки на доступ, кто их одобряет и кому открыто дорогое.
 
         Владелец допущен всегда, даже если его забыли вписать в список
         допущенных: иначе одобрять заявки было бы некому — их некому было бы и
         увидеть.
+
+        Незаполненная настройка отдаёт :data:`DEFAULT_OWNER_USER_IDS`, а не
+        пустоту: без владельцев прогон по всей базе и импорт остались бы открыты
+        всем, а именно так бот и уехал на сервер. Чтобы владельцев правда не
+        было, в настройке пишут :data:`NO_OWNERS`.
         """
-        return _parse_user_ids(self.owner_telegram_user_ids)
+        if self.owner_telegram_user_ids.strip() == NO_OWNERS:
+            return frozenset()
+        return _parse_user_ids(self.owner_telegram_user_ids) or DEFAULT_OWNER_USER_IDS
 
     @property
     def access_moderation_enabled(self) -> bool:

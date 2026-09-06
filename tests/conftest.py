@@ -7,6 +7,7 @@ constructed :class:`Settings`, so nothing depends on the developer's ``.env``.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator, Sequence
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -15,7 +16,7 @@ import pytest_asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 
-from app.config import AppMode, Settings
+from app.config import NO_OWNERS, AppMode, Settings
 from app.container import Container
 from app.db.session import Database
 from app.domain.enums import ProviderName, ProviderStatus, Region, SearchType
@@ -59,6 +60,10 @@ def settings(tmp_path: Path) -> Settings:
         app_name="Test Bot",
         telegram_bot_token="test-token",
         allowed_telegram_user_ids="111,222",
+        # 111 — не просто допущенный, а владелец: прогон по всей базе, импорт и
+        # выгрузка очереди открыты только владельцу, и стенд обязан изображать
+        # того, кто ими пользуется. Кому этого не надо — ``unowned_container``.
+        owner_telegram_user_ids="111",
         database_url="sqlite+aiosqlite:///:memory:",
         internal_csv_path=DEMO_CSV,
         cache_ttl_hours=24,
@@ -111,6 +116,26 @@ async def container(settings: Settings, database: Database) -> AsyncIterator[Con
         query_cards=QueryCardService(database),
     )
     yield instance
+
+
+@pytest.fixture
+def unowned_container(container: Container) -> Container:
+    """Тот же бот, но владельцев у него нет вовсе.
+
+    Нужен там, где проверяется поведение бота без владельца: незнакомец упирается
+    в стену вместо заявки, ``/access`` объясняет, что режим не настроен. Пустая
+    строка для этого не годится — она означает «настройку не заполнили» и
+    отдаёт владельцев по умолчанию (см. :data:`app.config.NO_OWNERS`).
+    """
+    settings = container.settings.model_copy(update={"owner_telegram_user_ids": NO_OWNERS})
+    return replace(
+        container, settings=settings, access_service=AccessService(settings, container.database)
+    )
+
+
+@pytest.fixture
+def unowned_dispatcher(unowned_container: Container) -> Dispatcher:
+    return dispatcher_for(unowned_container)
 
 
 @pytest.fixture

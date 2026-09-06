@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from aiogram import Dispatcher, Router
 
+from app.bot.access_view import BATCH_ACTION, IMPORT_ACTION, OwnerOnlyAction
 from app.bot.handlers import (
     access,
     admin,
@@ -26,7 +27,7 @@ from app.bot.handlers import (
 from app.bot.handlers import (
     help as help_handlers,
 )
-from app.bot.middleware import AllowlistMiddleware, DependencyMiddleware
+from app.bot.middleware import AllowlistMiddleware, DependencyMiddleware, OwnerOnlyMiddleware
 from app.container import Container
 
 
@@ -56,7 +57,7 @@ def build_router() -> Router:
     # «Разрешить» обязано сработать, не дожидаясь, пока он доиграет свою
     # проверку. Ни один хендлер здесь состояние не трогает.
     root.include_router(access.build_router())
-    root.include_router(batch.build_router())
+    root.include_router(_owner_only(batch.build_router(), BATCH_ACTION))
     # Карточка запроса. Ни одного состояния FSM внутри — только колбэки
     # ``qc:*`` и старые ``padd:*`` под отчётами, отправленными до неё. Поэтому
     # место в цепочке ни у кого ничего не отнимает.
@@ -64,7 +65,7 @@ def build_router() -> Router:
     root.include_router(search_vehicle.build_router())
     root.include_router(search_contract.build_router())
     root.include_router(search_misc.build_router())
-    root.include_router(import_csv.build_router())
+    root.include_router(_owner_only(import_csv.build_router(), IMPORT_ACTION))
     root.include_router(history.build_router())
     root.include_router(admin.build_router())
     # Последним и только последним. Этот роутер ловит любой текст вне состояния
@@ -74,6 +75,18 @@ def build_router() -> Router:
     # и меню обязаны получить свой шанс первыми.
     root.include_router(search_person.build_free_text_router())
     return root
+
+
+def _owner_only(router: Router, action: OwnerOnlyAction) -> Router:
+    """Закрыть роутер целиком: внутрь пускается только владелец.
+
+    Здесь, а не внутри ``build_router`` каждого модуля, потому что «кому это
+    открыто» — вопрос сборки бота, а не хендлера: увидеть, что закрыто, надо
+    одним взглядом на список роутеров, а не обходом четырнадцати файлов.
+    """
+    for observer in (router.message, router.callback_query):
+        observer.middleware(OwnerOnlyMiddleware(action))
+    return router
 
 
 def setup_dispatcher(dispatcher: Dispatcher, container: Container) -> Dispatcher:

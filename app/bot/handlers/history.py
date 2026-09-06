@@ -61,7 +61,9 @@ async def send_history(message: Message, container: Container, user_id: int) -> 
             entries.append((request.masked_query, request.id))
 
     if not lines:
-        await message.answer(EMPTY_HISTORY, reply_markup=main_menu())
+        await message.answer(
+            EMPTY_HISTORY, reply_markup=main_menu(owner=container.access_service.is_owner(user_id))
+        )
         return
 
     text = "🕘 Последние проверки\n\n" + "\n\n".join(lines)

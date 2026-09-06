@@ -70,30 +70,44 @@ def build_router() -> Router:
     router = Router(name="start")
 
     @router.message(CommandStart())
-    async def handle_start(message: Message, state: FSMContext, container: Container) -> None:
+    async def handle_start(
+        message: Message, state: FSMContext, container: Container, user_id: int
+    ) -> None:
         await reset_state(state)
-        await send_welcome(message, welcome_text(container), reply_markup=main_menu())
+        # Меню и нижняя клавиатура собираются под того, кто их получит: кнопки
+        # прогона и импорта есть только у владельца, и показывать их остальным
+        # значит обещать то, чего бот не даст.
+        owner = container.access_service.is_owner(user_id)
+        await send_welcome(message, welcome_text(container), reply_markup=main_menu(owner=owner))
         # Единственное место, откуда уходит нижняя клавиатура. Больше и не надо:
         # она не «показывается на сообщение», а устанавливается для чата и живёт
         # там, пока её не заменят или не снимут явно, — а снимать её мы нигде не
         # умеем. Обратная сторона: у того, кто /start уже нажимал когда-то,
         # кнопки появятся только после следующего /start. Это цена честного
         # одного вызова вместо клавиатуры, дописанной к каждому ответу бота.
-        await message.answer(KEYBOARD_HINT, reply_markup=main_reply_keyboard())
+        await message.answer(KEYBOARD_HINT, reply_markup=main_reply_keyboard(owner=owner))
 
     @router.message(Command("search"))
-    async def handle_search(message: Message, state: FSMContext, container: Container) -> None:
+    async def handle_search(
+        message: Message, state: FSMContext, container: Container, user_id: int
+    ) -> None:
         await reset_state(state)
-        await message.answer(CHOOSE_TYPE, reply_markup=main_menu())
+        await message.answer(
+            CHOOSE_TYPE, reply_markup=main_menu(owner=container.access_service.is_owner(user_id))
+        )
 
     @router.message(Command("cancel"))
-    async def handle_cancel(message: Message, state: FSMContext) -> None:
+    async def handle_cancel(
+        message: Message, state: FSMContext, container: Container, user_id: int
+    ) -> None:
         await reset_state(state)
-        await message.answer(CANCELLED, reply_markup=main_menu())
+        await message.answer(
+            CANCELLED, reply_markup=main_menu(owner=container.access_service.is_owner(user_id))
+        )
 
     @router.callback_query(F.data == f"{MENU_PREFIX}:back")
     async def handle_back_to_menu(
-        callback: CallbackQuery, state: FSMContext, container: Container
+        callback: CallbackQuery, state: FSMContext, container: Container, user_id: int
     ) -> None:
         """«🔍 Новая проверка» под каждой карточкой отчёта.
 
@@ -104,19 +118,28 @@ def build_router() -> Router:
         await reset_state(state)
         message = callback_message(callback)
         if message:
-            await message.answer(CHOOSE_TYPE, reply_markup=main_menu())
+            await message.answer(
+                CHOOSE_TYPE,
+                reply_markup=main_menu(owner=container.access_service.is_owner(user_id)),
+            )
         await answer_callback(callback)
 
     @router.callback_query(F.data == CANCEL_CALLBACK)
-    async def handle_cancel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    async def handle_cancel_callback(
+        callback: CallbackQuery, state: FSMContext, container: Container, user_id: int
+    ) -> None:
         await reset_state(state)
         message = callback_message(callback)
         if message:
-            await message.answer(CANCELLED, reply_markup=main_menu())
+            await message.answer(
+                CANCELLED, reply_markup=main_menu(owner=container.access_service.is_owner(user_id))
+            )
         await answer_callback(callback)
 
     @router.callback_query(F.data == BACK_CALLBACK)
-    async def handle_back(callback: CallbackQuery, state: FSMContext) -> None:
+    async def handle_back(
+        callback: CallbackQuery, state: FSMContext, container: Container, user_id: int
+    ) -> None:
         """Кнопка «Новая проверка» под каждым отчётом.
 
         Обработчика у неё не было вовсе: нажатие висело часиками до таймаута
@@ -126,7 +149,10 @@ def build_router() -> Router:
         await reset_state(state)
         message = callback_message(callback)
         if message:
-            await message.answer(CHOOSE_TYPE, reply_markup=main_menu())
+            await message.answer(
+                CHOOSE_TYPE,
+                reply_markup=main_menu(owner=container.access_service.is_owner(user_id)),
+            )
         await answer_callback(callback)
 
     return router
