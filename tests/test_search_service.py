@@ -12,7 +12,7 @@ import pytest
 from app.container import Container
 from app.db.repository import SearchRepository
 from app.domain.enums import ProviderName, ProviderStatus, Region, ScoreCategory, SearchType
-from app.domain.identity import SearchSubject, VehicleDescriptor, parse_fio
+from app.domain.identity import PersonName, SearchSubject, VehicleDescriptor, parse_fio
 from app.domain.models import ProviderResult
 from app.providers.base import BaseProvider
 from app.services.reporting import render_report
@@ -531,3 +531,60 @@ async def test_a_source_switched_off_by_settings_still_caches(container: Contain
 
     second = await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
     assert second.from_cache
+
+
+async def test_reopened_report_still_carries_the_debtor_name(container: Container) -> None:
+    """Тот же запрос не должен во второй раз выглядеть неопознанным.
+
+    Оператор вводит телефон; ФИО, дата рождения и ИНН приезжают из 1С уже во
+    время прогона. Входящий субъект их не несёт, поэтому при чтении из кэша они
+    восстанавливаются из сохранённого. Пока восстанавливался один ИНН, повторно
+    открытая карточка озаглавливалась замаскированным ИНН вместо фамилии —
+    должник, найденный тем же запросом, переставал быть узнанным.
+    """
+    await container.import_service.import_text(
+        "\n".join(
+            [
+                "ФИО,Телефон,Дата_рождения,ИНН,Долг",
+                "Богданов Максим Евгеньевич,+7 (900) 468-45-83,21.09.1970,410686394402,44425",
+            ]
+        )
+    )
+    subject = SearchSubject(search_type=SearchType.PERSON, phone="89004684583")
+
+    first = await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+    assert first.subject.display_name == "Богданов Максим Евгеньевич"
+
+    second = await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+
+    assert second.from_cache
+    assert second.subject.display_name == "Богданов Максим Евгеньевич"
+    assert second.subject.inn == "410686394402"
+    assert second.subject.birth_date == date(1970, 9, 21)
+
+
+async def test_what_the_operator_typed_beats_what_the_cache_remembers(
+    container: Container,
+) -> None:
+    """Восстановление из кэша не затирает свежий ввод.
+
+    Оператор мог узнать про смену фамилии, которой в выгрузке ещё нет.
+    """
+    await container.import_service.import_text(
+        "\n".join(
+            [
+                "ФИО,Телефон,Дата_рождения,ИНН,Долг",
+                "Богданов Максим Евгеньевич,+7 (900) 468-45-83,21.09.1970,410686394402,44425",
+            ]
+        )
+    )
+    by_phone = SearchSubject(search_type=SearchType.PERSON, phone="89004684583")
+    await container.search_service.search(by_phone, telegram_user_id=OPERATOR_ID)
+
+    renamed = by_phone.model_copy(
+        update={"name": PersonName(last_name="Королёва", first_name="Мария")}
+    )
+    again = await container.search_service.search(renamed, telegram_user_id=OPERATOR_ID)
+
+    assert again.subject.name is not None
+    assert again.subject.name.last_name == "Королёва"
