@@ -875,7 +875,7 @@ async def test_import_requires_a_document(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
     await feed(dispatcher, bot, message=make_message("/import"))
-    assert sent.contains("Отправьте CSV-файл")
+    assert sent.contains("Отправьте выгрузку должников")
 
     await feed(dispatcher, bot, message=make_message("не файл"))
     assert sent.contains("Нужно отправить файл документом")

@@ -21,21 +21,31 @@ from app.services.import_service import ImportReport
 
 logger = get_logger(__name__)
 
-ALLOWED_EXTENSIONS = (".csv", ".txt")
-ALLOWED_MIME_PREFIXES = ("text/", "application/csv", "application/vnd.ms-excel")
+ALLOWED_EXTENSIONS = (".csv", ".txt", ".xlsx", ".xlsm", ".xls")
+ALLOWED_MIME_PREFIXES = (
+    "text/",
+    "application/csv",
+    "application/vnd.ms-excel",
+    # xlsx: длинное имя типа целиком, Telegram отдаёт его как есть.
+    "application/vnd.openxmlformats-officedocument",
+    # Некоторые клиенты присылают книгу без типа вовсе.
+    "application/octet-stream",
+)
 
 ASK_DOCUMENT = (
-    "Отправьте CSV-файл с выгрузкой должников.\n\n"
+    "Отправьте выгрузку должников — файл Excel или CSV.\n\n"
     f"Ожидаемые колонки:\n{', '.join(CANONICAL_COLUMNS)}\n\n"
     "Обязательна хотя бы одна из: fio или contract_number.\n"
-    "Кодировка: UTF-8 или Windows-1251."
+    "Подойдёт выгрузка из 1С как есть: лишние колонки не мешают, "
+    "названия распознаются по-русски, шапка может быть не первой строкой.\n"
+    "CSV — в кодировке UTF-8 или Windows-1251."
 )
 NOT_A_DOCUMENT = "Нужно отправить файл документом (не фото и не текстом)."
-WRONG_TYPE = "Похоже, это не CSV. Ожидается файл .csv в текстовой кодировке."
+WRONG_TYPE = "Похоже, это не выгрузка. Ожидается файл Excel (.xlsx) или CSV."
 DOWNLOAD_FAILED = "Не удалось скачать файл. Попробуйте ещё раз."
 
 
-def _is_csv(document: Document) -> bool:
+def _is_export(document: Document) -> bool:
     name = (document.file_name or "").lower()
     if name.endswith(ALLOWED_EXTENSIONS):
         return True
@@ -111,7 +121,7 @@ def build_router() -> Router:
             await message.answer(NOT_A_DOCUMENT, reply_markup=cancel_keyboard())
             return
 
-        if not _is_csv(document):
+        if not _is_export(document):
             await message.answer(WRONG_TYPE, reply_markup=cancel_keyboard())
             return
 

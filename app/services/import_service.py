@@ -26,6 +26,12 @@ from app.providers.internal.csv_schema import (
     decode_csv_bytes,
     iter_rows,
 )
+from app.providers.internal.xlsx import (
+    LEGACY_XLS_MESSAGE,
+    looks_like_legacy_xls,
+    looks_like_xlsx,
+    xlsx_to_sheet,
+)
 from app.utils.hashing import normalize_token
 from app.utils.masking import mask_phone
 
@@ -66,6 +72,21 @@ class ImportService:
         if len(payload) > self._settings.max_import_file_bytes:
             limit_mb = self._settings.max_import_file_bytes / (1024 * 1024)
             raise CsvFormatError(f"Файл больше допустимых {limit_mb:.0f} МБ.")
+        if looks_like_legacy_xls(payload):
+            # Отдельная ветка ради внятного ответа: как CSV этот файл выглядит
+            # набором двоичного мусора, и оператор получил бы «не распознана ни
+            # одна колонка» вместо «пересохраните в другом формате».
+            raise CsvFormatError(LEGACY_XLS_MESSAGE)
+        if looks_like_xlsx(payload):
+            # Разбор книги — CPU-bound и на сотнях строк ощутим: держим его вне
+            # цикла событий, иначе импорт подвесит идущие поиски.
+            sheet = await asyncio.to_thread(xlsx_to_sheet, payload)
+            report = await self.import_text(sheet.text, telegram_user_id=telegram_user_id)
+            # В книге обычно несколько листов, и выбор делаем мы, а не оператор.
+            # Молчаливый выбор — способ импортировать справочник вместо выгрузки
+            # и не узнать об этом; название листа делает выбор проверяемым.
+            report.warnings.insert(0, f"прочитан лист «{sheet.name}»")
+            return report
         text = decode_csv_bytes(payload)
         return await self.import_text(text, telegram_user_id=telegram_user_id)
 
