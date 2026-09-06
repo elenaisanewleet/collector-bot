@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -58,6 +59,34 @@ BAD_NEWDB_FIELD_MAP = (
 )
 
 
+async def _upgrade_schema() -> None:
+    """Привести схему базы к текущей ревизии перед стартом.
+
+    Раньше здесь стоял ``create_all``, создающий таблицы прямо из моделей, хотя
+    его собственная документация отправляла развёртывание к миграциям. Так и
+    вышло: на сервере схема родилась из моделей, ``alembic_version`` остался на
+    0005, а к моменту проверки код ушёл на 0009. Расхождение не проявлялось,
+    пока таблицы были пусты, и всплыло бы на первой же выгрузке заказчика —
+    «no such column: debtors.inn» вместо импорта.
+
+    Миграции идут на старте, а не руками при выкладке: ручной шаг здесь уже был
+    и уже был забыт. Alembic внутри поднимает свой цикл событий, поэтому
+    вызывается в отдельном потоке.
+    """
+
+    def _run() -> None:
+        from alembic import command
+        from alembic.config import Config
+
+        root = Path(__file__).resolve().parent.parent
+        config = Config(str(root / "alembic.ini"))
+        config.set_main_option("script_location", str(root / "migrations"))
+        command.upgrade(config, "head")
+
+    await asyncio.to_thread(_run)
+    logger.info("db.schema_upgraded")
+
+
 async def start_bot(settings: Settings | None = None) -> None:
     resolved = settings or get_settings()
     configure_logging(resolved.log_level, json_output=resolved.log_json)
@@ -65,7 +94,7 @@ async def start_bot(settings: Settings | None = None) -> None:
     _validate(resolved)
 
     container = build_container(resolved)
-    await container.database.create_all()
+    await _upgrade_schema()
 
     bot = Bot(
         token=resolved.telegram_bot_token,
