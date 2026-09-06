@@ -123,7 +123,7 @@ def build_router() -> Router:
         await answer_callback(callback)
 
     @router.callback_query(F.data == MENU_MORE)
-    async def handle_more(callback: CallbackQuery) -> None:
+    async def handle_more(callback: CallbackQuery, container: Container, user_id: int) -> None:
         """Способы поиска, кроме человека и всей базы.
 
         Отдельным экраном, потому что в главном меню их было девять штук разом —
@@ -132,7 +132,8 @@ def build_router() -> Router:
         """
         message = callback_message(callback)
         if message:
-            await message.answer(CHOOSE_OTHER, reply_markup=more_menu())
+            owner = container.access_service.is_owner(user_id)
+            await message.answer(CHOOSE_OTHER, reply_markup=more_menu(owner=owner))
         await answer_callback(callback)
 
     @router.callback_query(F.data == CANCEL_CALLBACK)

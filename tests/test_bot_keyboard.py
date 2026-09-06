@@ -26,8 +26,8 @@ from app.bot.keyboards import (
     BUTTON_HELP,
     BUTTON_HISTORY,
     BUTTON_SEARCH,
-    MENU_MORE,
     BUTTON_SOURCES,
+    MENU_MORE,
     REPLY_BUTTONS,
     main_reply_keyboard,
 )

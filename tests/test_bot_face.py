@@ -345,14 +345,10 @@ def test_menu_offers_the_reading_screens() -> None:
     """
     from app.bot.keyboards import MENU_MORE, main_menu, more_menu
 
-    main = [
-        button.callback_data for row in main_menu(owner=True).inline_keyboard for button in row
-    ]
+    main = [button.callback_data for row in main_menu(owner=True).inline_keyboard for button in row]
     assert main == ["menu:person", "batch:start", MENU_MORE]
 
-    more = [
-        button.callback_data for row in more_menu(owner=True).inline_keyboard for button in row
-    ]
+    more = [button.callback_data for row in more_menu(owner=True).inline_keyboard for button in row]
     assert "menu:sources" in more
     assert "menu:help" in more
 

@@ -289,7 +289,10 @@ async def test_a_single_check_stays_open_to_an_employee(
 ) -> None:
     """Ради этого закрывали не бота, а два действия в нём."""
     await feed(dispatcher, bot, message=make_message("/search", user_id=EMPLOYEE_ID))
-    assert sent.contains("Выберите тип проверки")
+    # ``/search`` — явный вход «дай выбрать», в отличие от нижней кнопки, которая
+    # ведёт сразу к телефону. Сотруднику он открыт: закрывали не бота, а два
+    # дорогих действия в нём.
+    assert sent.contains("Что делаем?")
 
     sent.texts.clear()
     await feed(
@@ -330,7 +333,7 @@ def test_the_menu_hides_what_an_employee_cannot_press() -> None:
     assert "menu:import" not in payloads
     # Остальное на месте: закрыты два действия, а не меню.
     assert "menu:person" in payloads
-    assert "menu:history" in payloads
+    assert "menu:more" in payloads
 
 
 def test_the_menu_keeps_everything_for_the_owner() -> None:
@@ -339,14 +342,14 @@ def test_the_menu_keeps_everything_for_the_owner() -> None:
     ]
 
     assert "batch:start" in payloads
-    assert "menu:import" in payloads
+    assert "batch:start" in payloads
 
 
 def test_the_bottom_keyboard_drops_the_batch_button_for_an_employee() -> None:
     labels = [button.text for row in main_reply_keyboard(owner=False).keyboard for button in row]
 
     assert BUTTON_BATCH not in labels
-    assert "🔍 Проверить одного" in labels
+    assert "Проверить человека" in labels
 
 
 async def test_start_shows_an_employee_no_batch_button(

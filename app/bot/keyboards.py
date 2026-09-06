@@ -174,7 +174,8 @@ def more_menu(*, owner: bool) -> InlineKeyboardMarkup:
     fourth = [InlineKeyboardButton(text="История проверок", callback_data=f"{MENU_PREFIX}:history")]
     if owner:
         fourth.insert(
-            0, InlineKeyboardButton(text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import")
+            0,
+            InlineKeyboardButton(text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import"),
         )
     buttons.append(fourth)
     buttons.append(
