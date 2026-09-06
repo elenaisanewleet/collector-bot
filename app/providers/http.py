@@ -29,6 +29,9 @@ HTTP_NOT_FOUND = 404
 HTTP_TOO_MANY_REQUESTS = 429
 HTTP_SERVER_ERROR_FLOOR = 500
 MAX_RETRY_AFTER_SECONDS = 30.0
+#: Переадресаций на один запрос. Больше одной-двух не бывает ни у одного из
+#: источников, но цепочку надо чем-то оборвать.
+MAX_REDIRECTS = 5
 
 
 class ProviderAuthError(ProviderError):
@@ -77,7 +80,10 @@ def build_client(
         base_url=base_url,
         timeout=httpx.Timeout(timeout_seconds),
         headers=dict(headers or {}),
-        follow_redirects=True,
+        # Переадресации не отдаются httpx на откуп: он идёт по ``Location`` куда
+        # угодно, вместе с телом и заголовками. Их ведёт request_raw, проверяя
+        # каждый переход, — см. _reject_unsafe_redirect.
+        follow_redirects=False,
     )
 
 
@@ -90,6 +96,7 @@ async def request_json(
     json_body: Mapping[str, Any] | None = None,
     retry: RetryPolicy | None = None,
     provider: str = "unknown",
+    credentialed: bool = True,
 ) -> tuple[Any, str]:
     """Perform a request and decode JSON.
 
@@ -97,7 +104,14 @@ async def request_json(
     ``STORE_RAW_RESPONSES`` enabled can persist exactly what arrived.
     """
     response = await request_raw(
-        client, method, url, params=params, json_body=json_body, retry=retry, provider=provider
+        client,
+        method,
+        url,
+        params=params,
+        json_body=json_body,
+        retry=retry,
+        provider=provider,
+        credentialed=credentialed,
     )
     return _decode(response), response.text
 
@@ -110,6 +124,7 @@ async def request_text(
     params: Mapping[str, Any] | None = None,
     retry: RetryPolicy | None = None,
     provider: str = "unknown",
+    credentialed: bool = True,
 ) -> str:
     """Perform a request and return the body as text.
 
@@ -120,7 +135,15 @@ async def request_text(
     difference between "the site was down" and "the register is empty" is
     exactly what these loops encode.
     """
-    response = await request_raw(client, method, url, params=params, retry=retry, provider=provider)
+    response = await request_raw(
+        client,
+        method,
+        url,
+        params=params,
+        retry=retry,
+        provider=provider,
+        credentialed=credentialed,
+    )
     return response.text
 
 
@@ -133,14 +156,21 @@ async def request_raw(
     json_body: Mapping[str, Any] | None = None,
     retry: RetryPolicy | None = None,
     provider: str = "unknown",
+    credentialed: bool = True,
 ) -> httpx.Response:
-    """The retry loop itself: one accepted response, or a :class:`ProviderError`."""
+    """The retry loop itself: one accepted response, or a :class:`ProviderError`.
+
+    ``credentialed`` — посылаем ли мы этому источнику ключ. См. :func:`_classify`:
+    отвергнуть можно только предъявленное.
+    """
     policy = retry or RetryPolicy()
     last_error: ProviderError | None = None
 
     for attempt in range(policy.max_retries + 1):
         try:
-            response = await client.request(method, url, params=params, json=json_body)
+            response = await _send_following_safe_redirects(
+                client, method, url, params=params, json_body=json_body, provider=provider
+            )
         except httpx.TimeoutException as exc:
             last_error = ProviderUnavailableError("timeout", str(exc) or "request timed out")
         except httpx.HTTPError as exc:
@@ -148,7 +178,7 @@ async def request_raw(
                 "connection_error", f"{type(exc).__name__}: {exc}"
             )
         else:
-            error = _classify(response, provider=provider)
+            error = _classify(response, provider=provider, credentialed=credentialed)
             if error is None:
                 return response
             if not _is_retryable(error):
@@ -168,7 +198,79 @@ async def request_raw(
     raise last_error or ProviderUnavailableError("unknown", "request failed")
 
 
-def _classify(response: httpx.Response, *, provider: str) -> ProviderError | None:
+async def _send_following_safe_redirects(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    params: Mapping[str, Any] | None,
+    json_body: Mapping[str, Any] | None,
+    provider: str,
+) -> httpx.Response:
+    """Переадресации вручную, с проверкой каждого перехода.
+
+    ``follow_redirects=True`` означал, что источник сам решает, куда уйдёт
+    запрос: на 307 с ``Location`` на посторонний домен httpx послушно повторял
+    туда POST — целиком, с телом и заголовками. Чужой хост получал ФИО
+    должника и ``X-CSRFToken``, а его ответ разбирался как ответ реестра.
+    Работало это на любом источнике, не только на наследственных делах: хватало
+    ответа с ``Location``.
+
+    Поэтому смена хоста и понижение схемы запрещены, а безобидные переходы
+    внутри того же хоста (косая черта в конце, канонический путь) остаются
+    рабочими.
+    """
+    request = client.build_request(method, url, params=params, json=json_body)
+    for _ in range(MAX_REDIRECTS):
+        # follow_redirects передаётся явно, а не берётся из клиента: правило не
+        # должно зависеть от того, как собран конкретный клиент.
+        response = await client.send(request, follow_redirects=False)
+        following = response.next_request
+        if following is None:
+            return response
+        _reject_unsafe_redirect(request.url, following.url, provider=provider)
+        logger.info(
+            "provider.redirect",
+            provider=provider,
+            status=response.status_code,
+            path=following.url.path,
+        )
+        await response.aclose()
+        request = following
+
+    raise ProviderBadResponseError(
+        "too_many_redirects", f"{provider}: переадресации не кончаются (предел {MAX_REDIRECTS})"
+    )
+
+
+def _reject_unsafe_redirect(current: httpx.URL, target: httpx.URL, *, provider: str) -> None:
+    """Перейти можно только туда, куда мы и собирались, — или никуда.
+
+    Ошибка, а не тихий возврат ответа редиректа: «источник увёл нас в сторону»
+    обязано быть видно как сбой проверки. Молча отданный 307 разобрался бы как
+    непонятное тело, то есть как «проверено, ничего не найдено».
+    """
+    reason: str | None = None
+    if target.host != current.host:
+        reason = f"переадресация с {current.host} на посторонний хост {target.host}"
+    elif current.scheme == "https" and target.scheme != "https":
+        reason = f"переадресация с https на {target.scheme}"
+    if reason is None:
+        return
+    logger.warning(
+        "provider.redirect_blocked",
+        provider=provider,
+        target_host=target.host,
+        target_scheme=target.scheme,
+    )
+    raise ProviderBadResponseError(
+        "redirect_blocked", f"{provider}: {reason} — запрос не отправлен"
+    )
+
+
+def _classify(
+    response: httpx.Response, *, provider: str, credentialed: bool = True
+) -> ProviderError | None:
     status = response.status_code
     # Порог — 400, а не 401. С 401 всякий ответ 4xx ниже него считался успехом и
     # уходил в разбор тела: при пустом теле источник докладывался как приславший
@@ -179,6 +281,19 @@ def _classify(response: httpx.Response, *, provider: str) -> ProviderError | Non
     if status < HTTP_BAD_REQUEST:
         return None
     if status in {HTTP_UNAUTHORIZED, HTTP_FORBIDDEN}:
+        if not credentialed:
+            # Источнику, которому мы не предъявляем ключа, отвергнуть нечего.
+            # Открытый сайт отвечает 403 на запрос, который ему не понравился:
+            # ушла cookie-сессия, протух csrf-токен, не тот User-Agent, слишком
+            # часто спрашиваем. Названное ``unauthorized``, это попадало в
+            # ``REFUSAL_CODES`` — три должника подряд, и массовый прогон на
+            # восемьсот строк вставал, сообщая оператору про баланс и ключ,
+            # которых у бесплатного реестра нет. Бесплатный вспомогательный
+            # источник не имеет права остановить платную работу; проверка
+            # остаётся непроверенной, и это видно в строке этого должника.
+            return ProviderUnavailableError(
+                "rejected", f"{provider}: источник отклонил запрос (HTTP {status})"
+            )
         return ProviderAuthError(f"{provider} rejected the credentials (HTTP {status})")
     if status == HTTP_PAYMENT_REQUIRED:
         # A depleted prepaid balance is not a transient fault: retrying spends

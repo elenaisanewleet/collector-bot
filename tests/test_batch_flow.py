@@ -501,8 +501,9 @@ async def test_a_cached_refusal_does_not_stop_todays_run(loaded: Container) -> N
     fresh = DebtorReport(subject=subject, provider_results=[refused])
     cached = DebtorReport(subject=subject, provider_results=[refused], from_cache=True)
 
-    assert _refusals(fresh) == (ProviderName.FSSP.value,)
-    assert _refusals(cached) == ()
+    paid = frozenset({ProviderName.FSSP.value})
+    assert _refusals(fresh, paid=paid) == (ProviderName.FSSP.value,)
+    assert _refusals(cached, paid=paid) == ()
 
 
 async def test_a_torn_run_is_closed_honestly_rather_than_left_running(

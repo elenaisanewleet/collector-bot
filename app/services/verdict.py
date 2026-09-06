@@ -23,6 +23,7 @@ from app.domain.enums import PROVIDER_TITLES, BusinessRole, ProviderName, ScoreC
 from app.domain.fees import claim_fee, court_order_fee
 from app.domain.models import DebtorReport
 from app.domain.verdict import FeeBasis, Verdict, VerdictDecision, VerdictReason
+from app.utils.formatting import pluralize_ru
 from app.utils.money import format_amount
 
 # Источники, без ответа которых решение принимать рано.
@@ -116,17 +117,26 @@ class VerdictEngine:
         case = f"дело {record.case_number}" if record.case_number else "наследственное дело"
         died = f", смерть {record.death_date.strftime('%d.%m.%Y')}" if record.death_date else ""
         notary = f"; нотариус: {record.notary_name}" if record.notary_name else ""
+        # Состояние дела — из записи, а не из слова «открыто» в шаблоне. Оно
+        # печаталось всегда одинаково, и отчёт называл открытым дело, помеченное
+        # закрытым строкой выше; следующий шаг у них разный.
+        state = "открыто" if record.is_open else "закрыто"
+        # Размер пула однофамильцев доходит до заголовка, потому что заголовок —
+        # это то, что оператор читает в выгрузке очереди и несёт в суд. «Должник
+        # умер» на основании одной записи из 1730 и на основании одной записи из
+        # одной — утверждения разной силы, и до сих пор они выглядели одинаково.
         return VerdictDecision(
             verdict=Verdict.REVIEW,
             headline=(
-                "Открыто наследственное дело: должник умер. Иск к нему суд не примет — "
-                "требование предъявляется наследникам или к наследственному имуществу "
-                "в пределах его стоимости."
+                f"Наследственное дело ({state}): должник умер, дата рождения совпала. "
+                "Иск к нему суд не примет — требование предъявляется наследникам "
+                "или к наследственному имуществу в пределах его стоимости."
+                f"{_namesake_note(record.namesake_count)}"
             ),
             reasons=(
                 VerdictReason(
                     code="confirmed_probate_case",
-                    text=f"{case}{died}{notary}",
+                    text=f"{case} ({state}){died}{notary}",
                     source=ProviderName.INHERITANCE,
                 ),
             ),
@@ -344,6 +354,23 @@ class VerdictEngine:
 def _our_debt(report: DebtorReport) -> Decimal | None:
     record = report.internal_record
     return record.debt_amount if record else None
+
+
+def _namesake_note(namesake_count: int | None) -> str:
+    """Сколько дел реестр вернул по этому ФИО — если больше одного.
+
+    Реестр ФНП ищет только по ФИО и отдаёт всех однофамильцев разом. Одно дело
+    из 1730 подтверждено датой рождения — этого достаточно, чтобы не подавать
+    иск к покойному, и недостаточно, чтобы читатель отчёта не захотел проверить
+    руками. При единственном найденном деле оговорка не нужна и не печатается.
+    """
+    if not namesake_count or namesake_count <= 1:
+        return ""
+    noun = pluralize_ru(namesake_count, "дело", "дела", "дел")
+    return (
+        f" По этому ФИО реестр вернул {namesake_count} {noun} — "
+        "совпадение подтверждено датой рождения."
+    )
 
 
 def _silence_reason(report: DebtorReport, provider: ProviderName) -> str:

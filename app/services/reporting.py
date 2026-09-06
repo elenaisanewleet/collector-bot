@@ -607,10 +607,27 @@ def _inheritance_lines(item: InheritanceCase) -> list[str]:
     lines = [f"• Дело {item.case_number or 'без номера'} — {state}"]
     if item.deceased_name:
         lines.append(f"  Наследодатель: {truncate(item.deceased_name, 90)}")
+    # Печатается ВСЕГДА, в том числе когда её нет. На этом единственном признаке
+    # держится и подтверждение («дата рождения совпала»), и отбраковка, а в
+    # листе, который уходит в суд, не было ни строки, по которой это можно
+    # проверить глазами. Утверждение о совпадении обязано быть проверяемым,
+    # а его отсутствие — объяснённым.
+    lines.append(
+        "  Дата рождения: "
+        + (
+            format_date(item.deceased_birth_date)
+            if item.deceased_birth_date
+            else "реестр не указал — сопоставить не с чем"
+        )
+    )
     if item.death_date:
         lines.append(f"  Дата смерти: {format_date(item.death_date)}")
     if item.case_date:
-        lines.append(f"  Дело открыто: {format_date(item.case_date)}")
+        # «Заведено», а не «дело открыто»: подпись стояла в двух строках от
+        # состояния дела и читалась как противоречие ему у закрытого дела.
+        lines.append(f"  Заведено: {format_date(item.case_date)}")
+    if item.case_close_date:
+        lines.append(f"  Закрыто: {format_date(item.case_close_date)}")
     if item.notary_name:
         # Контакт нотариуса — единственный практический следующий шаг: круг
         # наследников знает он, и больше никто.

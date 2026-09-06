@@ -382,7 +382,13 @@ class SearchRepository:
         return found
 
     async def purge_older_than(self, cutoff: datetime) -> int:
-        """Retention hook: drop search history older than the cutoff."""
+        """Retention hook: drop search history older than the cutoff.
+
+        Результаты провайдеров и отчёт уносит каскадом: ``ON DELETE CASCADE``
+        объявлен в схеме и теперь действительно исполняется — внешние ключи
+        включаются на каждом соединении, см. :mod:`app.db.session`.
+        """
+        await self._purge_orphaned_children()
         # execute() is typed as Result; a DELETE always yields a CursorResult,
         # which is the only kind that carries rowcount.
         result = cast(
@@ -392,6 +398,33 @@ class SearchRepository:
             ),
         )
         return result.rowcount or 0
+
+    async def _purge_orphaned_children(self) -> int:
+        """Подобрать то, что осиротело, пока внешние ключи были выключены.
+
+        У этих строк родителя уже нет, поэтому по ``created_at`` запроса их не
+        найти и каскад до них не дойдёт: без отдельного прохода они остались бы
+        в базе навсегда — ровно те персональные данные, которые ретеншен уже
+        отчитался удалившим. Проход дешёвый (индекс по ``search_request_id``) и
+        после первой уборки не находит ничего, потому что новых сирот больше не
+        появляется.
+
+        Порядок важен: сначала сироты, потом удаление по cutoff. Иначе проход
+        подобрал бы за сломанным каскадом в том же вызове и скрыл бы поломку.
+        """
+        alive = select(SearchRequest.id).where(SearchRequest.id == SearchResult.search_request_id)
+        results = cast(
+            "CursorResult[Any]",
+            await self._session.execute(delete(SearchResult).where(~alive.exists())),
+        )
+        alive_reports = select(SearchRequest.id).where(
+            SearchRequest.id == DebtorReportRow.search_request_id
+        )
+        reports = cast(
+            "CursorResult[Any]",
+            await self._session.execute(delete(DebtorReportRow).where(~alive_reports.exists())),
+        )
+        return (results.rowcount or 0) + (reports.rowcount or 0)
 
 
 class ShareLinkRepository:

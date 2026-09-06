@@ -918,6 +918,106 @@ async def test_request_json_honours_retry_budget() -> None:
     assert getattr(exc_info.value, "code", None) == "server_error"
 
 
+# Переадресация — это указание источника, куда отправить наш запрос ещё раз,
+# вместе с телом и заголовками. Проверяется на POST с ФИО в теле и с
+# ``X-CSRFToken`` в заголовках: это в точности то, что уходило на чужой хост.
+FOREIGN_URL = "https://evil.example.net"
+NAME_BODY = {"name": "Иванов Иван Иванович"}
+
+
+@respx.mock
+async def test_a_redirect_to_another_host_is_refused() -> None:
+    """Чужой хост не должен получить ни ФИО должника, ни csrf-токен."""
+    respx.post(f"{BASE_URL}/api").mock(
+        return_value=httpx.Response(307, headers={"Location": f"{FOREIGN_URL}/api"})
+    )
+    foreign = respx.post(f"{FOREIGN_URL}/api").mock(
+        return_value=httpx.Response(200, json={"count": 0, "records": []})
+    )
+
+    async with build_client(
+        base_url=BASE_URL, timeout_seconds=1, headers={"X-CSRFToken": "secret"}
+    ) as client:
+        with pytest.raises(Exception) as exc_info:
+            await request_json(
+                client,
+                "POST",
+                "/api",
+                json_body=NAME_BODY,
+                retry=RetryPolicy(max_retries=0),
+                provider="test",
+            )
+
+    assert foreign.call_count == 0
+    assert getattr(exc_info.value, "code", None) == "redirect_blocked"
+
+
+@respx.mock
+async def test_a_redirect_that_drops_https_is_refused() -> None:
+    """Тот же хост, но открытым текстом, — это тоже утечка тела запроса."""
+    plain = "http://api.example.test"
+    respx.post(f"{BASE_URL}/api").mock(
+        return_value=httpx.Response(307, headers={"Location": f"{plain}/api"})
+    )
+    downgraded = respx.post(f"{plain}/api").mock(
+        return_value=httpx.Response(200, json={"count": 0, "records": []})
+    )
+
+    async with build_client(base_url=BASE_URL, timeout_seconds=1) as client:
+        with pytest.raises(Exception) as exc_info:
+            await request_json(
+                client,
+                "POST",
+                "/api",
+                json_body=NAME_BODY,
+                retry=RetryPolicy(max_retries=0),
+                provider="test",
+            )
+
+    assert downgraded.call_count == 0
+    assert getattr(exc_info.value, "code", None) == "redirect_blocked"
+
+
+@respx.mock
+async def test_a_redirect_inside_the_same_host_still_works() -> None:
+    """Запрет не должен ломать обычный переезд пути внутри того же сайта."""
+    respx.post(f"{BASE_URL}/api").mock(
+        return_value=httpx.Response(307, headers={"Location": f"{BASE_URL}/api/"})
+    )
+    moved = respx.post(f"{BASE_URL}/api/").mock(
+        return_value=httpx.Response(200, json={"count": 1, "records": [{"id": 1}]})
+    )
+
+    async with build_client(base_url=BASE_URL, timeout_seconds=1) as client:
+        payload, _raw = await request_json(
+            client,
+            "POST",
+            "/api",
+            json_body=NAME_BODY,
+            retry=RetryPolicy(max_retries=0),
+            provider="test",
+        )
+
+    assert moved.call_count == 1
+    assert payload == {"count": 1, "records": [{"id": 1}]}
+
+
+@respx.mock
+async def test_a_redirect_loop_ends_with_an_error() -> None:
+    """Кольцо переадресаций обрывается ошибкой, а не бесконечным хождением."""
+    respx.get(f"{BASE_URL}/loop").mock(
+        return_value=httpx.Response(302, headers={"Location": f"{BASE_URL}/loop"})
+    )
+
+    async with build_client(base_url=BASE_URL, timeout_seconds=1) as client:
+        with pytest.raises(Exception) as exc_info:
+            await request_json(
+                client, "GET", "/loop", retry=RetryPolicy(max_retries=0), provider="test"
+            )
+
+    assert getattr(exc_info.value, "code", None) == "too_many_redirects"
+
+
 @respx.mock
 async def test_demo_providers_are_deterministic(person_subject: SearchSubject) -> None:
     from app.providers.mock import DemoFSSPProvider

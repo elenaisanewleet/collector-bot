@@ -84,6 +84,15 @@ class BaseProvider(ABC):
     # A chained source is fed by another source's answer rather than by the
     # subject, so it runs in a second phase. See ``SearchService._run_chained``.
     is_chained: bool = False
+    # Источник ничего не стоит: ни ключа, ни счёта, ни строки в смете. Умолчание
+    # «платный» намеренно — новый источник по умолчанию считается стоящим денег.
+    #
+    # Читает флаг массовый прогон: остановка прогона существует ради денег
+    # («продолжать — значит платить за пустоту», см. ``services/batch.py``), и
+    # отказ источника, за который никто не платит, останавливать её не должен.
+    # Это не то же самое, что ``planned_calls() == 0``: там ноль означает «этому
+    # субъекту нечем спросить», и его выдают в том числе платные источники.
+    is_free: bool = False
 
     @property
     @abstractmethod

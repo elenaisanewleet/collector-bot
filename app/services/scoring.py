@@ -473,12 +473,24 @@ def _inheritance_factors(report: DebtorReport) -> list[ScoreFactor]:
     record = confirmed[0]
     case = f", дело {record.case_number}" if record.case_number else ""
     died = f" (смерть {record.death_date.strftime('%d.%m.%Y')})" if record.death_date else ""
+    # Состояние — из записи: «открыто» в шаблоне противоречило пометке
+    # «закрыто» строкой выше в том же отчёте.
+    state = "открыто" if record.is_open else "закрыто"
+    # Размер пула однофамильцев — часть основания, а не сноска под ним. −35
+    # балла, снятые по одной записи из 1730, обязаны нести это число рядом с
+    # собой: фактор оценки читается отдельно от раздела с примечаниями.
+    pool = record.namesake_count
+    among = (
+        f", всего по этому ФИО в реестре {pool} {pluralize_ru(pool, 'дело', 'дела', 'дел')}"
+        if pool and pool > 1
+        else ""
+    )
     return [
         ScoreFactor(
             name="confirmed_probate_case",
             delta=CONFIRMED_PROBATE_CASE_PENALTY,
             reason=(
-                f"открыто наследственное дело{case}{died}: должник умер, "
+                f"наследственное дело {state}{case}{died}{among}: должник умер, "
                 "взыскание идёт к наследникам в пределах стоимости наследства"
             ),
             source=ProviderName.INHERITANCE,

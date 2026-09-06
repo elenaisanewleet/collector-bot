@@ -286,6 +286,13 @@ class BatchService:
         self._database = database
         self._search = search_service
         self._verdict = verdict_engine or VerdictEngine(settings)
+        # Остановить прогон может только источник, за который платят. См.
+        # :func:`_refusals` и ``BaseProvider.is_free``.
+        self._paid_sources = frozenset(
+            provider.name.value
+            for provider in search_service.registry.external
+            if not provider.is_free
+        )
 
     async def queue_snapshot(
         self, run_id: int, *, limit: int | None = None
@@ -596,7 +603,7 @@ class BatchService:
         return _Checked(
             decision=self._verdict.decide(report),
             score=score,
-            refused_by=_refusals(report),
+            refused_by=_refusals(report, paid=self._paid_sources),
         )
 
 
@@ -646,11 +653,19 @@ class _Halt:
         return self.stopped
 
 
-def _refusals(report: DebtorReport) -> tuple[str, ...]:
+def _refusals(report: DebtorReport, *, paid: frozenset[str]) -> tuple[str, ...]:
     """Источники отчёта, отказавшиеся отвечать по деньгам или по ключу.
 
     Ответы из кэша сюда не попадают: они ничего не стоили и говорят о вчерашнем
     состоянии счёта, а останавливать сегодняшний прогон надо по сегодняшнему.
+
+    ``paid`` — источники, за которые платят, и только они могут остановить
+    прогон. Остановка защищает деньги: «продолжать — значит платить за пустоту».
+    У бесплатного источника нет ни счёта, чтобы он кончился, ни ключа, чтобы его
+    отклонили, — его отказ оставляет дыру в одной строке, а не во всех
+    оставшихся, и оператору про баланс сказать нечего. Второй рубеж к тому же
+    ``_classify``, который перестал звать 403 без ключа отказом по ключу:
+    источник может назвать код отказа и сам, из собственного тела ответа.
     """
     if report.from_cache:
         return ()
@@ -658,7 +673,7 @@ def _refusals(report: DebtorReport) -> tuple[str, ...]:
         dict.fromkeys(
             result.provider.value
             for result in report.provider_results
-            if result.error_code in REFUSAL_CODES
+            if result.error_code in REFUSAL_CODES and result.provider.value in paid
         )
     )
 

@@ -87,6 +87,10 @@ PHONE_MATCH_BONUS = 0.20
 NO_DISCRIMINATOR_PENALTY = -0.05
 COMMON_SURNAME_PENALTY = -0.05
 CONFLICTING_BIRTH_DATE_CONFIDENCE = 0.05
+# Потолок для наследственного дела, чьё совпадение по дате рождения оспорено
+# другим таким же делом с другой датой смерти. Ровно порог «возможного
+# совпадения»: запись видна, но подтверждённой не считается.
+CONTESTED_PROBATE_CONFIDENCE = 0.55
 IDENTIFIER_LOOKUP_CONFIDENCE = 1.0
 # A VIN the operator typed into the query, echoed back by the record.
 VIN_QUERY_MATCH_CONFIDENCE = 0.95
@@ -188,6 +192,22 @@ class IdentityMatcher:
             return MatchAssessment(
                 confidence=CONFLICTING_BIRTH_DATE_CONFIDENCE,
                 reasons=("дата смерти раньше даты рождения должника",),
+            )
+
+        if _contested_probate(record):
+            # Дата рождения совпала — и совпала не у одной записи, а у
+            # нескольких, называющих разные даты смерти. Один и тот же человек
+            # умирает один раз, значит совпадение по дате рождения здесь
+            # доказанно неразличающее: подтвердить по нему смерть должника
+            # нельзя. Ветка стоит после дисквалификации по дате смерти
+            # намеренно — заведомо чужая запись должна остаться заведомо чужой,
+            # а не подняться до «возможного совпадения».
+            return MatchAssessment(
+                confidence=CONTESTED_PROBATE_CONFIDENCE,
+                reasons=(
+                    "дата рождения совпала",
+                    "но таких записей несколько, и даты смерти в них разные",
+                ),
             )
 
         name_value, reasons = self._name_component(subject.name, record_name)
@@ -344,6 +364,17 @@ def _record_birth_date(record: SourcedFact) -> date | None:
 def _died_before_birth(subject: SearchSubject, record: SourcedFact) -> bool:
     """Дисквалификация по дате смерти. Правило живёт в самой записи."""
     return isinstance(record, InheritanceCase) and record.contradicts_birth_date(subject.birth_date)
+
+
+def _contested_probate(record: SourcedFact) -> bool:
+    """Совпадение по дате рождения, оспоренное другой такой же записью.
+
+    Флаг ставит провайдер: увидеть противоречие можно только на всём наборе
+    записей сразу, а матчер смотрит на одну. Читается он здесь, чтобы уровень
+    сопоставления, чип в таблице и гейт ``confirmed_inheritance_cases``
+    говорили одно и то же — и говорили это и по записи, поднятой из кэша.
+    """
+    return isinstance(record, InheritanceCase) and record.contested
 
 
 def _is_about_a_company(record: SourcedFact) -> bool:

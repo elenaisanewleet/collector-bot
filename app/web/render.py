@@ -64,6 +64,7 @@ from app.services.reporting import (
     unanswered_line,
 )
 from app.utils.dates import format_date, format_datetime
+from app.utils.formatting import pluralize_ru
 from app.utils.masking import mask_phone, mask_vin
 from app.utils.money import format_amount
 from app.web.style import CSS
@@ -787,7 +788,7 @@ def inheritance_section(report: DebtorReport) -> str:
         notes = result.notes if result is not None else ()
         body += "".join(f'<p class="note">{e(note)}</p>' for note in notes)
     if probable:
-        noun = "однофамилец" if len(probable) == 1 else "однофамильцев"
+        noun = pluralize_ru(len(probable), "однофамилец", "однофамильца", "однофамильцев")
         body += (
             f'<details class="note"><summary>{len(probable)} {noun}: '
             "сопоставить с должником не удалось</summary>"
@@ -802,10 +803,19 @@ def inheritance_section(report: DebtorReport) -> str:
 
 
 def _inheritance_table(items: Sequence[InheritanceCase]) -> str:
+    """Колонка «Рождение» — не украшение, а само доказательство.
+
+    Дата рождения наследодателя — единственный признак, по которому запись
+    подтверждается или отбраковывается, и в таблице её не было: чип
+    «подтверждено» стоял рядом с датой смерти и фамилией, а то, из-за чего он
+    там стоит, оператору показано не было. Пустая ячейка при этом так же
+    осмысленна, как заполненная: она и означает «сопоставить нечем».
+    """
     rows = [
         (
             cell(item.case_number, label="Дело", numeric=True, copy=True),
             cell(item.deceased_name, label="Наследодатель"),
+            cell(format_date(item.deceased_birth_date), label="Рождение", numeric=True),
             cell(format_date(item.death_date), label="Смерть", numeric=True),
             cell("открыто" if item.is_open else "закрыто", label="Состояние"),
             cell(item.notary_name, label="Нотариус"),
@@ -813,7 +823,10 @@ def _inheritance_table(items: Sequence[InheritanceCase]) -> str:
         )
         for item in items
     ]
-    return table(("Дело", "Наследодатель", "Смерть", "Состояние", "Нотариус", "Совпадение"), rows)
+    return table(
+        ("Дело", "Наследодатель", "Рождение", "Смерть", "Состояние", "Нотариус", "Совпадение"),
+        rows,
+    )
 
 
 def court_section(report: DebtorReport) -> str:

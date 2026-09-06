@@ -1,0 +1,53 @@
+{
+  "count": 2,
+  "records": [
+    {
+      "Fio": "Тестов Андрей Сергеевич",
+      "BirthDate": "19850312",
+      "DeathDate": "20240115",
+      "DeathActNumber": "170229770000100010000",
+      "DeathActDate": "2022-02-14",
+      "Address": "г. Москва, ул. Примерная, д. 1, кв. 1",
+      "CaseIndex": "112",
+      "CaseNumber": "112/2024",
+      "CaseDate": "20240206",
+      "CaseCloseDate": null,
+      "CaseId": "00000000-0000-0000-0000-000000000000",
+      "CaseIDDate": "2022-03-01",
+      "NotaryId": "77-0000",
+      "NotaryName": "Образцова Мария Ивановна",
+      "NotaryStatus": "Действующий",
+      "DistrictName": "Московский городской нотариальный округ",
+      "ContactName": "Нотариусов Иван Иванович 1",
+      "ContactAddress": "г. Москва, ул. Нотариальная, д. 1",
+      "ContactPhone": "+7 (495) 000-00-00",
+      "ChamberId": "77",
+      "ChamberName": "Московская городская нотариальная палата",
+      "Archives": []
+    },
+    {
+      "Fio": "Тестов Андрей Сергеевич",
+      "BirthDate": "19850312",
+      "DeathDate": "20211130",
+      "DeathActNumber": "170229770000100010000",
+      "DeathActDate": "2022-02-14",
+      "Address": "г. Москва, ул. Примерная, д. 1, кв. 1",
+      "CaseIndex": "503",
+      "CaseNumber": "503/2021",
+      "CaseDate": "20211215",
+      "CaseCloseDate": null,
+      "CaseId": "00000000-0000-0000-0000-000000000000",
+      "CaseIDDate": "2022-03-01",
+      "NotaryId": "77-0000",
+      "NotaryName": "Пробников Пётр Петрович",
+      "NotaryStatus": "Действующий",
+      "DistrictName": "Московский городской нотариальный округ",
+      "ContactName": "Нотариусов Иван Иванович 1",
+      "ContactAddress": "г. Москва, ул. Нотариальная, д. 1",
+      "ContactPhone": "+7 (495) 000-00-00",
+      "ChamberId": "77",
+      "ChamberName": "Московская городская нотариальная палата",
+      "Archives": []
+    }
+  ]
+}
