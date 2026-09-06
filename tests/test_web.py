@@ -182,7 +182,8 @@ async def test_revoked_link_stops_opening(web_container: Container) -> None:
     assert url is not None
     token = url.rsplit("/", maxsplit=1)[-1]
 
-    assert await web_container.share_service.revoke(target, telegram_user_id=OPERATOR_ID) == 1
+    revoked = await web_container.share_service.revoke(target, telegram_user_id=OPERATOR_ID)
+    assert revoked.revoked == 1
     assert await web_container.share_service.resolve(token, ShareKind.REPORT) is None
 
     # И перевыпуск не возвращает скомпрометированный адрес.
@@ -198,7 +199,7 @@ async def test_revoke_all_closes_every_live_link(web_container: Container) -> No
     await web_container.share_service.issue(
         ShareTarget(ShareKind.QUEUE, 2), telegram_user_id=OPERATOR_ID
     )
-    assert await web_container.share_service.revoke_all(telegram_user_id=OPERATOR_ID) == 2
+    assert (await web_container.share_service.revoke_all(telegram_user_id=OPERATOR_ID)).revoked == 2
 
 
 async def test_queue_link_expires_sooner_than_a_report_link(web_container: Container) -> None:

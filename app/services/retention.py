@@ -15,6 +15,7 @@ from app.config import Settings
 from app.db.repository import QueryCardRepository, SearchRepository, ShareLinkRepository
 from app.db.session import Database
 from app.logging_setup import get_logger
+from app.services.share import ShareKind
 from app.utils.dates import utcnow
 
 logger = get_logger(__name__)
@@ -33,11 +34,18 @@ CARD_RETENTION_DAYS = 3
 async def purge_once(settings: Settings, database: Database) -> tuple[int, int, int]:
     """Один проход. Возвращает (запросов, ссылок, карточек)."""
     async with database.session() as session:
-        links = await ShareLinkRepository(session).purge_expired()
+        link_repo = ShareLinkRepository(session)
+        links = await link_repo.purge_expired()
         requests = 0
         if settings.history_retention_days:
             cutoff = utcnow() - timedelta(days=settings.history_retention_days)
             requests = await SearchRepository(session).purge_older_than(cutoff)
+        # Порядок важен: ссылки на удалённую историю подбираются после неё же.
+        # Иначе связка «оператор → какой отчёт он смотрел» переживала бы сам
+        # отчёт — ретеншен отчитывался бы удалившим больше, чем удалил, — а
+        # оператор видел бы её в /revoke как действующую ссылку, хотя открывать
+        # по ней уже нечего.
+        links += await link_repo.purge_orphaned_reports(kind=ShareKind.REPORT.value)
         cards = await QueryCardRepository(session).purge_older_than(
             utcnow() - timedelta(days=CARD_RETENTION_DAYS)
         )
