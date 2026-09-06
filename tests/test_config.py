@@ -93,3 +93,59 @@ def test_out_of_range_values_are_rejected() -> None:
         make_settings(provider_concurrency=0)
     with pytest.raises(ValidationError):
         make_settings(request_timeout_seconds=0)
+
+
+def test_poll_that_outlasts_the_budget_is_rejected() -> None:
+    """Опрос, не влезающий в бюджет источника, не должен молча доехать до прода.
+
+    Ровно эта комбинация стояла в бою: 30 × 3 с = 90 с при бюджете 90 с. ФССП
+    обрывалась на последней попытке, вызов был оплачен, а в отчёте значилось
+    «источник не ответил» — и вердикт уходил в «проверить руками» по причине,
+    которой у должника не было.
+    """
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="бюджет источника"):
+        make_settings(
+            newdb_poll_attempts=30,
+            newdb_poll_interval_seconds=3.0,
+            provider_budget_seconds=90.0,
+        )
+
+
+def test_budget_must_cover_the_http_request_on_top_of_polling() -> None:
+    """Запас нужен и на сами обращения, а не только на паузы между ними.
+
+    Интервал — это сон между попытками; каждая попытка вдобавок ждёт ответа до
+    request_timeout_seconds. Бюджет, равный сумме одних пауз, обрывает источник
+    на последнем запросе.
+    """
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        make_settings(
+            newdb_poll_attempts=10,
+            newdb_poll_interval_seconds=2.0,
+            request_timeout_seconds=15.0,
+            provider_budget_seconds=20.0,
+        )
+
+    settings = make_settings(
+        newdb_poll_attempts=10,
+        newdb_poll_interval_seconds=2.0,
+        request_timeout_seconds=15.0,
+        provider_budget_seconds=40.0,
+    )
+    assert settings.provider_budget_seconds == 40.0
+
+
+def test_shipped_defaults_leave_room_for_a_slow_source() -> None:
+    """Значения по умолчанию обязаны переживать самый медленный живой источник.
+
+    Замеры: rosreestr — 49 с, arbitr_legal — 59 с. Если умолчания перестанут их
+    покрывать, ошибётся не конфигуратор, а каждый, кто ничего не настраивал.
+    """
+    settings = make_settings()
+    poll_seconds = settings.newdb_poll_attempts * settings.newdb_poll_interval_seconds
+    assert poll_seconds >= 59.0
+    assert poll_seconds + settings.request_timeout_seconds <= settings.provider_budget_seconds

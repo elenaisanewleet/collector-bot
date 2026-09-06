@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -102,8 +102,10 @@ class Settings(BaseSettings):
     newdb_method_path: str = "/v2"
     # Живые тайминги: rosreestr — 49 с, arbitr_legal — 59 с. Прежние десять
     # попыток по две секунды бросали оба вызова оплаченными и «недоступными».
-    newdb_poll_attempts: Annotated[int, Field(ge=1, le=60)] = 30
-    newdb_poll_interval_seconds: Annotated[float, Field(ge=0.1, le=30)] = 2.0
+    # Произведение попыток на интервал обязано укладываться в бюджет источника
+    # с запасом на HTTP: за этим следит _poll_must_fit_in_budget.
+    newdb_poll_attempts: Annotated[int, Field(ge=1, le=60)] = 25
+    newdb_poll_interval_seconds: Annotated[float, Field(ge=0.1, le=30)] = 3.0
     # Row schemas for every NewDB method except fssp_person, keyed by method
     # name. Only fssp_person has been read against a real response; the rest are
     # described by the deployment, and a method absent from this file is a
@@ -167,7 +169,7 @@ class Settings(BaseSettings):
     # запроса. Асинхронные методы NewDB опрашиваются по кругу, и потолок,
     # выведенный из таймаута одного запроса, обрывал их раньше, чем агрегатор
     # успевал ответить: вызов оплачен, результат выброшен.
-    provider_budget_seconds: Annotated[float, Field(ge=1, le=600)] = 90.0
+    provider_budget_seconds: Annotated[float, Field(ge=1, le=600)] = 150.0
     provider_concurrency: Annotated[int, Field(ge=1, le=32)] = 5
     provider_max_retries: Annotated[int, Field(ge=0, le=5)] = 2
     provider_retry_backoff_seconds: Annotated[float, Field(ge=0.0, le=10)] = 0.5
@@ -249,6 +251,35 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_trailing_slash(cls, value: str) -> str:
         return value.strip().rstrip("/")
+
+    @model_validator(mode="after")
+    def _poll_must_fit_in_budget(self) -> Settings:
+        """Опрос агрегатора обязан укладываться в бюджет источника.
+
+        Настройки разъехались молча и дорого: тридцать попыток по три секунды
+        дали ровно девяносто секунд при бюджете в девяносто, и ФССП — источник,
+        по которому принимается решение, — обрывалась на последней попытке.
+        Вызов уже оплачен, ответ выброшен, в отчёте «источник не ответил».
+        Оператор видел «проверить руками» и считал, что должник сложный, тогда
+        как сложной была конфигурация.
+
+        Проверка падает на старте, а не правит значения втихую: подогнанный
+        бюджет — это тот же молчаливый разъезд, только на шаг позже. Запас
+        нужен на сами HTTP-обращения между опросами, их не покрывает интервал.
+        """
+        poll_seconds = self.newdb_poll_attempts * self.newdb_poll_interval_seconds
+        needed = poll_seconds + self.request_timeout_seconds
+        if needed > self.provider_budget_seconds:
+            raise ValueError(
+                f"опрос NewDB требует {needed:.0f} с "
+                f"({self.newdb_poll_attempts} попыток × "
+                f"{self.newdb_poll_interval_seconds:g} с плюс "
+                f"{self.request_timeout_seconds:g} с на запрос), "
+                f"а бюджет источника — {self.provider_budget_seconds:g} с. "
+                "Увеличьте PROVIDER_BUDGET_SECONDS или уменьшите опрос: "
+                "иначе медленный источник всегда обрывается на полпути."
+            )
+        return self
 
     @property
     def allowed_user_ids(self) -> frozenset[int]:
