@@ -20,6 +20,7 @@ from app.providers.internal.csv_schema import (
     CsvFormatError,
     DebtorRow,
     RowError,
+    TotalsRow,
     decode_csv_bytes,
     iter_rows,
 )
@@ -72,6 +73,10 @@ class CSVInternalDebtorProvider(InternalDebtorProvider):
             for _line, item in iter_rows(text):
                 if isinstance(item, RowError):
                     errors += 1
+                elif isinstance(item, TotalsRow):
+                    # Итоговая строка отчёта — не должник: как запись она
+                    # находилась бы поиском и попадала в отчёт для суда.
+                    continue
                 else:
                     rows.append(item)
         except (OSError, CsvFormatError) as exc:
