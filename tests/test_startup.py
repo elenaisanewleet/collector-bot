@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.config import Settings
+from app.config import NO_OWNERS, Settings
 from app.container import build_container
 from app.main import (
     BAD_NEWDB_FIELD_MAP,
@@ -26,9 +26,17 @@ def test_missing_token_stops_startup(settings: Settings) -> None:
 
 
 def test_empty_allowlist_stops_startup(settings: Settings) -> None:
-    """A closed bot with no allowlist can only be a misconfiguration."""
+    """A closed bot with no allowlist can only be a misconfiguration.
+
+    Владельцев тоже нет — иначе это рабочая конфигурация: владелец и сам
+    работает, и пускает остальных кнопкой.
+    """
     with pytest.raises(SystemExit) as exc_info:
-        _validate(settings.model_copy(update={"allowed_telegram_user_ids": ""}))
+        _validate(
+            settings.model_copy(
+                update={"allowed_telegram_user_ids": "", "owner_telegram_user_ids": NO_OWNERS}
+            )
+        )
     assert EMPTY_ALLOWLIST in str(exc_info.value)
 
 

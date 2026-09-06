@@ -83,8 +83,16 @@ REPLY_BUTTONS: tuple[str, ...] = (
     BUTTON_HELP,
 )
 
+# То же без «Проверить всю базу». Прогон по всей выгрузке доступен только
+# владельцу, а кнопка, которая отвечает «нельзя», — это не забота о безопасности,
+# а обещание, которого бот не держит: допущенный сотрудник жмёт её первой, она
+# стоит верхней.
+ALLOWED_REPLY_BUTTONS: tuple[str, ...] = tuple(
+    label for label in REPLY_BUTTONS if label != BUTTON_BATCH
+)
 
-def main_reply_keyboard() -> ReplyKeyboardMarkup:
+
+def main_reply_keyboard(*, owner: bool) -> ReplyKeyboardMarkup:
     """Постоянная клавиатура под полем ввода.
 
     ``is_persistent=True`` — чтобы Telegram не сворачивал её в иконку: свёрнутая
@@ -92,19 +100,24 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
     жалобой. ``one_time_keyboard`` не выставляется вовсе (по умолчанию False):
     она обязана пережить нажатие, а не исчезнуть после первого.
 
-    Две кнопки. Было пять, и четыре из них повторяли инлайн-меню: на экране
-    одновременно висели две «Истории», две «Откуда данные» и две «Как это
-    работает». Именно это и назвали «кучей кнопок». Справочные экраны читают
-    один раз, поэтому им место в меню, а не под пальцем.
+    Две кнопки, и то у владельца. Было пять, четыре из них повторяли
+    инлайн-меню: на экране одновременно висели две «Истории», две «Откуда
+    данные» и две «Как это работает». Именно это и назвали «кучей кнопок».
+    Справочные экраны читают один раз, поэтому им место в меню, а не под пальцем.
 
     Первой стоит проверка одного человека: заказчик начинает с неё, вводит
-    телефон и получает отчёт. Массовый прогон — второй, он мощнее, но реже.
+    телефон и получает отчёт. Прогон по всей базе — второй, он мощнее, но реже,
+    и виден только владельцу: кнопка, которая отвечает «нельзя», — обещание,
+    которого бот не держит, а нажимают её первой.
+
+    ``owner`` без значения по умолчанию намеренно: забытый аргумент должен
+    ломаться на mypy, а не показывать чужую кнопку живому человеку.
     """
+    rows = [[KeyboardButton(text=BUTTON_SEARCH)]]
+    if owner:
+        rows.append([KeyboardButton(text=BUTTON_BATCH)])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BUTTON_SEARCH)],
-            [KeyboardButton(text=BUTTON_BATCH)],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="Номер телефона должника",
@@ -114,7 +127,7 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
 MENU_MORE = f"{MENU_PREFIX}:more"
 
 
-def main_menu() -> InlineKeyboardMarkup:
+def main_menu(*, owner: bool) -> InlineKeyboardMarkup:
     """Главное меню: два действия и дверь во всё остальное.
 
     Было одиннадцать кнопок сразу, и это назвали кучей. Из одиннадцати каждый
@@ -125,22 +138,29 @@ def main_menu() -> InlineKeyboardMarkup:
     Порядок против прежнего: первым идёт человек, а не массовый прогон. Прогон
     мощнее, но заказчик начинает не с него — он вводит телефон должника, который
     только что звонил, и хочет отчёт.
+
+    ``owner`` без значения по умолчанию: забытый аргумент должен ломаться на
+    mypy, а не показывать чужую кнопку живому человеку.
     """
-    buttons = [
-        [_menu_button("Проверить человека", SearchType.PERSON)],
-        [InlineKeyboardButton(text="Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start")],
-        [InlineKeyboardButton(text="Другие способы поиска", callback_data=MENU_MORE)],
-    ]
+    buttons = [[_menu_button("Проверить человека", SearchType.PERSON)]]
+    if owner:
+        buttons.append(
+            [InlineKeyboardButton(text="Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start")]
+        )
+    buttons.append([InlineKeyboardButton(text="Другие способы поиска", callback_data=MENU_MORE)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def more_menu() -> InlineKeyboardMarkup:
+def more_menu(*, owner: bool) -> InlineKeyboardMarkup:
     """Всё, что не нужно каждый день.
 
     Открывается отдельной кнопкой из главного меню. Здесь можно быть подробным:
     сюда приходят, когда телефона нет и надо искать иначе.
+
+    Загрузка выгрузки — только владельцу: чужой файл, подмешанный в базу, меняет
+    решения о взыскании по чужим строкам.
     """
-    buttons = [
+    buttons: list[list[InlineKeyboardButton]] = [
         [_menu_button("Госномер", SearchType.VEHICLE_PLATE), _menu_button("VIN", SearchType.VIN)],
         [
             _menu_button("Автомобиль", SearchType.VEHICLE),
@@ -150,16 +170,20 @@ def more_menu() -> InlineKeyboardMarkup:
             _menu_button("Паспорт", SearchType.PASSPORT),
             _menu_button("Договор или заявка", SearchType.CONTRACT),
         ],
-        [
-            InlineKeyboardButton(text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import"),
-            InlineKeyboardButton(text="История проверок", callback_data=f"{MENU_PREFIX}:history"),
-        ],
+    ]
+    fourth = [InlineKeyboardButton(text="История проверок", callback_data=f"{MENU_PREFIX}:history")]
+    if owner:
+        fourth.insert(
+            0, InlineKeyboardButton(text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import")
+        )
+    buttons.append(fourth)
+    buttons.append(
         [
             InlineKeyboardButton(text="Откуда данные", callback_data=f"{MENU_PREFIX}:sources"),
             InlineKeyboardButton(text="Как это работает", callback_data=f"{MENU_PREFIX}:help"),
-        ],
-        [InlineKeyboardButton(text="Назад", callback_data=BACK_CALLBACK)],
-    ]
+        ]
+    )
+    buttons.append([InlineKeyboardButton(text="Назад", callback_data=BACK_CALLBACK)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

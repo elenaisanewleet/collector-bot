@@ -143,10 +143,14 @@ def build_router() -> Router:
         try:
             report = await container.import_service.import_bytes(payload, telegram_user_id=user_id)
         except CsvFormatError as exc:
-            await message.answer(f"Импорт не выполнен.\n\n{exc}", reply_markup=main_menu())
+            # Роутер импорта закрыт по владельцу целиком, поэтому меню здесь
+            # всегда владельческое: до этой строки не доходит никто другой.
+            await message.answer(
+                f"Импорт не выполнен.\n\n{exc}", reply_markup=main_menu(owner=True)
+            )
             return
 
-        await message.answer(render_import_report(report), reply_markup=main_menu())
+        await message.answer(render_import_report(report), reply_markup=main_menu(owner=True))
 
     @router.message(CsvImport.waiting_document)
     async def reject_non_document(message: Message) -> None:

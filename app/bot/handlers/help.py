@@ -54,6 +54,17 @@ HOW_TO_START = """С ЧЕГО НАЧАТЬ
 2. Прогоните всю базу разом — /batch. Или проверьте одного — /search
 3. Получите очередь: с кого начинать, а на кого не тратиться"""
 
+# То же для допущенного. Импорт и прогон по всей базе — у владельца, и звать в
+# них того, кому бот откажет, значит обещать за бота: справка, начинающаяся с
+# двух недоступных шагов, читается как «у меня что-то сломано».
+HOW_TO_START_ALLOWED = """С ЧЕГО НАЧАТЬ
+1. Проверьте одного должника — /search или кнопка «🔍 Проверить одного»
+2. Пишите что знаете: ФИО, дату рождения, ИНН, номер договора из 1С
+3. Получите вердикт: подавать, приказ, проверить руками или не тратиться
+
+Загрузка выгрузки и проверка всей базы разом — у владельца бота: прогон тратит
+его оплаченный баланс."""
+
 WHAT_TO_ENTER = """ЧТО ВВОДИТЬ
 Физлицо: фамилию и имя, отчество по желанию. Дату рождения, телефон, ИНН,
 паспорт и госномер можно дописать кнопкой под карточкой — или не дописывать
@@ -104,11 +115,11 @@ LINKS_NOTE = """ПРО ССЫЛКИ НА ОТЧЁТЫ
 ссылки командой /revoke и запросите отчёт заново, бот выдаст новый адрес."""
 
 
-def help_text(container: Container) -> str:
+def help_text(container: Container, *, owner: bool) -> str:
     blocks = [
         f"{container.settings.app_name} — как это работает",
         WHAT_IT_IS,
-        HOW_TO_START,
+        HOW_TO_START if owner else HOW_TO_START_ALLOWED,
         WHAT_TO_ENTER,
         WHY_BIRTH_DATE,
         WHAT_VERDICT_MEANS,
@@ -116,18 +127,18 @@ def help_text(container: Container) -> str:
         UNCHECKED_NOTE,
         f"{LIMITS_HEADER}\n{LIMITS}",
         LINKS_NOTE,
-        commands_help(),
+        commands_help(owner=owner),
     ]
     return "\n\n".join(blocks)
 
 
-async def send_help(message: Message, container: Container) -> None:
-    chunks = split_message(help_text(container))
+async def send_help(message: Message, container: Container, *, owner: bool) -> None:
+    chunks = split_message(help_text(container, owner=owner))
     for index, chunk in enumerate(chunks):
         # Меню — только под последним куском: клавиатура посреди справки
         # читается как её конец.
         last = index == len(chunks) - 1
-        await message.answer(chunk, reply_markup=main_menu() if last else None)
+        await message.answer(chunk, reply_markup=main_menu(owner=owner) if last else None)
 
 
 def build_router() -> Router:
@@ -140,14 +151,16 @@ def build_router() -> Router:
     router = Router(name="help")
 
     @router.message(Command("help"))
-    async def handle_help(message: Message, container: Container) -> None:
-        await send_help(message, container)
+    async def handle_help(message: Message, container: Container, user_id: int) -> None:
+        await send_help(message, container, owner=container.access_service.is_owner(user_id))
 
     @router.callback_query(F.data == HELP_CALLBACK)
-    async def handle_help_callback(callback: CallbackQuery, container: Container) -> None:
+    async def handle_help_callback(
+        callback: CallbackQuery, container: Container, user_id: int
+    ) -> None:
         await answer_callback(callback)
         message = callback_message(callback)
         if message:
-            await send_help(message, container)
+            await send_help(message, container, owner=container.access_service.is_owner(user_id))
 
     return router

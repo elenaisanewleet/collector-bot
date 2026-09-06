@@ -84,7 +84,9 @@ def build_router() -> Router:
         await answer_callback(callback)
 
     @router.message(ContractSearch.waiting_query)
-    async def receive_query(message: Message, state: FSMContext, container: Container) -> None:
+    async def receive_query(
+        message: Message, state: FSMContext, container: Container, user_id: int
+    ) -> None:
         query = (message.text or "").strip()
         if not query:
             await message.answer(ASK_QUERY, reply_markup=cancel_keyboard())
@@ -99,7 +101,10 @@ def build_router() -> Router:
         )
         records = await container.search_service.lookup_internal(subject)
         if not records:
-            await message.answer(NOT_FOUND, reply_markup=main_menu())
+            await message.answer(
+                NOT_FOUND,
+                reply_markup=main_menu(owner=container.access_service.is_owner(user_id)),
+            )
             return
 
         for record in records[:MAX_CARDS]:

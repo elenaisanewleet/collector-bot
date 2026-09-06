@@ -345,12 +345,37 @@ def test_menu_offers_the_reading_screens() -> None:
     """
     from app.bot.keyboards import MENU_MORE, main_menu, more_menu
 
-    main = [button.callback_data for row in main_menu().inline_keyboard for button in row]
+    main = [
+        button.callback_data for row in main_menu(owner=True).inline_keyboard for button in row
+    ]
     assert main == ["menu:person", "batch:start", MENU_MORE]
 
-    more = [button.callback_data for row in more_menu().inline_keyboard for button in row]
+    more = [
+        button.callback_data for row in more_menu(owner=True).inline_keyboard for button in row
+    ]
     assert "menu:sources" in more
     assert "menu:help" in more
+
+
+def test_the_expensive_buttons_are_not_shown_to_a_plain_operator() -> None:
+    """Кнопка, отвечающая «нельзя», — обещание, которого бот не держит.
+
+    Прогон по всей базе и загрузка выгрузки закрыты владельцу; меню обязано это
+    повторять, иначе сотрудник жмёт первую же кнопку и получает отказ.
+    """
+    from app.bot.keyboards import main_menu, more_menu
+
+    main = [
+        button.callback_data for row in main_menu(owner=False).inline_keyboard for button in row
+    ]
+    assert "batch:start" not in main
+    assert "menu:person" in main
+
+    more = [
+        button.callback_data for row in more_menu(owner=False).inline_keyboard for button in row
+    ]
+    assert "menu:import" not in more
+    assert "menu:history" in more
 
 
 # ---------------------------------------------------------------- меню команд
@@ -360,10 +385,10 @@ def test_command_menu_and_help_cannot_diverge(container: Container) -> None:
     """Один список на синюю кнопку и на справку — второй разъехался бы."""
     from app.bot.handlers.help import help_text
 
-    text = help_text(container)
+    text = help_text(container, owner=True)
     for name, _title in BOT_COMMANDS:
         assert f"/{name}" in text
-    assert commands_help().startswith("КОМАНДЫ")
+    assert commands_help(owner=True).startswith("КОМАНДЫ")
 
 
 def test_commands_are_valid_for_telegram() -> None:

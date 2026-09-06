@@ -31,6 +31,7 @@ from app.bot.access_view import (
 )
 from app.bot.handlers.access import MODERATION_OFF, NOT_OWNER
 from app.bot.middleware import ACCESS_DENIED_MESSAGE
+from app.config import NO_OWNERS
 from app.container import Container
 from app.db.models import AccessRequest
 from app.db.repository import AuditRepository, SearchRepository
@@ -482,9 +483,9 @@ async def test_open_access_creates_no_requests(
 
 
 async def test_without_owners_a_stranger_is_refused_as_before(
-    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, database: Database
+    unowned_dispatcher: Dispatcher, bot: Bot, sent: SentMessages, database: Database
 ) -> None:
-    await feed(dispatcher, bot, message=stranger_message("/start"))
+    await feed(unowned_dispatcher, bot, message=stranger_message("/start"))
 
     assert sent.texts == [ACCESS_DENIED_MESSAGE]
     assert await stored_row(database) is None
@@ -499,7 +500,7 @@ async def test_dropping_the_owner_closes_the_bot_for_the_approved(
     нет владельца: иначе выключение режима тихо оставляет чужие ключи.
     """
     await approve_stranger(moderated_dispatcher, bot)
-    unowned = moderated_container(moderated, owners="")
+    unowned = moderated_container(moderated, owners=NO_OWNERS)
 
     assert not await unowned.access_service.is_allowed(STRANGER_ID)
 

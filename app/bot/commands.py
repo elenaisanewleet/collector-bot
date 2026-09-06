@@ -13,12 +13,10 @@ from aiogram.types import BotCommand
 # без прокрутки, и там должно стоять то, ради чего бот открывают.
 BOT_COMMANDS: tuple[tuple[str, str], ...] = (
     ("start", "главное меню"),
-    ("batch", "проверить всю базу и получить очередь взыскания"),
     ("search", "проверить одного должника"),
     ("history", "последние 10 проверок"),
     ("sources", "откуда берутся данные"),
     ("help", "как это работает"),
-    ("import", "загрузить выгрузку должников из 1С"),
     ("status", "состояние системы и источников"),
     ("revoke", "погасить выданные ссылки на отчёты"),
     ("audit", "последние события журнала"),
@@ -30,7 +28,28 @@ BOT_COMMANDS: tuple[tuple[str, str], ...] = (
 # вопрос «кто ещё пользуется ботом», и сотруднику его видеть незачем. Telegram
 # умеет показывать разное меню разным чатам (BotCommandScopeChat), и это ровно
 # тот случай, ради которого scope и придуман.
-OWNER_COMMANDS: tuple[tuple[str, str], ...] = (("access", "кто допущен к боту и заявки на доступ"),)
+#
+# Здесь же прогон и импорт. Они закрыты по владельцу
+# (:class:`~app.bot.middleware.OwnerOnlyMiddleware`), а команда в синем меню,
+# которая всем отвечает «нельзя», — это обещание, которого бот не держит.
+OWNER_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("batch", "проверить всю базу и получить очередь взыскания"),
+    ("import", "загрузить выгрузку должников из 1С"),
+    ("access", "кто допущен к боту и заявки на доступ"),
+)
+
+
+def commands_for(*, owner: bool) -> tuple[tuple[str, str], ...]:
+    """Что показать этому человеку — и в каком порядке.
+
+    Владельческие команды встают сразу за ``/start``, а не в хвост: прогон по
+    всей базе — главный сценарий продукта, а в меню Telegram без прокрутки видно
+    первые строки.
+    """
+    if not owner:
+        return BOT_COMMANDS
+    head, *tail = BOT_COMMANDS
+    return (head, *OWNER_COMMANDS, *tail)
 
 
 def telegram_commands() -> list[BotCommand]:
@@ -40,21 +59,20 @@ def telegram_commands() -> list[BotCommand]:
 
 def owner_telegram_commands() -> list[BotCommand]:
     """Общий список плюс то, что видит только владелец."""
-    return telegram_commands() + [
-        BotCommand(command=name, description=title) for name, title in OWNER_COMMANDS
-    ]
+    return [BotCommand(command=name, description=title) for name, title in commands_for(owner=True)]
 
 
-def commands_help() -> str:
+def commands_help(*, owner: bool) -> str:
     """Тот же список для справки в чате."""
     lines = ["КОМАНДЫ"]
-    lines.extend(f"/{name} — {title}" for name, title in BOT_COMMANDS)
+    lines.extend(f"/{name} — {title}" for name, title in commands_for(owner=owner))
     return "\n".join(lines)
 
 
 __all__ = [
     "BOT_COMMANDS",
     "OWNER_COMMANDS",
+    "commands_for",
     "commands_help",
     "owner_telegram_commands",
     "telegram_commands",

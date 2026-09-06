@@ -86,6 +86,12 @@ BASE_CHANGED = (
     "База изменилась с момента, когда я показал смету. Вот пересчитанная — "
     "проверьте числа и подтвердите заново."
 )
+# Кнопка из сообщения, которое пережило перезапуск бота или пересылку: смета,
+# под которой она стояла, боту больше не известна.
+STALE_BUTTON = (
+    "Эта кнопка из старого сообщения — смета под ней уже не считается. "
+    "Вот свежая, её и подтвердите."
+)
 
 
 def render_estimate(estimate: BatchEstimate) -> str:
@@ -392,7 +398,9 @@ async def offer_batch(
     estimate = await container.batch_service.estimate()
     if estimate.debtors == 0:
         await state.clear()
-        await message.answer(EMPTY_BASE, reply_markup=main_menu())
+        # Роутер прогона закрыт по владельцу целиком, поэтому меню здесь всегда
+        # владельческое: до этой строки не доходит никто другой.
+        await message.answer(EMPTY_BASE, reply_markup=main_menu(owner=True))
         return
     await state.set_state(BatchCheck.waiting_confirm)
     text = render_estimate(estimate)
@@ -480,7 +488,7 @@ def build_router() -> Router:
             # только то, что сломалось вокруг него. Молчать нельзя: оператор
             # смотрит на замерший прогресс и не знает, идёт ли ещё что-то.
             logger.exception("batch.run_crashed")
-            await message.answer(RUN_CRASHED, reply_markup=main_menu())
+            await message.answer(RUN_CRASHED, reply_markup=main_menu(owner=True))
             return
 
         await _deliver(message, notice, summary, container, user_id)
@@ -574,6 +582,27 @@ def build_router() -> Router:
                 else f"Очередь взыскания, прогон №{run_id}: {len(items)} строк."
             ),
         )
+
+    @router.callback_query(F.data.startswith(f"{BATCH_PREFIX}:"))
+    async def handle_stale_batch_button(
+        callback: CallbackQuery, state: FSMContext, container: Container
+    ) -> None:
+        """Кнопка прогона, под которой сметы уже нет.
+
+        Сюда попадает «Списать до …» из сообщения, пережившего перезапуск бота
+        или пересылку: состояния у нажавшего нет, подтверждать нечего, и без
+        этого хендлера нажатие висело бы часиками до таймаута Telegram. Деньги
+        не тратятся — смета считается заново, и подтверждают уже её.
+
+        Стоит последним в роутере намеренно: все точные совпадения выше
+        разбирают своё, сюда доходит только осиротевшая кнопка. Заодно
+        осиротевшая кнопка перестала быть дырой в проверке владельца — хендлер
+        роутера есть, значит есть и отказ, а не молчание.
+        """
+        await answer_callback(callback)
+        target = callback_message(callback)
+        if target:
+            await offer_batch(target, state, container, note=STALE_BUTTON)
 
     return router
 

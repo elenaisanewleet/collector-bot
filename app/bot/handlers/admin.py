@@ -22,6 +22,22 @@ def _flag(value: bool) -> str:
     return "включено" if value else "выключено"
 
 
+def _owner_only_line(container: Container, user_id: int) -> str:
+    """Кому открыты прогон, импорт и выгрузки.
+
+    Владелец видит список ID — ему по нему и править настройку. Остальные видят
+    только число: /status открыт всем допущенным, а «кто здесь главный» — это
+    ответ из /access, и он не для всех.
+    """
+    owners = sorted(container.settings.owner_user_ids)
+    head = "Проверка всей базы, импорт и выгрузки — только владельцам"
+    if not owners:
+        return f"{head}: владельцев нет, эти действия закрыты для всех"
+    if container.access_service.is_owner(user_id):
+        return f"{head}: {', '.join(map(str, owners))} (вы среди них)"
+    return f"{head}: их {len(owners)}"
+
+
 def build_router() -> Router:
     """Build this module's router.
 
@@ -32,7 +48,7 @@ def build_router() -> Router:
     router = Router(name="admin")
 
     @router.message(Command("status"))
-    async def handle_status(message: Message, container: Container) -> None:
+    async def handle_status(message: Message, container: Container, user_id: int) -> None:
         settings = container.settings
         async with container.database.session() as session:
             debtors = await DebtorRepository(session).count()
@@ -73,6 +89,10 @@ def build_router() -> Router:
             lines.append(f"Доступ: по одобрению, владельцев — {owners} (/access)")
         else:
             lines.append("Доступ: только по списку в .env")
+        # Открытый бот и закрытый прогон — разные вещи, и увидеть надо обе.
+        # Иначе «доступ открыт всем» читается как «и база тоже», а это ровно то
+        # недоразумение, из-за которого бот уехал с открытым прогоном.
+        lines.append(_owner_only_line(container, user_id))
         await message.answer("\n".join(lines))
 
     @router.message(Command("revoke"))

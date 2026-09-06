@@ -49,7 +49,7 @@ def _bottom_keyboards(sent: SentMessages) -> list[ReplyKeyboardMarkup]:
 
 def test_keyboard_stays_open_and_does_not_collapse() -> None:
     """Флаги — это и есть «постоянно на экране», всё остальное здесь косметика."""
-    markup = main_reply_keyboard()
+    markup = main_reply_keyboard(owner=True)
 
     assert markup.resize_keyboard is True
     assert markup.is_persistent is True
@@ -59,7 +59,7 @@ def test_keyboard_stays_open_and_does_not_collapse() -> None:
 
 def test_keyboard_holds_between_three_and_five_buttons() -> None:
     """Нижняя клавиатура занимает экран всегда, поэтому в ней только частое."""
-    labels = _labels(main_reply_keyboard())
+    labels = _labels(main_reply_keyboard(owner=True))
 
     # Две: проверить человека и проверить всю базу. Было пять, и четыре из них
     # повторяли инлайн-меню — это и назвали «кучей кнопок».

@@ -14,10 +14,11 @@ middleware или наоборот.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import User
+from aiogram.types import CallbackQuery, Message, TelegramObject, User
 
 from app.bot.keyboards import access_decision_keyboard
 from app.logging_setup import get_logger
@@ -58,6 +59,100 @@ OWNER_STAKES = (
 )
 
 NO_OWNER_REACHED = "access.owner_unreachable"
+
+
+# ------------------------------------------------- дорогое и опасное: владельцу
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerOnlyAction:
+    """Действие, которое допущенному не открыто.
+
+    Название и причина ходят парой, потому что отказ без причины читается как
+    «бот сломался» или «меня подозревают», а здесь ни то, ни другое: допущенный
+    сотрудник — свой, просто прогон по всей базе и импорт стоят денег и правят
+    ту базу, по которой заказчик идёт в суд.
+    """
+
+    title: str
+    why: str
+
+
+BATCH_ACTION = OwnerOnlyAction(
+    title="Проверка всей базы и выгрузка очереди",
+    why=(
+        "Одно нажатие уходит в платные источники по всем должникам сразу — это "
+        "сотни оплаченных обращений, — а очередь и список выгружаются файлом со "
+        "всеми персональными данными."
+    ),
+)
+
+IMPORT_ACTION = OwnerOnlyAction(
+    title="Импорт выгрузки должников",
+    why=(
+        "Импорт правит ту самую базу, по которой решают, на кого подавать в суд: "
+        "строка, попавшая в неё со стороны, становится чужим решением о взыскании."
+    ),
+)
+
+
+def owner_only_alert(user_id: int | None) -> str:
+    """Всплывающее окно на нажатие кнопки. Самодостаточно — другого места нет.
+
+    Кнопка могла приехать в пересланном сообщении, и тогда сообщения, к
+    которому её прицепили, у нажавшего нет: ответить в чат не выйдет, и
+    объяснение целиком должно уместиться в эти двести символов Telegram.
+    """
+    who = f" Ваш ID: {user_id}." if user_id is not None else ""
+    return (
+        "🔒 Это делает владелец бота: прогон по всей базе и импорт. "
+        f"Проверка одного должника вам открыта. Доступ владельца — по его решению.{who}"
+    )
+
+
+def owner_only_text(action: OwnerOnlyAction, user_id: int | None) -> str:
+    """Отказ, после которого понятно, что делать дальше.
+
+    «Недостаточно прав» — это тупик: человек не знает ни чьё это право, ни как
+    его получить, ни что ему всё-таки можно. Поэтому здесь четыре блока: что
+    закрыто, почему, что вместо этого доступно и к кому идти.
+    """
+    lines = [
+        f"🔒 {action.title} — только для владельца бота.",
+        "",
+        action.why,
+        "",
+        "Вам это доступно: проверка одного должника — кнопка «🔍 Проверить одного» "
+        "или команда /search. Она работает как работала.",
+        "",
+        "Как получить: попросите владельца бота открыть вам эти действия — он "
+        "добавляет Telegram ID в настройку OWNER_TELEGRAM_USER_IDS.",
+    ]
+    if user_id is not None:
+        lines.append(f"Ваш Telegram ID: {user_id} — его и назовите.")
+    return "\n".join(lines)
+
+
+async def refuse_owner_only(
+    event: TelegramObject, *, action: OwnerOnlyAction, user_id: int | None
+) -> None:
+    """Сказать «нет» так, чтобы это дошло любым путём.
+
+    Путей три, и они не взаимозаменяемы: команда со слешем и нажатие нижней
+    кнопки приходят сообщением, нажатие инлайн-кнопки — колбэком, а колбэк из
+    пересланного сообщения приходит без доступного сообщения вовсе. Молчание на
+    третьем пути выглядит как зависший бот, поэтому всплывающее окно уходит
+    всегда, а подробный текст — когда есть куда.
+    """
+    text = owner_only_text(action, user_id)
+    if isinstance(event, Message):
+        await event.answer(text)
+        return
+    if isinstance(event, CallbackQuery):
+        await event.answer(owner_only_alert(user_id), show_alert=True)
+        target = event.message
+        if isinstance(target, Message):
+            await target.answer(text)
 
 
 def request_throttled(hours: int) -> str:
@@ -132,14 +227,20 @@ async def notify_user(bot: Bot, user_id: int, text: str) -> bool:
 
 __all__ = [
     "APPROVED_NOTICE",
+    "BATCH_ACTION",
+    "IMPORT_ACTION",
     "OWNER_HEADER",
     "REQUEST_PENDING",
     "REQUEST_REJECTED",
     "REQUEST_SENT",
     "REVOKED_NOTICE",
+    "OwnerOnlyAction",
     "describe_user",
     "notify_owners_of_request",
     "notify_user",
+    "owner_only_alert",
+    "owner_only_text",
     "owner_request_text",
+    "refuse_owner_only",
     "request_throttled",
 ]
