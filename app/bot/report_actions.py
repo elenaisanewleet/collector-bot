@@ -66,12 +66,12 @@ def report_keyboard(
     """
     rows: list[list[InlineKeyboardButton]] = []
     if url:
-        rows.append([InlineKeyboardButton(text="📄 Полный отчёт по человеку", url=url)])
+        rows.append([InlineKeyboardButton(text="Полный отчёт", url=url)])
     export: list[InlineKeyboardButton] = []
     if print_url:
-        export.append(InlineKeyboardButton(text="🖨 PDF / печать", url=print_url))
+        export.append(InlineKeyboardButton(text="Печать", url=print_url))
     if text_url:
-        export.append(InlineKeyboardButton(text="⬇️ Текстом", url=text_url))
+        export.append(InlineKeyboardButton(text="Текстом", url=text_url))
     if export:
         rows.append(export)
     if refresh_token:
@@ -79,11 +79,11 @@ def report_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🔄 Обновить", callback_data=f"{REFRESH_PREFIX}:{refresh_token}"
+                    text="Обновить", callback_data=f"{REFRESH_PREFIX}:{refresh_token}"
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="🔍 Новая проверка", callback_data="menu:back")])
+    rows.append([InlineKeyboardButton(text="Новая проверка", callback_data="menu:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -108,7 +108,7 @@ def _offers(
     """
     if subject.search_type != SearchType.PERSON.value:
         return []
-    return [[_add(FIELD_REGION, token, "📍 Сузить до одного региона (сейчас — все)")]]
+    return [[_add(FIELD_REGION, token, "Сузить до одного региона")]]
 
 
 def passport_would_help(subject: SearchSubject, bridge: InnBridgeProvider | None) -> bool:

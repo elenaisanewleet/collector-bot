@@ -26,6 +26,7 @@ from app.bot.keyboards import (
     BUTTON_HELP,
     BUTTON_HISTORY,
     BUTTON_SEARCH,
+    MENU_MORE,
     BUTTON_SOURCES,
     REPLY_BUTTONS,
     main_reply_keyboard,
@@ -60,8 +61,9 @@ def test_keyboard_holds_between_three_and_five_buttons() -> None:
     """Нижняя клавиатура занимает экран всегда, поэтому в ней только частое."""
     labels = _labels(main_reply_keyboard())
 
-    assert 3 <= len(labels) <= 5
-    assert labels == list(REPLY_BUTTONS)
+    # Две: проверить человека и проверить всю базу. Было пять, и четыре из них
+    # повторяли инлайн-меню — это и назвали «кучей кнопок».
+    assert labels == [BUTTON_SEARCH, BUTTON_BATCH]
 
 
 # Всё, что человек может набрать с русской или английской раскладки. Значок в
@@ -73,18 +75,21 @@ TYPEABLE_LETTERS = frozenset(string.ascii_letters + "ёЁ") | frozenset(
 
 
 @pytest.mark.parametrize("label", REPLY_BUTTONS)
-def test_every_label_starts_with_an_emoji(label: str) -> None:
-    """Эмодзи — не украшение, а то, чем нажатие отличается от набранного текста.
+def test_every_label_is_a_phrase_nobody_enters_as_data(label: str) -> None:
+    """Подпись обязана быть фразой, которую не введут как данные.
 
-    Подпись без значка человек однажды наберёт руками, и обработчик кнопки
-    украдёт этот ввод у сценария, в котором человек находится. Поэтому проверяем
-    не «красиво», а «ни одной буквы с клавиатуры в первом слове».
+    Совпадение обработчика точное и по всему тексту целиком. Раньше нажатие от
+    набранного текста отличал эмодзи в начале подписи; от эмодзи отказались —
+    бот должен выглядеть ненавязчиво, — и различение держится теперь на том, что
+    «Проверить человека» не бывает ни фамилией, ни номером договора, ни адресом.
+
+    Отсюда требование: не меньше двух слов и ни одного односложного варианта.
+    Однословная «История» столкнулась бы с номером договора и украла бы ввод.
     """
-    mark, space, words = label.partition(" ")
+    words = label.split()
 
-    assert space, f"{label}: значок и подпись слитно"
-    assert words
-    assert not (frozenset(mark) & TYPEABLE_LETTERS), f"{label}: значок набирается руками"
+    assert len(words) >= 2, f"{label}: одно слово — его наберут как данные"
+    assert all(word for word in words)
 
 
 def test_nothing_in_the_bot_takes_the_keyboard_away() -> None:
@@ -111,7 +116,9 @@ async def test_start_delivers_the_keyboard(
 
     keyboards = _bottom_keyboards(sent)
     assert len(keyboards) == 1
-    assert _labels(keyboards[0]) == list(REPLY_BUTTONS)
+    # Не весь REPLY_BUTTONS: там остались подписи снятых кнопок — они ещё висят
+    # у тех, кто не нажимал /start после сокращения, и обработчики им нужны.
+    assert _labels(keyboards[0]) == [BUTTON_SEARCH, BUTTON_BATCH]
     # И сказано, что это такое: «нажми туда» без «туда» — половина подсказки.
     assert sent.contains(KEYBOARD_HINT)
 
@@ -152,7 +159,7 @@ async def test_the_keyboard_is_sent_once_per_start(
         # Пустая база — это и есть ответ массовой проверки на пустую базу,
         # то есть кнопка дошла до /batch.
         (BUTTON_BATCH, "Внутренняя база пуста"),
-        (BUTTON_SEARCH, "Выберите тип проверки"),
+        (BUTTON_SEARCH, "Напишите номер телефона"),
         (BUTTON_HISTORY, "История пуста"),
         (BUTTON_SOURCES, "ОТКУДА ДАННЫЕ"),
         (BUTTON_HELP, "как это работает"),
@@ -182,42 +189,52 @@ async def test_the_batch_button_shows_the_estimate(
 async def test_the_search_button_keeps_the_rarer_searches_reachable(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """Кнопка ведёт в меню типов, а не сразу в ввод ФИО.
+    """Кнопка ведёт сразу к первому вопросу, а редкие типы остаются достижимы.
 
-    Иначе проверка по номеру договора — самый частый вход у заказчицы — стала бы
-    недостижима с клавиатуры вовсе.
+    Раньше она вела в меню из семи типов: оператор выбирал ещё раз то, что уже
+    выбрал нажатием. Сценарий из ТЗ — ввёл телефон, получил сводку, — и лишний
+    экран стоял поперёк него. Но проверка по номеру договора никуда деться не
+    должна: она за «Другие способы поиска».
     """
     await feed(dispatcher, bot, message=make_message(BUTTON_SEARCH))
+    assert sent.contains("Напишите номер телефона")
+
+    await feed(dispatcher, bot, callback_query=make_callback(MENU_MORE))
 
     markup = sent.markups[-1]
     assert markup is not None
     payloads = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert "menu:contract" in payloads
-    assert "menu:person" in payloads
+    assert "menu:vin" in payloads
 
 
 # ---------------------------------------------------------------- чужой ввод
 
 
-async def test_a_typed_label_without_the_emoji_is_not_a_press(
+async def test_the_exact_label_is_treated_as_a_press_even_mid_dialog(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """Текст, похожий на подпись кнопки, остаётся вводом того, кто его набрал.
+    """Осознанный размен, а не недосмотр.
 
-    Нажатие присылает подпись байт в байт, вместе со значком. Всё остальное —
-    свободный ввод, и забрать его себе обработчик кнопки не вправе: три слова на
-    шаге ввода ФИО — попытка ввести ФИО, чем бы они ни были.
+    Telegram присылает нажатие нижней кнопки обычным сообщением и ничем не метит
+    его. Пока в подписи стоял эмодзи, нажатие отличалось от набранного текста
+    посимвольно; без эмодзи различить их нечем, и одно из двух свойств
+    приходится отдать.
+
+    Отдаём защиту от набранной фразы. «Проверить всю базу», введённое на шаге
+    сбора данных, — это не фамилия, не телефон и не номер договора: такого ввода
+    не бывает. А вот нажатие нижней кнопки посреди диалога бывает постоянно, и
+    оно обязано работать: кнопки затем и добавляли.
+
+    Обратная сторона размена проверена рядом: «История» — одно слово, подписи
+    такой нет, и как номер договора она по-прежнему ищется.
     """
     await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
     sent.texts.clear()
 
-    await feed(dispatcher, bot, message=make_message("Проверить всю базу"))
+    await feed(dispatcher, bot, message=make_message(BUTTON_BATCH))
 
-    assert not sent.contains("Массовая проверка")
-    assert not sent.contains("Внутренняя база пуста")
-    # Ввод достался карточке, а не кнопке: набранный текст — это данные про
-    # должника, чем бы они ни были похожи на подпись кнопки.
-    assert sent.contains("Собираю проверку")
+    assert sent.contains("Внутренняя база пуста")
 
 
 async def test_a_contract_number_that_reads_like_a_button_still_searches(

@@ -69,8 +69,15 @@ def test_the_card_separates_unqueried_from_unconnected(settings: Settings) -> No
 
     text = card(report, settings)
 
-    assert "Нечем спросить: ФССП — нужна дата рождения" in text
-    assert "Не подключено: Авто" in text
+    # Карточка называет, чего не хватает, но не перечисляет источники: заказчику
+    # нужны телефон и сводка, а разбор по источникам стоит в отчёте. Позвать к
+    # действию берут на себя кнопки под карточкой.
+    assert "Чтобы проверить полнее — нужна дата рождения." in text
+    assert "ФССП" not in text
+    # Неподключённый источник обязан оставить след: иначе неполная проверка
+    # читается как полная, и пошлина тратится по неверной картине.
+    assert "Проверено не всё" in text
+    assert "Авто" not in text
 
 
 def test_sources_with_the_same_gap_are_grouped(settings: Settings) -> None:
@@ -88,8 +95,13 @@ def test_sources_with_the_same_gap_are_grouped(settings: Settings) -> None:
 
     text = card(report, settings)
 
-    assert "Нечем спросить: ЕФРСБ, ФНС, Суды — нужен ИНН физлица (12 цифр)" in text
-    assert "Нечем спросить: ФССП, Залоги — нужна дата рождения" in text
+    # Пять источников с двумя разными нехватками дают две причины, а не пять
+    # строк: пять строк подряд про одно и то же читаются как пять проблем.
+    assert "нужен ИНН физлица (12 цифр)" in text
+    assert "нужна дата рождения" in text
+    assert text.count("Чтобы проверить полнее") == 1
+    for title in ("ЕФРСБ", "ФНС", "Суды", "ФССП", "Залоги"):
+        assert title not in text
 
 
 def test_a_failed_source_is_not_called_a_missing_field(settings: Settings) -> None:
@@ -106,8 +118,10 @@ def test_a_failed_source_is_not_called_a_missing_field(settings: Settings) -> No
 
     text = card(report, settings)
 
-    assert "Не ответили: ФССП" in text
-    assert "Нечем спросить" not in text
+    # Упавший источник — не нехватка поля у оператора: добавлять ему нечего, и
+    # предлагать это значит переложить на него нашу беду.
+    assert "Часть источников не ответила" in text
+    assert "Чтобы проверить полнее" not in text
 
 
 def test_a_cached_result_without_the_field_falls_back_to_the_message(settings: Settings) -> None:
@@ -124,7 +138,11 @@ def test_a_cached_result_without_the_field_falls_back_to_the_message(settings: S
 
     text = card(report, settings)
 
-    assert "Нечем спросить: ФССП — Для поиска в ФССП нужна дата рождения" in text
+    # Целое предложение от источника идёт отдельной строкой, а не после тире:
+    # «Чтобы проверить полнее — Для поиска в ФССП нужна дата рождения» — это
+    # заглавная буква посреди фразы.
+    assert "Для поиска в ФССП нужна дата рождения" in text
+    assert "полнее — Для поиска" not in text
 
 
 def test_an_answered_source_produces_no_line_at_all(settings: Settings) -> None:

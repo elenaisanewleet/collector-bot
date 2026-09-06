@@ -35,7 +35,7 @@ from app.domain.identity import (
 )
 from app.providers.registry import ProviderRegistry
 from app.services import coverage
-from app.services.query_card import FIELD_ORDER, FIELD_TITLES, OPTIONAL_ROWS, STEPS, Card
+from app.services.query_card import FIELD_ORDER, FIELD_TITLES, OPTIONAL_ROWS, Card
 from app.utils.dates import format_datetime
 
 # ---------------------------------------------------------------- callbacks
@@ -72,40 +72,30 @@ NOT_ASKED = "Это «не спрашивали», а не «не найдено
 #: ничего».
 NEXT_LABEL = "Дальше"
 
-STEP_TOTAL = len(STEPS)
-
-#: Как называется шаг и чем он заполняется. Коротко, по одному полю: длинное
-#: «Пришлите одной строкой всё, что знаете» — ровно та фраза, на которую
-#: жаловались.
+#: Сам вопрос, одной строкой и повелительным наклонением. Не «Телефон» с
+#: пояснением, что с ним делать, — а прямо то, что нужно сделать.
 STEP_TITLES: dict[str, str] = {
-    Field.PHONE.value: "Телефон",
-    Field.LAST_NAME.value: "Фамилия",
-    Field.FIRST_NAME.value: "Имя",
+    Field.PHONE.value: "Напишите номер телефона.",
+    Field.LAST_NAME.value: "Напишите фамилию.",
+    Field.FIRST_NAME.value: "Напишите имя.",
 }
 
 #: Пример показывается на каждом шаге: «везде показывается пример как заполнять,
 #: но ты можешь просто нажать дальше».
+#:
+#: Телефон нарочно без плюса, скобок и дефисов. Номер принимается в любой записи
+#: — это проверено шестью формами одного номера, — и показывать образец с
+#: разделителями значит намекать на формат, которого нет. Оператор набирает
+#: одиннадцать цифр подряд, и именно так пример и выглядит.
 STEP_EXAMPLES: dict[str, str] = {
-    Field.PHONE.value: "+7 916 000-00-00",
+    Field.PHONE.value: "89160000000",
     Field.LAST_NAME.value: "Клочкова",
     Field.FIRST_NAME.value: "Елена",
 }
 
-#: Зачем этот шаг вообще. У телефона причина не косметическая — он один
-#: разворачивается в целую строку выгрузки, и оператор должен знать, что тратит
-#: на него меньше, чем сэкономит.
-STEP_WHY: dict[str, str] = {
-    Field.PHONE.value: (
-        "По нему найду человека в вашей выгрузке — там уже есть и ФИО, "
-        "и дата рождения, и договор. Тогда остальное спрашивать не буду."
-    ),
-    Field.LAST_NAME.value: "",
-    Field.FIRST_NAME.value: "",
-}
-
-STEP_HEAD = "Шаг {number} из {total}. {title}"
+STEP_HEAD = "{title}"
 STEP_EXAMPLE = "Например: {example}"
-STEP_SKIPPABLE = f"Не знаете — нажмите «{NEXT_LABEL}», пропущу."
+STEP_SKIPPABLE = f"Не знаете — «{NEXT_LABEL}»."
 
 #: Опознали в выгрузке ровно одного — вопросов больше нет.
 FOUND_ONE = "Нашёл в вашей базе: {who}."
@@ -333,18 +323,30 @@ def _text(
     conflict: PersonName | None,
     store_sensitive: bool,
 ) -> str:
+    step = card.step
+    if step is not None:
+        # На шаге — только вопрос, и ничего больше. Сводка всех полей рядом с
+        # вопросом давала экран, где три строки подряд повторяли «жду — Фамилия
+        # Имя Отчество», а под ними висели прочерки полей, которых никто не
+        # спрашивал. Ровно на это и жаловались: «огромное сообщение, где надо всё
+        # ввести». Собранное показывается позже, в карточке, где оно уместно.
+        step_lines: list[str] = []
+        # Одной строкой — то, что уже принято. Без неё оператор набирает фамилию
+        # и получает в ответ следующий вопрос, никак не подтверждающий, что
+        # предыдущий ответ вообще дошёл. Строка короткая и только про
+        # заполненное: прочерки полей, которых не спрашивали, и были той самой
+        # простынёй.
+        collected = _collected(card)
+        if collected:
+            step_lines.extend((collected, ""))
+        if notice:
+            step_lines.extend((notice, ""))
+        step_lines.extend(_step_lines(step))
+        return "\n".join(step_lines)
+
     lines = [_head(card), ""]
     lines.extend(_rows(card))
     lines.append("")
-
-    step = card.step
-    if step is not None:
-        # Один вопрос на экран. Всё, что уже собрано, стоит выше — «Клочкова»,
-        # потом «Елена», потом «24 11 1994» это один человек, и видно, что один.
-        if notice:
-            lines.extend((notice, ""))
-        lines.extend(_step_lines(step))
-        return "\n".join(lines)
 
     if conflict is not None:
         lines.append(CONFLICT.format(current=_current_name(card), incoming=conflict.full))
@@ -380,16 +382,12 @@ def _step_lines(step: Field) -> list[str]:
     пропустить, впишет что-нибудь наугад — и карточка получит мусор вместо
     прочерка, то есть «не нашли» вместо «не спрашивали».
     """
-    number = STEPS.index(step) + 1
-    lines = [
-        STEP_HEAD.format(number=number, total=STEP_TOTAL, title=STEP_TITLES[step.value]),
+    return [
+        STEP_HEAD.format(title=STEP_TITLES[step.value]),
+        "",
         STEP_EXAMPLE.format(example=STEP_EXAMPLES[step.value]),
+        STEP_SKIPPABLE,
     ]
-    why = STEP_WHY.get(step.value)
-    if why:
-        lines.extend(("", why))
-    lines.extend(("", STEP_SKIPPABLE))
-    return lines
 
 
 def _menu_lines(card: Card, registry: ProviderRegistry) -> list[str]:
@@ -444,6 +442,20 @@ def _head(card: Card) -> str:
 def _current_name(card: Card) -> str:
     parts = [card.last_name, card.first_name, card.middle_name]
     return " ".join(part for part in parts if part) or EMPTY
+
+
+def _collected(card: Card) -> str:
+    """Что уже принято — одной строкой, только заполненное.
+
+    Показывается на шагах вместо полной сводки. Полная сводка перечисляет все
+    поля разом, включая те, которых никто не спрашивал, и на трёх шагах подряд
+    давала три одинаковые строки «жду — Фамилия Имя Отчество». Здесь нужно
+    только подтверждение приёма, поэтому пустые поля молчат.
+    """
+    parts = [
+        f"{FIELD_TITLES[name]}: {card.shown(name)}" for name in FIELD_ORDER if card.shown(name)
+    ]
+    return f"Принял — {', '.join(parts)}" if parts else ""
 
 
 def _rows(card: Card) -> list[str]:
@@ -548,8 +560,8 @@ def keyboard(card: Card, *, conflict: PersonName | None = None) -> InlineKeyboar
         return _rows_markup(
             [
                 [
-                    _button("🪪 Паспорт", QC_TEN_PASSPORT),
-                    _button("📞 Телефон", QC_TEN_PHONE),
+                    _button("Паспорт", QC_TEN_PASSPORT),
+                    _button("Телефон", QC_TEN_PHONE),
                 ],
                 [_button("Отмена", QC_CANCEL)],
             ]

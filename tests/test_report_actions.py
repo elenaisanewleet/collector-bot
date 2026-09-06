@@ -122,9 +122,12 @@ def test_a_complete_subject_keeps_the_keyboard_as_short_as_before(
     )
 
     texts = button_texts(markup)
-    assert not any(text.startswith(("➕", "📅", "🪪")) for text in texts)
-    assert "📄 Полный отчёт по человеку" in texts
-    assert "🔄 Обновить" in texts
+    # Кнопок-предложений нет: добавлять нечего. Проверяем по отсутствию слова
+    # «Добавить», а не по эмодзи — их в подписях больше нет вовсе, бот должен
+    # выглядеть ненавязчиво.
+    assert not any(text.startswith("Добавить") for text in texts)
+    assert "Полный отчёт" in texts
+    assert "Обновить" in texts
 
 
 def test_the_export_row_rides_along_with_the_link(
@@ -146,9 +149,9 @@ def test_the_export_row_rides_along_with_the_link(
     )
 
     texts = button_texts(markup)
-    assert "🖨 PDF / печать" in texts
-    assert "⬇️ Текстом" in texts
-    assert any(text.startswith("📍") for text in texts)
+    assert "Печать" in texts
+    assert "Текстом" in texts
+    assert "Сузить до одного региона" in texts
 
 
 def test_without_a_link_there_is_nothing_to_export(
@@ -163,8 +166,8 @@ def test_without_a_link_there_is_nothing_to_export(
     )
 
     texts = button_texts(markup)
-    assert not any(text.startswith(("🖨", "⬇️", "📄")) for text in texts)
-    assert any(text.startswith("📍") for text in texts)
+    assert not any(text in texts for text in ("Печать", "Текстом", "Полный отчёт"))
+    assert "Сузить до одного региона" in texts
 
 
 def test_offers_never_appear_for_a_vehicle_search(bridge_settings: Settings) -> None:

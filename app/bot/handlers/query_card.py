@@ -70,6 +70,28 @@ _LEGACY_FIELDS: dict[str, Field] = {
 # ---------------------------------------------------------------- показ
 
 
+async def start_person_card(message: Message, container: Container, user_id: int) -> None:
+    """Начать проверку человека: сразу вопрос про телефон.
+
+    Раньше «Проверить человека» вело в меню из семи типов проверки, и оператор
+    выбирал ещё раз то, что уже выбрал. Теперь ведёт прямо к первому вопросу:
+    сценарий из ТЗ — ввёл телефон, получил сводку, — и лишний экран между
+    кнопкой и вводом стоял ровно поперёк него. Остальные шесть типов никуда не
+    делись, они за «Другие способы поиска».
+    """
+    card = await container.query_cards.load(user_id, message.chat.id)
+    # Начинают — значит карточка обязана быть видна прямо сейчас, даже если её
+    # сообщение уже уехало вверх чата.
+    container.query_cards.forget_screen(card)
+    card.card_message_id = None
+    if card.blank:
+        # Пустая карточка — это начало разговора, и начинается он вопросами по
+        # одному полю. Недособранная не трогается: оператор вернулся к своему
+        # человеку, а не начал нового.
+        container.query_cards.begin_steps(card)
+    await show(message, container, card)
+
+
 async def show(
     message: Message,
     container: Container,
@@ -384,7 +406,7 @@ def build_router() -> Router:
 
     @router.callback_query(F.data == f"{MENU_PREFIX}:{SearchType.PERSON.value}")
     async def open_card(callback: CallbackQuery, container: Container, user_id: int) -> None:
-        """«Физлицо» в меню больше не задаёт вопрос — показывает карточку.
+        """«Проверить человека» в меню больше не задаёт вопрос — показывает карточку.
 
         Разница не косметическая: вопрос уезжает вверх чата вместе с ответом,
         карточка остаётся на месте и показывает, что уже собрано.
@@ -393,17 +415,7 @@ def build_router() -> Router:
         await answer_callback(callback)
         if message is None:
             return
-        card = await container.query_cards.load(user_id, message.chat.id)
-        # Меню открывают, чтобы начать: карточка обязана быть видна прямо
-        # сейчас, даже если её сообщение уже уехало вверх.
-        container.query_cards.forget_screen(card)
-        card.card_message_id = None
-        if card.blank:
-            # Пустая карточка — это начало разговора, и начинается он тремя
-            # вопросами по одному полю. Недособранная не трогается: оператор
-            # вернулся к своему человеку, а не начал нового.
-            container.query_cards.begin_steps(card)
-        await show(message, container, card)
+        await start_person_card(message, container, user_id)
 
     @router.callback_query(F.data == card_view.QC_NEXT)
     async def next_step(callback: CallbackQuery, container: Container, user_id: int) -> None:

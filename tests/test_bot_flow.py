@@ -40,12 +40,13 @@ async def test_start_shows_the_main_menu(
     await feed(dispatcher, bot, message=make_message("/start"))
 
     assert sent.contains(container.settings.app_name)
-    # Приветствие говорит, что делать, а не описывает себя: нажми, введи, получи.
-    assert sent.contains("Нажмите кнопку")
-    assert sent.contains("Пишите что знаете")
-    assert sent.contains("получите вердикт")
+    # Приветствие говорит, что делать, а не описывает себя, и укладывается в
+    # одно действие: нажать кнопку и прислать телефон.
+    assert sent.contains("Нажмите «Проверить человека»")
+    assert sent.contains("номер телефона")
+    assert sent.contains("стоит ли тратить пошлину")
     # И не даёт прочитать молчание источника как чистую биографию.
-    assert sent.contains("Это не значит, что там чисто")
+    assert sent.contains("Это не то же самое, что «чисто»")
     assert sent.markups[0] is not None  # the inline menu
 
 
@@ -159,16 +160,18 @@ async def test_menu_person_opens_the_card_not_a_question(
 ) -> None:
     """Вопрос уезжает вверх чата вместе с ответом, карточка остаётся на месте.
 
-    «Физлицо» открывает не вопрос и не пустую форму, а первый из трёх шагов —
-    и открывает его В карточке: строки полей видны сразу, ответ дописывается в
-    них же. Свободная строка при этом остаётся коротким путём и по-прежнему
-    доводит до отчёта одним нажатием.
+    «Проверить человека» открывает не форму со всеми полями, а первый вопрос —
+    и только его. Сводка всех полей рядом с вопросом давала экран, где три
+    строки подряд повторяли «жду — Фамилия Имя Отчество»; на него и жаловались.
+    Свободная строка остаётся коротким путём и доводит до отчёта одним нажатием.
     """
     await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
 
-    assert sent.contains("Собираю проверку")
-    assert sent.contains("Шаг 1 из 3. Телефон")
+    assert sent.contains("Напишите номер телефона")
     assert "Дальше" in buttons(sent)
+    # Ни сводки полей, ни прочерков тех, которых не спрашивали.
+    assert not sent.contains("Собираю проверку")
+    assert not sent.contains("Дата рождения: —")
 
     await collect_and_run(dispatcher, bot)
     assert sent.contains("RECOVERY SCORE")

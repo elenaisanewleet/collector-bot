@@ -36,15 +36,14 @@ from app.bot.common import reset_state
 from app.bot.handlers.batch import offer_batch
 from app.bot.handlers.help import send_help
 from app.bot.handlers.history import send_history
+from app.bot.handlers.query_card import start_person_card
 from app.bot.handlers.sources import send_sources
-from app.bot.handlers.start import CHOOSE_TYPE
 from app.bot.keyboards import (
     BUTTON_BATCH,
     BUTTON_HELP,
     BUTTON_HISTORY,
     BUTTON_SEARCH,
     BUTTON_SOURCES,
-    main_menu,
 )
 from app.container import Container
 
@@ -64,15 +63,20 @@ def build_router() -> Router:
         await offer_batch(message, state, container)
 
     @router.message(F.text == BUTTON_SEARCH)
-    async def press_search(message: Message, state: FSMContext) -> None:
-        """То же, что ``/search``: типов проверки семь, в нижние кнопки они не влезут.
+    async def press_search(
+        message: Message, state: FSMContext, container: Container, user_id: int
+    ) -> None:
+        """Сразу к первому вопросу, без промежуточного меню.
 
-        Кнопка ведёт не в ввод ФИО, а в инлайн-меню. Иначе проверка по номеру
-        договора — самый частый вход у заказчицы, номер лежит в её 1С — стала бы
-        недостижима с клавиатуры.
+        Кнопка вела в инлайн-меню из семи типов проверки: оператор выбирал ещё
+        раз то, что уже выбрал нажатием. Сценарий из ТЗ — ввёл телефон, получил
+        сводку, — и лишний экран стоял поперёк него. Остальные шесть типов
+        доступны из меню за «Другие способы поиска».
         """
         await reset_state(state)
-        await message.answer(CHOOSE_TYPE, reply_markup=main_menu())
+        await start_person_card(
+            message, container, message.from_user.id if message.from_user else user_id
+        )
 
     @router.message(F.text == BUTTON_HISTORY)
     async def press_history(

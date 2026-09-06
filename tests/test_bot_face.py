@@ -105,7 +105,7 @@ async def test_start_survives_a_missing_banner(
     await feed(dispatcher, bot, message=make_message("/start"))
 
     assert sent.photos == []
-    assert sent.contains("получите вердикт")
+    assert sent.contains("стоит ли тратить пошлину")
     assert sent.markups[0] is not None
 
 
@@ -124,7 +124,7 @@ async def test_start_survives_a_telegram_refusal(
 
     await feed(dispatcher, bot, message=make_message("/start"))
 
-    assert sent.contains("получите вердикт")
+    assert sent.contains("стоит ли тратить пошлину")
 
 
 # ---------------------------------------------------------------- приветствие
@@ -137,9 +137,22 @@ def test_welcome_promises_only_what_the_bot_does(container: Container) -> None:
     assert "не проверено" in text
 
 
-def test_welcome_is_three_steps(container: Container) -> None:
+def test_welcome_says_what_to_do_and_stays_short(container: Container) -> None:
+    """Первый экран говорит, что нажать, а не описывает себя.
+
+    Были три пронумерованных шага с эмодзи — экран, который читают по диагонали.
+    Осталось одно действие: нажать кнопку и прислать телефон. Оговорка про «не
+    проверено» остаётся при любом сокращении: разницу между «не смотрели» и
+    «чисто» надо узнать до первого отчёта.
+    """
     text = welcome_text(container)
-    assert "1️⃣" in text and "2️⃣" in text and "3️⃣" in text
+
+    assert "Проверить человека" in text
+    assert "номер телефона" in text
+    assert "не проверено" in text
+    # Ненавязчиво — значит без пиктограмм в тексте.
+    assert not any(mark in text for mark in ("1️⃣", "2️⃣", "3️⃣", "⚠️"))
+    assert len(text.splitlines()) <= 10
 
 
 # ---------------------------------------------------------------- откуда данные
@@ -275,10 +288,10 @@ async def test_help_works_in_the_middle_of_a_dialog(
 async def test_new_search_button_is_not_a_dead_end(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """«🔍 Новая проверка» под отчётом раньше висела часиками до таймаута."""
+    """«Новая проверка» под отчётом раньше висела часиками до таймаута."""
     await feed(dispatcher, bot, callback_query=make_callback("menu:back"))
 
-    assert sent.contains("Выберите тип проверки")
+    assert sent.contains("Что делаем?")
     assert sent.callback_answers
 
 
@@ -324,11 +337,20 @@ def test_report_button_and_handler_share_one_payload() -> None:
 
 
 def test_menu_offers_the_reading_screens() -> None:
-    from app.bot.keyboards import main_menu
+    """Справочные экраны достижимы кнопкой, но не в главном меню.
 
-    payloads = [button.callback_data for row in main_menu().inline_keyboard for button in row]
-    assert "menu:sources" in payloads
-    assert "menu:help" in payloads
+    В главном меню было одиннадцать кнопок, и это назвали кучей. Каждый день
+    нажимают две; справку читают один раз, поэтому она за «Другие способы
+    поиска» — достижима без слеша, но не мозолит глаза.
+    """
+    from app.bot.keyboards import MENU_MORE, main_menu, more_menu
+
+    main = [button.callback_data for row in main_menu().inline_keyboard for button in row]
+    assert main == ["menu:person", "batch:start", MENU_MORE]
+
+    more = [button.callback_data for row in more_menu().inline_keyboard for button in row]
+    assert "menu:sources" in more
+    assert "menu:help" in more
 
 
 # ---------------------------------------------------------------- меню команд

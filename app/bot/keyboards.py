@@ -57,25 +57,27 @@ REGION_COMBINED = "moscow_and_oblast"
 #
 # Отсюда два правила, которые нельзя нарушать.
 #
-# 1. Эмодзи — часть подписи, а не украшение. Совпадение обработчика точное, и
-#    держится оно именно на эмодзи: «📊 Проверить всю базу» не наберёт руками
-#    никто, а «Проверить всю базу» — вполне, и такой текст обязан достаться
-#    сценарию, в котором человек находится, а не кнопке.
+# 1. Подпись — многословная фраза. Совпадение обработчика точное и по всему
+#    тексту целиком, поэтому подпись обязана быть такой, какую никто не введёт
+#    как данные: «Проверить человека» не бывает ни фамилией, ни номером
+#    договора, ни адресом. Раньше эту роль играли эмодзи в начале подписи, но
+#    от них отказались — бот должен выглядеть ненавязчиво, — и держится
+#    различение теперь на длине и осмысленности фразы.
 # 2. Менять подпись — значит менять ключ. У старых клиентов клавиатура
 #    остаётся прежней до следующего /start, и переименованная кнопка на день-два
 #    перестанет работать. Если менять, то вместе с приветствием.
-BUTTON_BATCH = "📊 Проверить всю базу"
-BUTTON_SEARCH = "🔍 Проверить одного"
-BUTTON_HISTORY = "🕘 История"
-BUTTON_SOURCES = "ℹ️ Откуда данные"
-BUTTON_HELP = "❓ Как это работает"
+BUTTON_BATCH = "Проверить всю базу"
+BUTTON_SEARCH = "Проверить человека"
+BUTTON_HISTORY = "История проверок"
+BUTTON_SOURCES = "Откуда данные"
+BUTTON_HELP = "Как это работает"
 
-# Порядок тот же, что в клавиатуре, и он же порядок частоты: массовый прогон —
-# главный сценарий продукта, одиночная проверка — частный случай, дальше то,
-# что читают, а не запускают.
+# Нижняя клавиатура — только две кнопки, и это осознанное сокращение: всё, что
+# читают один раз, ушло в меню. Остальные подписи остаются здесь, потому что
+# кнопки с ними ещё висят у тех, кто не нажимал /start после правки.
 REPLY_BUTTONS: tuple[str, ...] = (
-    BUTTON_BATCH,
     BUTTON_SEARCH,
+    BUTTON_BATCH,
     BUTTON_HISTORY,
     BUTTON_SOURCES,
     BUTTON_HELP,
@@ -90,52 +92,73 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
     жалобой. ``one_time_keyboard`` не выставляется вовсе (по умолчанию False):
     она обязана пережить нажатие, а не исчезнуть после первого.
 
-    Пять кнопок в три ряда, а не десять пунктов инлайн-меню: нижняя клавиатура
-    занимает место на экране всегда, поэтому в ней только то, что нажимают
-    каждый день. Всё остальное — импорт, госномер, VIN, адрес, паспорт —
-    осталось в инлайн-меню за «🔍 Проверить одного».
+    Две кнопки. Было пять, и четыре из них повторяли инлайн-меню: на экране
+    одновременно висели две «Истории», две «Откуда данные» и две «Как это
+    работает». Именно это и назвали «кучей кнопок». Справочные экраны читают
+    один раз, поэтому им место в меню, а не под пальцем.
+
+    Первой стоит проверка одного человека: заказчик начинает с неё, вводит
+    телефон и получает отчёт. Массовый прогон — второй, он мощнее, но реже.
     """
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text=BUTTON_SEARCH)],
             [KeyboardButton(text=BUTTON_BATCH)],
-            [KeyboardButton(text=BUTTON_SEARCH), KeyboardButton(text=BUTTON_HISTORY)],
-            [KeyboardButton(text=BUTTON_SOURCES), KeyboardButton(text=BUTTON_HELP)],
         ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Нажмите кнопку внизу или введите команду",
+        input_field_placeholder="Номер телефона должника",
     )
 
 
+MENU_MORE = f"{MENU_PREFIX}:more"
+
+
 def main_menu() -> InlineKeyboardMarkup:
+    """Главное меню: два действия и дверь во всё остальное.
+
+    Было одиннадцать кнопок сразу, и это назвали кучей. Из одиннадцати каждый
+    день нажимают две: проверить человека и проверить всю базу. Остальные девять
+    — способы поиска на случай, когда телефона нет, — ушли за «Другие способы
+    поиска» и никуда не делись.
+
+    Порядок против прежнего: первым идёт человек, а не массовый прогон. Прогон
+    мощнее, но заказчик начинает не с него — он вводит телефон должника, который
+    только что звонил, и хочет отчёт.
+    """
     buttons = [
-        # Массовая проверка стоит первой: это главный сценарий продукта,
-        # а поиск одного человека — частный случай.
-        [InlineKeyboardButton(text="📊 Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start")],
-        [_menu_button("👤 Физлицо", SearchType.PERSON)],
+        [_menu_button("Проверить человека", SearchType.PERSON)],
+        [InlineKeyboardButton(text="Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start")],
+        [InlineKeyboardButton(text="Другие способы поиска", callback_data=MENU_MORE)],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def more_menu() -> InlineKeyboardMarkup:
+    """Всё, что не нужно каждый день.
+
+    Открывается отдельной кнопкой из главного меню. Здесь можно быть подробным:
+    сюда приходят, когда телефона нет и надо искать иначе.
+    """
+    buttons = [
+        [_menu_button("Госномер", SearchType.VEHICLE_PLATE), _menu_button("VIN", SearchType.VIN)],
         [
-            _menu_button("🚘 Госномер", SearchType.VEHICLE_PLATE),
-            _menu_button("🔢 VIN", SearchType.VIN),
+            _menu_button("Автомобиль", SearchType.VEHICLE),
+            _menu_button("Адрес", SearchType.ADDRESS),
         ],
         [
-            _menu_button("🚗 Автомобиль", SearchType.VEHICLE),
-            _menu_button("📍 Адрес", SearchType.ADDRESS),
+            _menu_button("Паспорт", SearchType.PASSPORT),
+            _menu_button("Договор или заявка", SearchType.CONTRACT),
         ],
         [
-            _menu_button("🪪 Паспорт", SearchType.PASSPORT),
-            _menu_button("📄 Договор / заявка", SearchType.CONTRACT),
+            InlineKeyboardButton(text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import"),
+            InlineKeyboardButton(text="История проверок", callback_data=f"{MENU_PREFIX}:history"),
         ],
         [
-            InlineKeyboardButton(text="📥 Импорт CSV", callback_data=f"{MENU_PREFIX}:import"),
-            InlineKeyboardButton(text="🕘 История", callback_data=f"{MENU_PREFIX}:history"),
+            InlineKeyboardButton(text="Откуда данные", callback_data=f"{MENU_PREFIX}:sources"),
+            InlineKeyboardButton(text="Как это работает", callback_data=f"{MENU_PREFIX}:help"),
         ],
-        # Последним рядом — то, что читают, а не запускают. До этих двух экранов
-        # раньше можно было добраться только командой, и владелица описала это
-        # как «у нас только через слеш».
-        [
-            InlineKeyboardButton(text="ℹ️ Откуда данные", callback_data=f"{MENU_PREFIX}:sources"),
-            InlineKeyboardButton(text="❓ Как это работает", callback_data=f"{MENU_PREFIX}:help"),
-        ],
+        [InlineKeyboardButton(text="Назад", callback_data=BACK_CALLBACK)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -304,7 +327,7 @@ def batch_running_keyboard(url: str | None) -> InlineKeyboardMarkup | None:
         return None
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📊 Очередь (заполняется)", url=url)],
+            [InlineKeyboardButton(text="Очередь (заполняется)", url=url)],
         ]
     )
 
@@ -324,7 +347,7 @@ def batch_result_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="📥 Выгрузить в CSV", callback_data=f"{BATCH_PREFIX}:export"
+                    text="Выгрузить таблицей", callback_data=f"{BATCH_PREFIX}:export"
                 )
             ],
         ]
@@ -342,12 +365,12 @@ def batch_result_keyboard_with_link(
     base = batch_result_keyboard()
     if not url:
         return base
-    rows = [[InlineKeyboardButton(text="📊 Открыть очередь", url=url)]]
+    rows = [[InlineKeyboardButton(text="Открыть очередь", url=url)]]
     export: list[InlineKeyboardButton] = []
     if print_url:
-        export.append(InlineKeyboardButton(text="🖨 PDF / печать", url=print_url))
+        export.append(InlineKeyboardButton(text="Печать", url=print_url))
     if csv_url:
-        export.append(InlineKeyboardButton(text="⬇️ Таблицей", url=csv_url))
+        export.append(InlineKeyboardButton(text="Таблицей", url=csv_url))
     if export:
         rows.append(export)
     rows.extend(base.inline_keyboard)
