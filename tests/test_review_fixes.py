@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from aiogram import Bot, Dispatcher
@@ -38,6 +39,7 @@ from app.db.repository import DebtorRepository
 from app.domain.enums import ProviderStatus, SearchType
 from app.domain.identity import NameParseError, PersonName, SearchSubject
 from app.domain.models import DebtorReport
+from app.domain.verdict import Verdict
 from app.services.batch import BatchAlreadyRunningError, BatchService
 from app.services.scoring import RecoveryScoreEngine
 from tests.conftest import make_proceeding
@@ -837,3 +839,104 @@ async def test_an_empty_card_shows_the_form_not_a_catalogue(
 
     # Правило владелицы: из чего собран ответ, на общих экранах не называется.
     assert "1С" not in card
+
+
+# ---------------- 19. ссылка назад в учётную систему заказчика
+
+
+async def test_the_source_record_id_travels_without_splitting_the_debtor(
+    container: Container,
+) -> None:
+    """«ИД» из выгрузки доезжает до базы, но ключом дедупликации не становится.
+
+    Две ошибки здесь одинаково дороги и противоположны. Выбросить ИД — потерять
+    единственную ссылку из отчёта в учётную систему заказчика, а заодно тот
+    ключ, по которому приедут суммы долга: сейчас их в выгрузке нет вовсе, и
+    вердикт по каждому должнику звучит «считать не из чего».
+
+    Взять ИД ключом — разбить людей обратно на эпизоды. Выгрузка эвакуатора это
+    список задержаний: на живом файле 2052 человека дают 2631 запись, то есть
+    579 лишних платных проверок одних и тех же людей.
+
+    Поэтому ИД накапливается списком, как машины, и в dedup_key не входит.
+    """
+    report = await container.import_service.import_text(
+        "ИД,ФИО,Дата рождения,Госномер\n"
+        "793783,Тестов Андрей Сергеевич,15.03.1980,А123ВС777\n"
+        "830279,Тестов Андрей Сергеевич,15.03.1980,А123ВС777\n"
+        "890166,Тестов Андрей Сергеевич,15.03.1980,В456ЕК750"
+    )
+
+    assert report.imported == 1, "ИД разбил одного человека на три платные проверки"
+    assert report.merged_episodes == 1
+
+    async with container.database.session() as session:
+        rows = await DebtorRepository(session).find_by_fio("Тестов Андрей Сергеевич")
+    assert rows[0].source_record_ids == "793783, 830279, 890166"
+    assert rows[0].vehicle_plates == "А123ВС777, В456ЕК750"
+
+    # И «ИД» перестал числиться непонятой колонкой — иначе оператор ищет,
+    # что бы такое переименовать.
+    assert "ИД" not in report.unknown_columns
+
+
+# ------------- 20. ноль рублей там, где сумма неизвестна
+
+
+def test_the_queue_page_never_prints_a_debt_of_zero_it_does_not_know() -> None:
+    """«Долг всего в прогоне 0 ₽» по должникам, у которых сумма неизвестна.
+
+    В выгрузке заказчика колонки с суммой нет вовсе, поэтому все 2052 должника
+    получают вердикт «считать не из чего», а страница складывала их нули и
+    печатала итог цифрой — первым числом в шапке, крупным, и следом в смете:
+    «Итого проверено 2052 · Долг 0 ₽ · Пошлина 0 ₽ · из них не будет уплачено
+    0 ₽ — это и есть экономия». Этот лист печатают на A4 и подшивают к делу: он
+    утверждал, что по всей базе взыскивать нечего.
+
+    Ноль здесь не бывает по построению: должник с нулевым долгом до денежного
+    вердикта не доходит, его забирает правило «в выгрузке нет суммы». Правило
+    уже было записано в этом же файле, у непроверенных строк — «ноль означал бы,
+    что строки ничего не стоят, а правда — что сколько они стоят, мы не знаем»,
+    — просто не применялось к остальным ячейкам.
+    """
+    from app.web.render_queue import render_queue_page
+    from tests.test_queue_page import item, snapshot
+
+    rows = [
+        item(index=i, verdict=Verdict.REVIEW, debt=None, fee=None, score=50) for i in range(1, 6)
+    ]
+    page = render_queue_page(snapshot(rows), app_name="Collector Bot")
+
+    assert "Долг всего в прогоне</span><b>0 ₽" not in page, (
+        "страница напечатала долг, которого не знает"
+    )
+    assert "Долг всего в прогоне</span><b>—" in page
+    assert "не будет уплачено 0 ₽ — это и есть экономия" not in page
+
+    # В смете «Проверить руками» стоит пять строк, а суммы у них нет: прочерк.
+    review_row = _ledger_row(page, "Проверить руками")
+    assert review_row == ("5", "—", "—"), review_row
+    total_row = _ledger_row(page, "Итого проверено")
+    assert total_row == ("5", "—", "—"), total_row
+
+    # Ноль, который остаётся честным: строк с вердиктом «иск» в прогоне ноль,
+    # и долг по ним действительно нулевой. Правило про прочерк не должно
+    # расползтись сюда, иначе «нисколько» превратится в «неизвестно» — та же
+    # подмена, только в другую сторону.
+    assert _ledger_row(page, "Подавать иск") == ("0", "0 ₽", "0 ₽")
+
+    # А настоящий ноль по-настоящему пустого прогона так и остаётся честным:
+    # там нечего складывать, потому что нет строк, и прочерк был бы враньём
+    # в другую сторону.
+    known = [item(index=1, verdict=Verdict.ORDER, debt=Decimal("120000"), fee=Decimal("2400"))]
+    with_money = render_queue_page(snapshot(known), app_name="Collector Bot")
+    assert "120 000 ₽" in with_money
+
+
+def _ledger_row(page: str, title: str) -> tuple[str, str, str]:
+    """Строки, долг и пошлина из строки сметы с этим названием."""
+    import re
+
+    chunk = page.split(title, 1)[1]
+    cells = re.findall(r'<td class="n r" data-l="[^"]+">([^<]*)</td>', chunk)[:3]
+    return (cells[0], cells[1], cells[2])

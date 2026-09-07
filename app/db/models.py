@@ -58,6 +58,12 @@ class Debtor(Base):
     # намеренно: список нужен только на показ и в выгрузку файлом, а поиск по
     # номеру ходит в ``vehicle_plate``, где номер один и индекс работает.
     vehicle_plates: Mapped[str | None] = mapped_column(String(512))
+    # Номера записей в системе заказчика, из которых собран этот должник, через
+    # запятую. Ключом дедупликации не служат — это ссылка назад, в 1С: по ней
+    # оператор находит эпизод, а мы примем суммы долга, когда их выгрузят
+    # отдельной колонкой. Индекса нет: поиск по ним не ходит, они на показ и в
+    # выгрузку файлом.
+    source_record_ids: Mapped[str | None] = mapped_column(String(512))
     vin: Mapped[str | None] = mapped_column(String(17), index=True)
     source: Mapped[str] = mapped_column(String(32), default="csv_import")
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)

@@ -51,6 +51,7 @@ CANONICAL_COLUMNS = (
     "vehicle_plate",
     "vin",
     "created_at",
+    "source_id",
 )
 
 # Как поле зовут в разговоре с оператором. Внутреннее имя колонки в текст не
@@ -70,6 +71,7 @@ COLUMN_TITLES: dict[str, str] = {
     "vehicle_plate": "Госномер",
     "vin": "VIN",
     "created_at": "Дата создания",
+    "source_id": "ИД записи",
 }
 
 # Синонимы пишутся так, как их печатает 1С, — со словами, точками и «№».
@@ -187,6 +189,16 @@ COLUMN_ALIASES: dict[str, str] = {
     "vin номер": "vin",
     "номер vin": "vin",
     "vin код": "vin",
+    # Номер записи в системе заказчика. Ключом дедупликации он намеренно НЕ
+    # становится (для этого есть debtor_id): выгрузка эвакуатора — список
+    # задержаний, и один человек стоит в ней до пяти раз с разными ИД. Взять его
+    # ключом значило бы разбить 2052 должника обратно на 2631 эпизод и оплатить
+    # 579 лишних проверок одних и тех же людей. А хранить его надо: это ссылка
+    # на исходную запись и то, по чему приедут суммы, когда их выгрузят.
+    "ид": "source_id",
+    "ид записи": "source_id",
+    "номер записи": "source_id",
+    "номер эпизода": "source_id",
     "created": "created_at",
     "дата создания": "created_at",
     "дата записи": "created_at",
@@ -266,6 +278,9 @@ class DebtorRow:
     #: проверка человека нужна одна), но машины при этом терялись все, кроме
     #: последней, — а именно из них складывается требование.
     vehicle_plates: list[str] = field(default_factory=list)
+    #: Номера записей в системе заказчика, из которых собран этот должник.
+    #: Столько же, сколько эпизодов у человека.
+    source_ids: list[str] = field(default_factory=list)
 
     @property
     def dedup_key(self) -> str:
@@ -407,6 +422,10 @@ class DebtorRow:
         self.vehicle_plates = [
             *earlier.vehicle_plates,
             *(plate for plate in self.vehicle_plates if plate not in earlier.vehicle_plates),
+        ]
+        self.source_ids = [
+            *earlier.source_ids,
+            *(sid for sid in self.source_ids if sid not in earlier.source_ids),
         ]
 
 
@@ -636,6 +655,9 @@ def _build_row(mapping: dict[int, str | None], raw_row: list[str]) -> DebtorRow:
         row.vehicle_plates.append(row.vehicle_plate)
     row.vin = _parse_optional_vin(values.get("vin"), row)
     row.created_at = _parse_created_at(values.get("created_at"))
+    source_id = values.get("source_id") or None
+    if source_id:
+        row.source_ids.append(source_id)
     return row
 
 

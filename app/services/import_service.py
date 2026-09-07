@@ -319,6 +319,7 @@ class ImportService:
             # ничего не добавляет к ``vehicle_plate`` и только смотрится как
             # второй источник правды.
             vehicle_plates=", ".join(row.vehicle_plates) if len(row.vehicle_plates) > 1 else None,
+            source_record_ids=", ".join(row.source_ids) or None,
             vin=row.vin,
             source="csv_import",
         )

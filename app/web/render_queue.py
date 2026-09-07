@@ -69,6 +69,9 @@ TONE = {
 # отдельный фильтр — иначе сбой читается как вердикт «проверить руками».
 FAILED = "failed"
 FAILED_TITLE = "Не проверено"
+#: Прочерк вместо суммы. Отличается от «0 ₽» ровно тем же, чем «не спрашивали»
+#: от «не нашли», — и цена ошибки та же, только в рублях.
+UNKNOWN_AMOUNT = "—"
 
 # Ниже этого покрытия строка считается проверенной частично. Не «почти
 # полностью»: уверенность здесь — доля источников, которые вообще ответили, и
@@ -237,13 +240,13 @@ def _hero(snapshot: QueueSnapshot, cover: Coverage, *, exports: ExportLinks | No
     noun = pluralize_ru(cover.total, "должника", "должников", "должников")
     figures = "".join(
         (
-            _figure("Долг по ним", format_amount(snapshot.actionable_debt)),
+            _figure("Долг по ним", _money(snapshot.actionable_debt, snapshot.actionable)),
             _figure(
                 "Пошлина за них",
-                format_amount(snapshot.actionable_fee),
+                _money(snapshot.actionable_fee, snapshot.actionable),
                 "столько уйдёт из кассы",
             ),
-            _figure("Долг всего в прогоне", format_amount(snapshot.total_debt)),
+            _figure("Долг всего в прогоне", _money(snapshot.total_debt, cover.checked)),
         )
     )
     return (
@@ -263,6 +266,24 @@ def _hero(snapshot: QueueSnapshot, cover: Coverage, *, exports: ExportLinks | No
 def _figure(label: str, value: str, note: str = "") -> str:
     small = f"<small>{e(note)}</small>" if note else ""
     return f'<div><span class="lbl">{e(label)}</span><b>{e(value)}</b>{small}</div>'
+
+
+def _money(amount: Decimal, rows: int) -> str:
+    """Рубли по набору строк — или прочерк, если складывать было нечего.
+
+    Ноль рублей по непустому набору не бывает: должник с нулевым долгом не
+    доходит до вердикта с деньгами, его забирает правило «в выгрузке нет суммы
+    долга». Значит ноль здесь означает ровно одно — сумм не было ни у кого, и
+    печатать его цифрой значит утверждать, что взыскивать нечего.
+
+    На выгрузке заказчика это не теория: там нет колонки с суммой вовсе, и
+    страница печатала «Долг всего в прогоне 0 ₽» по 2052 живым должникам —
+    первым числом в шапке, на листе, который несут в суд. Правило уже было
+    записано строкой ниже, у непроверенных строк: «ноль означал бы, что строки
+    ничего не стоят, а правда — что сколько они стоят, мы не знаем». Здесь оно
+    просто не применялось.
+    """
+    return format_amount(amount) if amount or not rows else UNKNOWN_AMOUNT
 
 
 def _saved(snapshot: QueueSnapshot) -> str:
@@ -521,8 +542,8 @@ def _ledger(snapshot: QueueSnapshot, cover: Coverage) -> str:
             (
                 raw_cell(_tag(TONE[verdict], "•", VERDICT_TITLES[verdict]), label="Вердикт"),
                 _sum_cell(str(count), label="Строк"),
-                _sum_cell(format_amount(snapshot.debt(verdict)) if count else "—", label="Долг"),
-                _sum_cell(format_amount(fee) if fee else "—", label="Пошлина"),
+                _sum_cell(_money(snapshot.debt(verdict), count), label="Долг"),
+                _sum_cell(_money(fee, count), label="Пошлина"),
                 cell(MEANING[verdict], label="Что это значит"),
             )
         )
@@ -548,11 +569,16 @@ def _ledger(snapshot: QueueSnapshot, cover: Coverage) -> str:
         (
             raw_cell("<b>Итого проверено</b>", label="Вердикт"),
             _sum_cell(str(cover.checked), label="Строк"),
-            _sum_cell(format_amount(snapshot.total_debt), label="Долг"),
-            _sum_cell(format_amount(snapshot.total_fee), label="Пошлина"),
+            _sum_cell(_money(snapshot.total_debt, cover.checked), label="Долг"),
+            _sum_cell(_money(snapshot.total_fee, cover.checked), label="Пошлина"),
             cell(
-                "из них не будет уплачено "
-                f"{format_amount(snapshot.saved_fees)} — это и есть экономия",
+                # «Из них не будет уплачено 0 ₽» рядом с итогом-прочерком —
+                # доля от того, чего мы не знаем. Экономия считается от пошлины,
+                # а пошлины тут не посчитано ни по одной строке.
+                f"из них не будет уплачено {format_amount(snapshot.saved_fees)} — "
+                "это и есть экономия"
+                if snapshot.total_fee or not cover.checked
+                else "экономию посчитаем, когда у должников появится сумма долга",
                 label="Что это значит",
             ),
         )
