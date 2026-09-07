@@ -245,7 +245,7 @@ async def test_approval_opens_the_bot(
 
     # Название приложения из приветствия убрано: имя бота Telegram печатает
     # в шапке чата сам. Признак «пустили» — сам факт приветствия.
-    assert sent.contains("стоит ли тратить пошлину")
+    assert sent.contains("стоит ли подавать и платить пошлину")
     assert not sent.contains(REQUEST_SENT)
 
 
@@ -436,7 +436,7 @@ async def test_approval_survives_a_restart(
 
     # Название приложения из приветствия убрано: имя бота Telegram печатает
     # в шапке чата сам. Признак «пустили» — сам факт приветствия.
-    assert sent.contains("стоит ли тратить пошлину")
+    assert sent.contains("стоит ли подавать и платить пошлину")
 
 
 async def test_rejection_survives_a_restart(
@@ -470,7 +470,7 @@ async def test_open_access_still_lets_everyone_in(
 
     # Название приложения из приветствия убрано: имя бота Telegram печатает
     # в шапке чата сам. Признак «пустили» — сам факт приветствия.
-    assert sent.contains("стоит ли тратить пошлину")
+    assert sent.contains("стоит ли подавать и платить пошлину")
     assert not sent.contains(REQUEST_SENT)
 
 

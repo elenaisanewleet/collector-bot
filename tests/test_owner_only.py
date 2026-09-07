@@ -418,7 +418,7 @@ async def test_an_open_bot_still_answers_a_stranger(
 
     await feed(dispatcher, bot, message=make_message("/start", user_id=4242))
 
-    assert sent.contains("Проверяю должника по официальным реестрам")
+    assert sent.contains("Проверяю ваших должников")
 
 
 async def test_the_shipped_owner_runs_the_batch_on_an_unconfigured_bot(

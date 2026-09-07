@@ -82,7 +82,7 @@ async def test_start_sends_the_banner_with_the_menu(
     # русским текстом ничего не сообщает — имя бота Telegram печатает в шапке
     # чата сам.
     assert container.settings.app_name not in caption
-    assert "стоит ли тратить пошлину" in caption
+    assert "стоит ли подавать и платить пошлину" in caption
     assert sent.markups[0] is not None
 
 
@@ -109,7 +109,7 @@ async def test_start_survives_a_missing_banner(
     await feed(dispatcher, bot, message=make_message("/start"))
 
     assert sent.photos == []
-    assert sent.contains("стоит ли тратить пошлину")
+    assert sent.contains("стоит ли подавать и платить пошлину")
     assert sent.markups[0] is not None
 
 
@@ -128,7 +128,7 @@ async def test_start_survives_a_telegram_refusal(
 
     await feed(dispatcher, bot, message=make_message("/start"))
 
-    assert sent.contains("стоит ли тратить пошлину")
+    assert sent.contains("стоит ли подавать и платить пошлину")
 
 
 # ---------------------------------------------------------------- приветствие
@@ -152,6 +152,14 @@ def test_welcome_says_what_to_do_and_stays_short(container: Container) -> None:
     text = welcome_text(container)
 
     assert "номер телефона" in text
+    # Первый экран не рекламирует, из чего собран ответ. Первая версия начиналась
+    # словами «проверяю должника по официальным реестрам» — неправда дважды:
+    # основа проверки это база самого заказчика, реестры добирают недостающее. Но
+    # и базу называть своим именем здесь незачем: «не надо про это рассказывать
+    # всем». Из чего собран ответ, показывает экран «Откуда данные» — тому, кто
+    # спросил.
+    assert "реестр" not in text.lower()
+    assert "1С" not in text and "1с" not in text
     assert "не проверено" in text
     # Ненавязчиво — значит без пиктограмм в тексте.
     assert not any(mark in text for mark in ("1️⃣", "2️⃣", "3️⃣", "⚠️"))

@@ -45,7 +45,7 @@ async def test_start_shows_the_main_menu(
     # одно действие: нажать кнопку и прислать телефон.
     # Ни одного экрана между кнопкой и вводом: номер пишут прямо в чат.
     assert sent.contains("Напишите номер телефона")
-    assert sent.contains("стоит ли тратить пошлину")
+    assert sent.contains("стоит ли подавать и платить пошлину")
     # И не даёт прочитать молчание источника как чистую биографию.
     assert sent.contains("это не то же самое, что «чисто»")
     assert sent.markups[0] is not None  # the inline menu
