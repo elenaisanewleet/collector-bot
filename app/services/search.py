@@ -487,19 +487,6 @@ class SearchService:
             if restored:
                 subject = subject.model_copy(update=restored)
 
-        if _has_unsettled_source(stored_results):
-            # Молчание источника — не ответ, и кэшировать его на сутки значит
-            # сделать «не проверено» окончательным. Оператор, повторивший
-            # проверку, получал бы тот же провал, и починка на стороне сервиса
-            # ничего бы не изменила до истечения кэша. Ровно так и вышло: после
-            # починки поиска по телефону тот же номер продолжал отдавать
-            # «недостаточно данных» из кэша, снятого до неё.
-            #
-            # Пересчитывается только неуложившееся: успешные ответы того же
-            # запроса остаются в хранилище и подставятся из него.
-            logger.info("search.cache_stale_partial", query_hash=query_hash)
-            return None
-
         report = await self._rebuild(subject, stored_results, created_at)
         return SearchOutcome(report, request_id)
 
@@ -827,23 +814,3 @@ __all__ = [
     "redact_subject",
     "subject_from_json",
 ]
-
-
-def _has_unsettled_source(stored_results: Sequence[SearchResult]) -> bool:
-    """Есть ли в сохранённом отчёте источник, который так и не ответил.
-
-    Улёгшимися считаются три состояния: ответил и нашёл, ответил и не нашёл,
-    не подключён. Первые два — настоящие ответы, третье не изменится от
-    повторной попытки: источник выключен настройкой, а не сетью.
-
-    Остальное — ошибка обращения и временная недоступность — означает, что
-    вопрос остался без ответа. Такой отчёт годится, чтобы показать его сразу,
-    но не годится, чтобы подавать его вместо новой проверки: «не проверено» с
-    отметкой «из кэша» читается как установленный факт.
-    """
-    settled = {
-        ProviderStatus.SUCCESS.value,
-        ProviderStatus.NO_RESULTS.value,
-        ProviderStatus.NOT_CONFIGURED.value,
-    }
-    return any(row.provider_status not in settled for row in stored_results)

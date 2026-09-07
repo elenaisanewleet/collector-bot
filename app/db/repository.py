@@ -28,6 +28,7 @@ from app.db.models import (
     ShareLink,
     VendorCacheEntry,
 )
+from app.domain.enums import SETTLED_PROVIDER_STATUSES
 from app.domain.identity import normalize_phone
 from app.domain.models import InternalDebtorRecord, ProviderResult, RecoveryScore
 from app.utils.dates import utcnow
@@ -386,20 +387,42 @@ class SearchRepository:
     async def find_cached_request(
         self, normalized_query_hash: str, *, ttl_hours: int
     ) -> SearchRequest | None:
-        """Most recent search of the same subject still inside the TTL.
+        """Most recent *reusable* search of the same subject still inside the TTL.
 
         The cache is shared across operators on purpose: two people chasing the
         same debtor should not each spend an external API call.
+
+        Пригодным считается только отчёт, в котором все источники улеглись.
+        Молчание источника — не ответ: подать такой отчёт из кэша значит
+        закрепить «не проверено» на сутки, и починка на стороне сервиса до
+        истечения TTL ничего не изменит. Ровно так и вышло однажды — после
+        починки поиска по телефону тот же номер продолжал отдавать
+        «недостаточно данных» из кэша, снятого до неё.
+
+        Отбор в запросе, а не у вызывающего, — намеренно. Правило нужно и
+        выдаче отчёта, и смете прогона, и разошлись они именно тогда, когда были
+        написаны по отдельности: смета обещала «бесплатно» строки, за которые
+        прогон потом платил. Одно определение — одно поведение.
+
+        Недоспрошенный отчёт не пропадает: если в пределах TTL остался более
+        ранний, но полный, берётся он — это дешевле нового обращения и честнее
+        свежего пробела.
         """
         if ttl_hours <= 0:
             return None
         cutoff = utcnow() - timedelta(hours=ttl_hours)
+        unsettled = (
+            select(SearchResult.id)
+            .where(SearchResult.search_request_id == SearchRequest.id)
+            .where(SearchResult.provider_status.not_in(SETTLED_PROVIDER_STATUSES))
+        )
         stmt = (
             select(SearchRequest)
             .join(DebtorReportRow, DebtorReportRow.search_request_id == SearchRequest.id)
             .where(
                 SearchRequest.normalized_query_hash == normalized_query_hash,
                 SearchRequest.created_at >= cutoff,
+                ~unsettled.exists(),
             )
             .order_by(SearchRequest.created_at.desc(), SearchRequest.id.desc())
             .limit(1)

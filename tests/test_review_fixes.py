@@ -758,3 +758,47 @@ async def test_a_new_address_is_a_move_not_a_namesake(container: Container) -> N
         "Тестова Мария Ивановна,20.07.1975,+79991234502,2000"
     )
     assert contradicting.collapsed_conflicts
+
+
+# ------------------------- 15. смета обещала бесплатным то, за что прогон платит
+
+
+async def test_the_estimate_never_promises_a_cache_that_will_not_serve(
+    container: Container,
+) -> None:
+    """«Из кэша, бесплатно» — только про отчёт, который кэш действительно отдаст.
+
+    Смета считала кэшированным любой запрос в пределах TTL, а выдача отказывалась
+    подавать отчёт, в котором источник промолчал, и переспрашивала его заново — за
+    деньги. Оператор видел «бесплатно» и платил. Для остановленного прогона, где
+    недоспрошенных должников целая пачка, расхождение было гарантировано: именно
+    там смету и читают перед тем, как доплатить за остаток.
+
+    Починка не в том, чтобы поправить счётчик, а в том, что «годится ли кэш»
+    перестало быть написанным дважды: правило живёт в запросе к базе, и обе
+    стороны спрашивают одно и то же.
+    """
+    from sqlalchemy import update
+
+    from app.db.models import SearchResult
+
+    await container.import_service.import_text(
+        "ФИО,Дата рождения,ИНН\nТестов Андрей Сергеевич,15.03.1980,500100732259"
+    )
+    await container.batch_service.run(telegram_user_id=OPERATOR_ID)
+
+    cached = await container.batch_service.estimate()
+    assert cached.cached == 1, "прогон обязан был закэшировать единственного должника"
+    assert cached.to_query == 0
+
+    # Так выглядит должник из прогона, который остановили или у которого источник
+    # отвалился: отчёт в базе есть, но один источник так и не ответил.
+    async with container.database.session() as session:
+        await session.execute(
+            update(SearchResult).values(provider_status=ProviderStatus.UNAVAILABLE.value)
+        )
+        await session.commit()
+
+    honest = await container.batch_service.estimate()
+    assert honest.cached == 0, "смета обещает бесплатно то, за что прогон заплатит"
+    assert honest.to_query == 1
