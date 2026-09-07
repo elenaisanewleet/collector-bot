@@ -158,7 +158,7 @@ class SearchService:
         # Найденное имя — ключ поиска, а не факт отчёта: в отчёт попадут данные
         # взыскателя и ответы официальных реестров, а не утверждение стороннего
         # сервиса о том, кому принадлежит номер.
-        subject, phone_result = await self._resolve_name_by_phone(subject)
+        subject, phone_result = await self._resolve_name_by_phone(subject, context)
 
         # Внутренняя база — следом, и это не косметика. ФИО с датой рождения
         # лежат в выгрузке, и без переноса их в запрос ФССП и залоги отвечают
@@ -258,7 +258,7 @@ class SearchService:
     # ------------------------------------------------------------- internals
 
     async def _resolve_name_by_phone(
-        self, subject: SearchSubject
+        self, subject: SearchSubject, context: FetchContext = NO_CONTEXT
     ) -> tuple[SearchSubject, ProviderResult | None]:
         """Достать ФИО по номеру, когда искать больше нечем.
 
@@ -273,7 +273,7 @@ class SearchService:
         bridge = self._registry.phone_bridge
         if bridge is None or not bridge.is_needed(subject):
             return subject, None
-        result = await bridge.fetch(subject)
+        result = await bridge.fetch(subject, context)
         found = getattr(result, "name", None)
         if found is None:
             return subject, result

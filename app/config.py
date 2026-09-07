@@ -225,6 +225,25 @@ class Settings(BaseSettings):
     phone_bridge_auth_name: str = "X-Api-Key"
     phone_bridge_field_map: Path | None = None
 
+    # Второй адаптер того же моста: разговор с ботом в Telegram от имени
+    # пользовательского аккаунта. Нужен, когда у сервиса нет HTTP-ручки вовсе —
+    # телеграм-бот адреса наружу не имеет, и боты не пишут друг другу.
+    #
+    # Файл сессии равен полному доступу к аккаунту, под которым выполнен вход:
+    # держится ВНЕ репозитория, режимом 600, и под эту работу заводится
+    # отдельный аккаунт, а не рабочий. Вход выполняется один раз руками
+    # (scripts/telegram_login.py); в рантайме бота интерактивного входа не
+    # происходит никогда.
+    telegram_lookup_enabled: bool = False
+    telegram_lookup_api_id: int = 0
+    telegram_lookup_api_hash: str = ""
+    telegram_lookup_session: Path | None = None
+    telegram_lookup_bot: str = ""
+    telegram_lookup_reply_timeout_seconds: Annotated[float, Field(ge=1.0, le=120.0)] = 30.0
+    # Пауза между обращениями. Без неё интерактивная работа упирается в
+    # FloodWait, а следом — в ограничение аккаунта.
+    telegram_lookup_min_interval_seconds: Annotated[float, Field(ge=0.0, le=60.0)] = 3.0
+
     # ---------------------------------------------------------------- import
     max_import_file_bytes: Annotated[int, Field(ge=1024)] = 5 * 1024 * 1024
     max_import_rows: Annotated[int, Field(ge=1)] = 50_000
@@ -453,6 +472,24 @@ class Settings(BaseSettings):
         скаляры. Разбор поэтому в коде, а гейтом служит настройка.
         """
         return self.newdb_configured and self.rosreestr_enabled
+
+    @property
+    def telegram_lookup_configured(self) -> bool:
+        """Разговор с ботом настроен и вход уже выполнен.
+
+        Существование файла сессии проверяется здесь намеренно: без него
+        подключение попыталось бы спросить код подтверждения у несуществующего
+        человека посреди обработки сообщения. Мост обязан ответить «не
+        подключено» заранее.
+        """
+        return bool(
+            self.telegram_lookup_enabled
+            and self.telegram_lookup_api_id
+            and self.telegram_lookup_api_hash
+            and self.telegram_lookup_bot
+            and self.telegram_lookup_session is not None
+            and self.telegram_lookup_session.exists()
+        )
 
     @property
     def phone_bridge_configured(self) -> bool:

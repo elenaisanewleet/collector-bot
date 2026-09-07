@@ -29,11 +29,13 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from aiogram import Bot, Dispatcher
 
 from app.bot.handlers.import_csv import render_import_report
+from app.config import Settings
 from app.container import Container
 from app.db.repository import DebtorRepository
 from app.db.session import Database
@@ -42,6 +44,7 @@ from app.domain.identity import NameParseError, PersonName, SearchSubject
 from app.domain.models import DebtorReport, ProviderResult
 from app.domain.verdict import Verdict
 from app.providers.phone_bridge import PhoneNameProvider, PhoneNameResult
+from app.providers.phone_bridge_telegram import TelegramPhoneNameProvider
 from app.services.batch import BatchAlreadyRunningError, BatchService
 from app.services.scoring import RecoveryScoreEngine
 from tests.conftest import make_proceeding
@@ -1185,3 +1188,109 @@ async def test_a_free_line_name_still_does_not_touch_the_export(
     await feed(dispatcher, bot, message=make_message("Демов Максим Игоревич"))
 
     assert "Нашёл" not in sent.joined
+
+
+# ---- 25. мост «телефон → ФИО» через переписку с ботом в Telegram
+
+
+class _FakeConversation:
+    def __init__(self, reply: str) -> None:
+        self._reply = reply
+        self.sent: list[str] = []
+
+    async def __aenter__(self) -> _FakeConversation:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def send_message(self, text: str) -> None:
+        self.sent.append(text)
+
+    async def get_response(self) -> SimpleNamespace:
+        return SimpleNamespace(text=self._reply)
+
+
+class _FakeTelegram:
+    """Клиент Telethon ровно в той части, которую трогает мост."""
+
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+        self.talks: list[_FakeConversation] = []
+
+    def is_connected(self) -> bool:
+        return True
+
+    def conversation(self, target: str, timeout: float) -> _FakeConversation:
+        talk = _FakeConversation(self.reply)
+        self.talks.append(talk)
+        return talk
+
+
+def _telegram_bridge(settings: Settings, reply: str) -> TelegramPhoneNameProvider:
+    settings.telegram_lookup_min_interval_seconds = 0.0
+    return TelegramPhoneNameProvider(settings, client=_FakeTelegram(reply))
+
+
+async def test_the_telegram_bridge_reads_the_name_out_of_free_text(
+    settings: Settings,
+) -> None:
+    """Бот отвечает свободным текстом, и ФИО достаётся из него разбором.
+
+    Подпись поля у каждого сервиса своя — «ФИО:», «Имя:», вообще без подписи, —
+    а форма имени одна. Ищем форму, а не подпись, иначе мост ломается от смены
+    формулировки, которую никто не анонсирует.
+    """
+    bridge = _telegram_bridge(
+        settings,
+        "Найдено по номеру +7 985 198-29-45\nФИО: Тестов Андрей Сергеевич\nДР: 15.03.1980",
+    )
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.status is ProviderStatus.SUCCESS
+    assert result.name is not None and result.name.full == "Тестов Андрей Сергеевич"
+    assert result.birth_date == date(1980, 3, 15)
+    assert not result.records, "мост принёс записи — он не источник фактов"
+
+
+async def test_the_telegram_bridge_never_guesses_a_name(settings: Settings) -> None:
+    """Не разобрали — «имя не определено», а не похожее имя.
+
+    Собранное «примерно» имя поднимет не ту строку выгрузки, и отчёт уедет про
+    другого человека — молча, без единого признака ошибки.
+    """
+    bridge = _telegram_bridge(settings, "Ничего не найдено. Проверьте номер.")
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.status is ProviderStatus.NO_RESULTS
+    assert result.name is None
+
+
+async def test_the_telegram_bridge_stays_out_of_the_batch_run(settings: Settings) -> None:
+    """Массовый прогон через чат не ходит: это FloodWait и потеря аккаунта.
+
+    И нужды в нём нет: в выгрузке есть ФИО и госномера, а телефона нет вовсе —
+    мосту там нечего переводить. Ответ «не спрашивали», а не «не нашли»:
+    разница обязана быть видна и здесь.
+    """
+    from app.providers.base import FetchContext
+
+    fake = _FakeTelegram("ФИО: Тестов Андрей Сергеевич")
+    settings.telegram_lookup_min_interval_seconds = 0.0
+    bridge = TelegramPhoneNameProvider(settings, client=fake)
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945"),
+        FetchContext(batch=True),
+    )
+
+    assert result.status is ProviderStatus.NOT_CONFIGURED
+    assert not fake.talks, "мост написал боту во время массового прогона"
