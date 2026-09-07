@@ -162,12 +162,17 @@ def test_the_estimate_refuses_to_invent_a_price_it_was_not_given() -> None:
 
     Тариф у каждого договора свой, и смета, назвавшая чужой, обманывает ровно
     там, где оператор решает, тратить ли деньги.
+
+    Раньше здесь же проверялось имя переменной окружения в тексте, и тест
+    закреплял нарушение: смету читает оператор, а не тот, кто правит ``.env``.
+    Теперь проверяется обратное — что имён настроек в ней нет.
     """
     text = render_estimate(estimate())
 
-    assert "PROVIDER_REQUEST_COST" in text
-    assert "Считайте в обращениях" in text
+    assert "цена обращения не задана" in text
     assert "0 ₽" not in text
+    assert "PROVIDER_REQUEST_COST" not in text
+    assert "BATCH_MAX_DEBTORS" not in text
 
 
 def test_the_estimate_says_which_rows_cannot_be_checked_at_all() -> None:

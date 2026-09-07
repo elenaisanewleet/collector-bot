@@ -10,6 +10,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from app.bot.access_view import AUDIT_ACTION, refuse_owner_only
 from app.container import Container
 from app.db.repository import AuditRepository, DebtorRepository
 from app.domain.enums import PROVIDER_TITLES
@@ -124,7 +125,21 @@ def build_router() -> Router:
         await message.answer("\n\n".join(lines))
 
     @router.message(Command("audit"))
-    async def handle_audit(message: Message, container: Container) -> None:
+    async def handle_audit(message: Message, container: Container, user_id: int) -> None:
+        """Журнал — владельцу, и только ему.
+
+        Он печатает, кто из коллег что проверял: Telegram ID, действие, балл.
+        Персональных данных должников в ``detail`` нет, но «кто чем занимался»
+        — это ответ на вопрос, который сотруднику задавать не положено, а под
+        открытым доступом («*») его получал вообще любой.
+
+        Проверка точечная, а не обёртка роутера целиком: в том же роутере живёт
+        ``/revoke``, и он сотруднику нужен — свои ссылки гасит тот, кому их
+        выдал бот.
+        """
+        if not container.access_service.is_owner(user_id):
+            await refuse_owner_only(message, action=AUDIT_ACTION, user_id=user_id)
+            return
         async with container.database.session() as session:
             events = await AuditRepository(session).recent(limit=15)
 

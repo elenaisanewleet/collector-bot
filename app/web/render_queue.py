@@ -375,7 +375,7 @@ def _actions(exports: ExportLinks | None) -> str:
     return (
         '<div class="actions">'
         f'<a href="{e(exports.print_url)}">Распечатать или сохранить в PDF</a>'
-        f'<a href="{e(exports.text_url)}" download>Скачать таблицей (CSV)</a>'
+        f'<a href="{e(exports.text_url)}" download>Скачать таблицей (CSV, без ФИО)</a>'
         "</div>"
     )
 

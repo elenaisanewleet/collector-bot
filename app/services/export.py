@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from app.db.models import BatchItem
 from app.domain.verdict import FEE_BASIS_TITLES, VERDICT_TITLES, FeeBasis, Verdict
 from app.utils.dates import format_date
-from app.utils.masking import mask_phone
+from app.utils.masking import mask_name, mask_phone
 
 QUEUE_COLUMNS = (
     "verdict",
@@ -38,11 +38,24 @@ QUEUE_COLUMNS = (
 )
 
 
-def queue_to_csv(items: Sequence[BatchItem], *, include_phone: bool = False) -> bytes:
+def queue_to_csv(
+    items: Sequence[BatchItem], *, include_phone: bool = False, mask_personal: bool = False
+) -> bytes:
     """Собрать CSV очереди.
 
     Телефон по умолчанию маскируется: файл уходит из системы, и полный номер в
     нём — это выгрузка персональных данных, которую никто не запрашивал.
+
+    ``mask_personal`` — для файла, который отдаётся по ссылке, а не владельцу в
+    личном чате. Страница очереди маскирует ФИО намеренно («полное ФИО по одной
+    ссылке на восемьсот строк — это выгрузка базы»), а соседняя кнопка
+    «Таблицей» отдавала ровно то, что страница прятала, и сверх того дату
+    рождения и госномер. Под этим флагом файл повторяет страницу: маска ФИО, без
+    даты рождения и без госномера. Опознать строку по-прежнему есть чем —
+    остаются внутренний номер должника и номер договора.
+
+    Флаг, а не смена умолчания: владельцу в бот уходит полный файл, и это
+    осознанно — он идёт юристу, ради чего выгрузка и написана.
     """
     buffer = io.StringIO()
     writer = csv.writer(buffer, delimiter=";", quoting=csv.QUOTE_MINIMAL)
@@ -57,27 +70,58 @@ def queue_to_csv(items: Sequence[BatchItem], *, include_phone: bool = False) -> 
             if debtor
             else None
         )
+        fio = (mask_name(debtor.fio) if mask_personal else debtor.fio) if debtor else ""
+        birth = (
+            ""
+            if mask_personal or not debtor or not debtor.birth_date
+            else format_date(debtor.birth_date)
+        )
+        plate = "" if mask_personal or not debtor else debtor.vehicle_plate
         writer.writerow(
-            (
-                item.verdict,
-                _verdict_title(item.verdict),
-                item.headline,
-                debtor.external_debtor_id if debtor else "",
-                debtor.fio if debtor else "",
-                format_date(debtor.birth_date) if debtor and debtor.birth_date else "",
-                phone or "",
-                debtor.contract_number if debtor else "",
-                _amount(item.debt_amount),
-                _amount(item.state_fee),
-                _fee_basis_title(item.fee_basis),
-                item.score if item.score is not None else "",
-                item.confidence,
-                debtor.vehicle_plate if debtor else "",
-                item.error or "",
+            _safe(
+                (
+                    item.verdict,
+                    _verdict_title(item.verdict),
+                    item.headline,
+                    debtor.external_debtor_id if debtor else "",
+                    fio or "",
+                    birth,
+                    phone or "",
+                    debtor.contract_number if debtor else "",
+                    _amount(item.debt_amount),
+                    _amount(item.state_fee),
+                    _fee_basis_title(item.fee_basis),
+                    item.score if item.score is not None else "",
+                    item.confidence,
+                    plate or "",
+                    item.error or "",
+                )
             )
         )
 
     return buffer.getvalue().encode("utf-8-sig")
+
+
+#: Символы, с которых Excel и LibreOffice начинают читать ячейку как формулу.
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _safe(row: Sequence[object]) -> list[object]:
+    """Обезвредить ячейки, которые Excel примет за формулу.
+
+    Фамилия «-Оглы», договор «=ЭВ-1», подставленный в 1С, или что угодно,
+    начинающееся с ``=``, ``+``, ``-``, ``@``, выполняется при открытии файла.
+    Это не гипотеза про злоумышленника: файл идёт юристу и открывается в Excel,
+    а формула из чужой строки в лучшем случае покажет ошибку вместо фамилии.
+
+    Апостроф впереди — способ, который понимают и Excel, и LibreOffice, и он
+    сохраняет значение читаемым. Числа и пустые ячейки не трогаются: они не
+    строки, и портить их незачем.
+    """
+    return [
+        f"'{value}" if isinstance(value, str) and value.startswith(_FORMULA_LEAD) else value
+        for value in row
+    ]
 
 
 def _verdict_title(value: str) -> str:

@@ -187,14 +187,24 @@ async def _render_queue(request: web.Request, *, print_mode: bool) -> web.Respon
 
 
 async def handle_queue_csv(request: web.Request) -> web.Response:
-    """Очередь таблицей. Тот же ``queue_to_csv``, что и кнопка в боте."""
+    """Очередь таблицей — в том же виде, в каком её показывает страница.
+
+    ФИО маскировано, даты рождения и госномера нет. Страница прячет полное ФИО
+    намеренно: одна пересланная ссылка на восемьсот строк — это выгрузка базы
+    должников. Кнопка «Таблицей» рядом с ней отдавала ровно то, что страница
+    прятала, и сверх того дату рождения и госномер, обесценивая маску.
+
+    Полный файл остаётся у владельца: он приходит кнопкой в боте, где
+    получатель — не тот, у кого оказалась ссылка, а конкретный человек в
+    Telegram. Имя файла об этом говорит, чтобы разницу было видно до открытия.
+    """
     context = await _queue_context(request)
     if context is None:
         return _not_found(request.app[CONTAINER_KEY])
     _container, link, snapshot = context
-    body = queue_to_csv(snapshot.items)
+    body = queue_to_csv(snapshot.items, mask_personal=True)
     logger.info("web.queue_downloaded", kind="csv", user_id=link.telegram_user_id)
-    name = f"ochered-{link.target_id}-{utcnow():%Y%m%d}.csv"
+    name = f"ochered-{link.target_id}-{utcnow():%Y%m%d}-bez-fio.csv"
     return _attachment(body, name=name, content_type="text/csv")
 
 

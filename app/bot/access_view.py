@@ -96,6 +96,16 @@ IMPORT_ACTION = OwnerOnlyAction(
 )
 
 
+AUDIT_ACTION = OwnerOnlyAction(
+    title="Журнал событий",
+    why=(
+        "Журнал показывает, кто из коллег какие проверки запускал и с каким "
+        "результатом. Это ответ на вопрос про людей, а не про должников, и "
+        "отвечать на него — дело владельца бота."
+    ),
+)
+
+
 def owner_only_alert(user_id: int | None) -> str:
     """Всплывающее окно на нажатие кнопки. Самодостаточно — другого места нет.
 
@@ -227,6 +237,7 @@ async def notify_user(bot: Bot, user_id: int, text: str) -> bool:
 
 __all__ = [
     "APPROVED_NOTICE",
+    "AUDIT_ACTION",
     "BATCH_ACTION",
     "IMPORT_ACTION",
     "OWNER_HEADER",

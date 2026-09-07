@@ -13,6 +13,15 @@
 3. Один телефон на нескольких людей — дата рождения и долг первой попавшейся.
 4. Оконченные производства ФССП исчезали из отчёта и давали бонус к баллу.
 5. Повторный платный прогон («Обновить») списывал без вопроса.
+
+Следом — HIGH из того же ревью, взятые в порядке ТЗ:
+
+6. «Отменено» не отменяло заданный карточкой вопрос.
+7. Веб-CSV очереди отдавал по ссылке всю базу с ФИО и датами рождения.
+8. CSV не обезвреживал ячейки, которые Excel читает как формулу.
+9. ``/audit`` показывал любому допущенному, кто из коллег что проверял.
+10. Очередь писалась страницами по 200: на реальной выгрузке страница стояла
+    пустой весь прогон и объявляла его оборвавшимся.
 """
 
 from __future__ import annotations
@@ -26,12 +35,19 @@ from app.container import Container
 from app.domain.enums import ProviderStatus, SearchType
 from app.domain.identity import PersonName, SearchSubject
 from app.domain.models import DebtorReport
-from app.services.batch import BatchAlreadyRunningError
+from app.services.batch import BatchAlreadyRunningError, BatchService
 from app.services.scoring import RecoveryScoreEngine
 from tests.conftest import make_proceeding
 from tests.test_scoring import build_report
 
-from .bot_harness import OPERATOR_ID, SentMessages, feed, make_callback, make_message
+from .bot_harness import (
+    CHAT_ID,
+    OPERATOR_ID,
+    SentMessages,
+    feed,
+    make_callback,
+    make_message,
+)
 
 # ---------------------------------------------------------------- 1. двойной прогон
 
@@ -303,3 +319,180 @@ async def test_the_quota_stops_a_stranger_when_it_is_on(
     # Владельцу тот же лимит не мешает.
     owner_message = make_message("не важно", user_id=OPERATOR_ID).as_(bot)
     assert await within_quota(owner_message, limited, OPERATOR_ID)
+
+
+# ------------------------------------------------------- 6. отмена, которая отменяет
+
+
+async def test_cancel_takes_the_question_off_the_card(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """«Отменено» обязано отменять.
+
+    Наследник теста, умершего вместе с диалогом FSM: состояние отменялось, а
+    карточка оставалась стоять на шаге «фамилия». Оператор говорил «отмена»,
+    получал «Отменено» — и следующее сообщение, каким бы оно ни было, молча
+    ложилось в это поле. Здесь проверяется именно это: после отмены присланное
+    слово не становится фамилией.
+
+    Само собранное не стирается: это работа оператора, а отмена относится к
+    вопросу, а не к карточке.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    await feed(dispatcher, bot, message=make_message("89165550033"))
+    await feed(dispatcher, bot, message=make_message("/cancel"))
+    assert sent.contains("Отменено")
+
+    card = await container.query_cards.load(OPERATOR_ID, CHAT_ID)
+    assert card.awaiting_field is None, "карточка осталась ждать ответа на отменённый вопрос"
+    assert not card.guided
+    # Телефон никуда не делся: отменили вопрос, а не проверку.
+    assert card.phone_masked
+
+
+# ------------------------------------------------------- 7-8. выгрузка очереди
+
+
+def _queue_item(**fields: object):  # type: ignore[no-untyped-def]
+    """Строка очереди с должником — ровно то, что уходит в CSV."""
+    from app.db.models import BatchItem, Debtor
+
+    debtor = Debtor(
+        dedup_key="k",
+        external_debtor_id="DEM-001",
+        fio=str(fields.get("fio", "Тестов Андрей Сергеевич")),
+        birth_date=date(1985, 3, 12),
+        phone_masked="+7 (999) ***-**-01",
+        contract_number=str(fields.get("contract", "EV-20481")),
+        vehicle_plate="А123ВС77",
+    )
+    item = BatchItem(
+        batch_run_id=1,
+        debtor_id=1,
+        verdict="order",
+        verdict_order=1,
+        headline="Долг бесспорный",
+        confidence=90,
+        score=71,
+    )
+    item.debtor = debtor
+    return item
+
+
+def test_the_shared_csv_does_not_hand_out_the_whole_base() -> None:
+    """Страница маскирует ФИО, а кнопка рядом отдавала его целиком.
+
+    Одна пересланная ссылка на очередь — это выгрузка базы должников заказчика:
+    ФИО, дата рождения, договор и госномер на сотни человек. Маска на странице
+    без маски в соседнем файле не защищает ничего.
+    """
+    from app.services.export import queue_to_csv
+
+    shared = queue_to_csv([_queue_item()], mask_personal=True).decode("utf-8-sig")
+
+    assert "Тестов Андрей Сергеевич" not in shared
+    assert "12.03.1985" not in shared
+    assert "А123ВС77" not in shared
+    # Строку по-прежнему есть чем опознать: свой номер должника и договор.
+    assert "DEM-001" in shared
+    assert "EV-20481" in shared
+
+
+def test_the_owner_file_stays_whole() -> None:
+    """Владельцу в чат уходит полный файл: он идёт юристу, ради этого и написан.
+
+    Получатель здесь — конкретный человек в Telegram, а не тот, у кого оказалась
+    ссылка, и это единственная разница между двумя файлами.
+    """
+    from app.services.export import queue_to_csv
+
+    own = queue_to_csv([_queue_item()]).decode("utf-8-sig")
+
+    assert "Тестов Андрей Сергеевич" in own
+    assert "12.03.1985" in own
+
+
+def test_a_cell_that_looks_like_a_formula_is_defused() -> None:
+    """Excel выполняет ячейку, начинающуюся с «=», «+», «-» или «@».
+
+    Это не про злоумышленника: фамилия «-Оглы» или договор, начинающийся со
+    знака, уже достаточны. Файл открывают в Excel, и формула из чужой строки в
+    лучшем случае покажет ошибку вместо фамилии.
+    """
+    from app.services.export import queue_to_csv
+
+    body = queue_to_csv([_queue_item(fio="=HYPERLINK(1)", contract="-ЭВ-1")]).decode("utf-8-sig")
+
+    assert "'=HYPERLINK(1)" in body
+    assert "'-ЭВ-1" in body
+
+
+# ------------------------------------------------------- 9. журнал — владельцу
+
+
+async def test_the_audit_log_is_not_for_everyone(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Журнал отвечает на вопрос про людей, а не про должников.
+
+    Он печатает, кто из коллег какую проверку запускал и с каким результатом.
+    Под открытым доступом («*») это получал вообще любой, кто нашёл бота.
+    """
+    employee = 222
+    await feed(dispatcher, bot, message=make_message("/audit", user_id=employee))
+
+    assert not sent.contains("события аудита")
+    assert any("только для владельца" in text for text in sent.texts)
+
+    sent.texts.clear()
+    await feed(dispatcher, bot, message=make_message("/audit", user_id=OPERATOR_ID))
+    assert sent.contains("аудита") or sent.contains("Журнал аудита пуст")
+
+
+def test_the_audit_command_is_not_promised_to_an_employee() -> None:
+    """Команда в синем меню, которая всем отвечает «нельзя», — обещание впустую."""
+    from app.bot.commands import commands_for
+
+    employee = [name for name, _ in commands_for(owner=False)]
+    owner = [name for name, _ in commands_for(owner=True)]
+
+    assert "audit" not in employee
+    assert "audit" in owner
+
+
+# ------------------------------------------------------- 10. очередь на ходу
+
+
+async def test_the_queue_fills_up_while_the_run_is_going(container: Container) -> None:
+    """Страница очереди обязана наполняться, пока прогон идёт.
+
+    Строки писались одной транзакцией на страницу в 200 должников, то есть на
+    любой реальной выгрузке заказчика — один раз, в самом конце. Всё это время
+    страница показывала «0 из 220», а через десять минут объявляла живой прогон
+    оборвавшимся и звала запустить заново. Послушавшийся оператор запускал
+    второй прогон и платил за выгрузку дважды.
+    """
+    await container.import_service.import_file(container.settings.internal_csv_path)
+    # Шаг записи привязан к шагу прогресса, и в демо-базе должников меньше, чем
+    # он по умолчанию. Уменьшаем его, чтобы шесть строк дали несколько пачек —
+    # на выгрузке заказчика в 220 человек это происходит само.
+    service = BatchService(
+        settings=container.settings.model_copy(update={"batch_progress_every": 2}),
+        database=container.database,
+        search_service=container.search_service,
+    )
+    seen: list[int] = []
+
+    async def watch(progress: object) -> None:
+        run_id = getattr(progress, "run_id", None)
+        if run_id is None:
+            return
+        snapshot = await service.queue_snapshot(run_id)
+        if snapshot is not None:
+            seen.append(len(snapshot.items))
+
+    summary = await service.run(telegram_user_id=OPERATOR_ID, progress=watch)
+
+    assert summary.processed > 0
+    # Хоть один снимок до конца прогона уже видел строки.
+    assert any(count > 0 for count in seen[:-1]), f"очередь была пуста весь прогон: {seen}"

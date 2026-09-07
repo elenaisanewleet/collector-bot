@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -313,6 +313,10 @@ class BatchService:
         # закрывает второго владельца и переживает перезапуск.
         self._start_lock = asyncio.Lock()
         self._running_run_id: int | None = None
+        # Сколько посчитанных строк копить до записи. Привязано к шагу, с
+        # которым бот двигает прогресс: строки в очереди и число в чате обязаны
+        # появляться вместе, иначе одно из них врёт про другое.
+        self._write_batch_size = max(1, min(settings.batch_progress_every, PAGE_SIZE))
         # Остановить прогон может только источник, за который платят. См.
         # :func:`_refusals` и ``BaseProvider.is_free``.
         self._paid_sources = frozenset(
@@ -510,30 +514,45 @@ class BatchService:
                 if not snapshot:
                     break
 
-                # Сеть — параллельно, запись — одной транзакцией на страницу.
-                # Отдельная транзакция на должника даёт восемьсот транзакций и
-                # конкуренцию за запись; на SQLite это ещё и теряет строки.
-                queue_rows = await asyncio.gather(
-                    *(
-                        self._process(item, run_id, semaphore, state, lock, progress, halt)
-                        for item in snapshot
+                # Сеть — параллельно, запись — пачками. Страница читается из
+                # базы по 200 строк, но записывается кусками поменьше, и это
+                # разница между «страница очереди наполняется на глазах» и
+                # «страница показывает нули весь прогон».
+                #
+                # Раньше писалось одной транзакцией на всю страницу, и на
+                # выгрузке до 200 человек — то есть на любой реальной выгрузке
+                # заказчика — в базу не попадало НИ ОДНОЙ строки до самого
+                # конца. Страница очереди при этом показывала «0 из 220», а
+                # через десять минут объявляла живой прогон оборвавшимся и
+                # звала запустить заново; послушавшийся оператор платил за всю
+                # выгрузку второй раз.
+                #
+                # Пачка не по одному должнику: отдельная транзакция на каждого
+                # даёт восемьсот транзакций и конкуренцию за запись, а на
+                # SQLite ещё и теряет строки.
+                for chunk in _chunks(snapshot, self._write_batch_size):
+                    queue_rows = await asyncio.gather(
+                        *(
+                            self._process(item, run_id, semaphore, state, lock, progress, halt)
+                            for item in chunk
+                        )
                     )
-                )
-                async with self._database.session() as session:
-                    repo = BatchRepository(session)
-                    # ``None`` — должник, которого не стали проверять после
-                    # остановки. Строки у него нет намеренно: пустая строка
-                    # «не проверено» неотличима от провалившейся проверки, а это
-                    # разные вещи — до него просто не дошли.
-                    for queue_row in queue_rows:
-                        if queue_row is not None:
-                            await repo.add_item(queue_row)
-                    # Счётчик прогона обновляется вместе со страницей результатов, а
-                    # не только в конце: иначе веб-страница все полчаса показывает
-                    # «обработано 0», хотя очередь под ней уже наполовину заполнена.
-                    await repo.update_progress(
-                        run_id, processed=state.processed, failed=state.failed
-                    )
+                    async with self._database.session() as session:
+                        repo = BatchRepository(session)
+                        # ``None`` — должник, которого не стали проверять после
+                        # остановки. Строки у него нет намеренно: пустая строка
+                        # «не проверено» неотличима от провалившейся проверки, а
+                        # это разные вещи — до него просто не дошли.
+                        for queue_row in queue_rows:
+                            if queue_row is not None:
+                                await repo.add_item(queue_row)
+                        # Счётчик прогона едет вместе со строками: разъехавшись,
+                        # они дают «проверено 4 из 6» над пустой таблицей.
+                        await repo.update_progress(
+                            run_id, processed=state.processed, failed=state.failed
+                        )
+                    if halt.should_stop():
+                        break
                 if halt.should_stop():
                     break
         except asyncio.CancelledError:
@@ -753,6 +772,12 @@ class DebtorSnapshot:
 class _Page:
     offset: int
     size: int
+
+
+def _chunks(items: list[DebtorSnapshot], size: int) -> Iterator[list[DebtorSnapshot]]:
+    """Разбить страницу на куски, которыми пишем очередь."""
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
 
 
 def _pages(total: int, size: int = PAGE_SIZE) -> list[_Page]:

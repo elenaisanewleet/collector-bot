@@ -456,7 +456,11 @@ def batch_result_keyboard_with_link(
     if print_url:
         export.append(InlineKeyboardButton(text="Печать", url=print_url))
     if csv_url:
-        export.append(InlineKeyboardButton(text="Таблицей", url=csv_url))
+        # Файл по ссылке повторяет страницу: ФИО маскировано, даты рождения и
+        # госномера нет. Подпись обязана это называть — рядом стоит «Выгрузить
+        # таблицей», которая присылает полный файл владельцу в чат, и разницу
+        # между ними надо видеть до нажатия, а не после.
+        export.append(InlineKeyboardButton(text="Таблицей (без ФИО)", url=csv_url))
     if export:
         rows.append(export)
     rows.extend(base.inline_keyboard)

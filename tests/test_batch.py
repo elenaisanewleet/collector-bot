@@ -82,9 +82,12 @@ async def test_the_bridge_adds_no_calls_to_a_batch_today(loaded: Container) -> N
     assert estimate.providers_per_debtor == 5
     assert estimate.requests == 30
 
+    # Формулировка короче прежней на две строки (смета — экран показа, а не
+    # справочник), но само предупреждение остаётся: пустой раздел по этим
+    # должникам будет значить «не спрашивали», а не «чисто».
     text = render_estimate(estimate)
-    assert "ИНН по паспорту: 0 вызовов" in text
-    assert "проверены НЕ будут" in text
+    assert "ИНН неизвестен у 6" in text
+    assert "«не спрашивали»" in text
 
 
 async def test_the_bridge_shows_up_as_its_own_line_when_it_will_fire(
