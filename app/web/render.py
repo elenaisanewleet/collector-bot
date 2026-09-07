@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from html import escape
@@ -54,6 +54,7 @@ from app.domain.models import (
 from app.domain.scoring import PROVIDER_CONFIDENCE_WEIGHTS
 from app.domain.verdict import FEE_BASIS_TITLES, VERDICT_TITLES, VerdictDecision
 from app.services.reporting import (
+    BRIDGES,
     COMPANY_ASSETS_DISCLAIMER,
     COURT_SCOPE_NOTE,
     DEMO_BANNER,
@@ -435,10 +436,18 @@ def _state_of(report: DebtorReport, result: ProviderResult) -> SourceState:
     У внутренней базы записи лежат в самом отчёте, а не в результате: класть их
     ещё и туда значило бы удвоить их в отчёте и потерять доверие к точному
     совпадению по нашему же идентификатору.
+
+    У мостов записей нет вовсе и не будет: они не находят факты, а делают
+    находимыми чужие. Счётчик им подписывается словом, иначе успешный мост
+    отчитывается «✓ — 0 зап.» ровно там, где он только что сделал возможной
+    всю проверку.
     """
     if result.provider is ProviderName.INTERNAL:
         return source_state(result, records=len(report.internal_records))
-    return source_state(result)
+    state = source_state(result)
+    if result.provider in BRIDGES and state.code is SourceStateCode.FOUND:
+        return replace(state, label="сработал")
+    return state
 
 
 def internal_section(report: DebtorReport) -> str:

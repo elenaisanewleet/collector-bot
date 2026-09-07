@@ -232,3 +232,30 @@ def test_the_callback_payload_fits_telegrams_limit(
 
     assert payloads
     assert all(len(payload.encode("utf-8")) <= 64 for payload in payloads)
+
+
+# ------------------------------------------------------------------- мосты
+
+
+def test_a_bridge_that_worked_never_reports_zero_records(subject: SearchSubject) -> None:
+    """Мост, сделавший проверку возможной, не отчитывается нулём.
+
+    Мосты записей не приносят и не должны: они переводят телефон в ФИО и
+    паспорт в ИНН, чтобы остальные источники вообще можно было спросить. Общая
+    ветка списка печатала им «✓ … — 0 зап.» — то есть успех выглядел ровно как
+    пустой ответ. На телефонном мосту это уже стояло на проде.
+
+    Проверяются оба места, где источник называется: строка в текстовом отчёте и
+    подпись на веб-странице. Разъезжаются они молча.
+    """
+    from app.domain.enums import ProviderStatus
+    from app.domain.models import DebtorReport, ProviderResult
+    from app.services.reporting import BRIDGES, _source_line
+    from app.web.render import _state_of
+
+    report = DebtorReport(subject=subject)
+    for provider in BRIDGES:
+        result = ProviderResult(provider=provider, status=ProviderStatus.SUCCESS, records=[])
+
+        assert "0 зап." not in _source_line(report, result)
+        assert "зап." not in _state_of(report, result).label

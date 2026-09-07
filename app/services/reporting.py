@@ -948,6 +948,27 @@ def _score_block(score: RecoveryScore | None) -> str:
     return "\n".join(lines)
 
 
+#: Источники, которые ничего не находят, а делают находимым остальное. Строка
+#: списка у них своя: общая напечатала бы «✓ … — 0 зап.» ровно там, где мост
+#: только что сделал всю проверку возможной.
+BRIDGES: frozenset[ProviderName] = frozenset(
+    {ProviderName.INN_BRIDGE, ProviderName.PHONE_BRIDGE}
+)
+
+#: Чем кончился мост: что он дал и чего не дал. Словами про то, что он ищет, —
+#: «ИНН не найден» на телефонном мосту было бы враньём про другой источник.
+_BRIDGE_WORDS: dict[ProviderName, tuple[str, str]] = {
+    ProviderName.INN_BRIDGE: (
+        "ИНН получен, банкротство, ИП и арбитраж проверены по нему",
+        "ИНН по этим данным не найден",
+    ),
+    ProviderName.PHONE_BRIDGE: (
+        "ФИО по номеру определено, должник найден по имени",
+        "имя по этому номеру не определено",
+    ),
+}
+
+
 def _sources_block(report: DebtorReport) -> str:
     answered, total = answered_count(report)
     lines = [f"ИСТОЧНИКИ (ответили {answered} из {total})"]
@@ -958,8 +979,8 @@ def _sources_block(report: DebtorReport) -> str:
 def _source_line(report: DebtorReport, result: ProviderResult) -> str:
     title = PROVIDER_TITLES.get(result.provider, result.provider.value)
     # Мост записей не приносит, он их делает возможными: общая ветка напечатала
-    # бы «✓ … — 0 зап.» для успешно полученного ИНН.
-    if result.provider is ProviderName.INN_BRIDGE:
+    # бы «✓ … — 0 зап.» для успешно полученного ИНН или ФИО.
+    if result.provider in BRIDGES:
         return _bridge_source_line(result, title)
     # У внутренней базы записи лежат в самом отчёте, а не в результате: он
     # несёт только состояние источника.
@@ -972,25 +993,28 @@ def _source_line(report: DebtorReport, result: ProviderResult) -> str:
 
 
 def _bridge_source_line(result: ProviderResult, title: str) -> str:
-    """Строка моста «паспорт → ИНН» в блоке ИСТОЧНИКИ.
+    """Строка моста в блоке ИСТОЧНИКИ.
 
     Своя ветка нужна прежде всего потому, что общая напечатала бы «✓ … — 0 зап.»
-    для успешно полученного ИНН: мост записей не приносит, он их делает
-    возможными.
+    для успешно полученного ИНН или ФИО: мост записей не приносит, он их делает
+    возможными. На телефонном мосту это уже стояло на проде — источник, который
+    только что сделал всю проверку возможной, отчитывался нулём.
 
-    Сам ИНН здесь не печатается ни в каком виде, включая маскированный. Причина
-    не приватность — для ИНН есть ``mask_inn`` — а согласованность двух показов:
-    восстановленный из кэша ``ProviderResult`` значения не несёт, и «получен
-    77********03» на первом показе против «получен» на втором было бы ровно тем
-    расхождением, которое чинит обогащение субъекта в ``_load_cached``.
-    Оператору нужен исход моста, а не значение.
+    Само добытое значение здесь не печатается ни в каком виде, включая
+    маскированное. Причина не приватность — для ИНН есть ``mask_inn`` — а
+    согласованность двух показов: восстановленный из кэша ``ProviderResult``
+    значения не несёт, и «получен 77********03» на первом показе против
+    «получен» на втором было бы ровно тем расхождением, которое чинит
+    обогащение субъекта в ``_load_cached``. Оператору нужен исход моста, а не
+    значение.
     """
+    got, missing = _BRIDGE_WORDS[result.provider]
     match result.status:
         case ProviderStatus.SUCCESS:
-            return f"✓ {title} — ИНН получен, банкротство, ИП и арбитраж проверены по нему"
+            return f"✓ {title} — {got}"
         case ProviderStatus.NO_RESULTS:
             note = f"; {result.error_message}" if result.error_message else ""
-            return f"✓ {title} — проверено, ИНН по этим данным не найден{note}"
+            return f"✓ {title} — проверено, {missing}{note}"
         case ProviderStatus.NOT_CONFIGURED:
             return f"○ {title} — не подключено"
         case ProviderStatus.UNAVAILABLE:
