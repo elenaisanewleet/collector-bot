@@ -26,8 +26,10 @@ from typing import Any
 
 from aiohttp import web
 
+from app.config import AppMode
 from app.container import Container
 from app.db.models import ShareLink
+from app.db.repository import DebtorRepository
 from app.domain.verdict import VERDICT_TITLES
 from app.logging_setup import get_logger
 from app.services.export import queue_to_csv
@@ -35,6 +37,7 @@ from app.services.reporting import render_report
 from app.services.share import ShareKind
 from app.utils.dates import utcnow
 from app.web.render import ExportLinks, render_message_page, render_report_page
+from app.web.render_base import render_base_page
 from app.web.render_queue import render_queue_page
 
 logger = get_logger(__name__)
@@ -74,6 +77,7 @@ def build_app(container: Container) -> web.Application:
             web.get("/q/{token}", handle_queue),
             web.get("/q/{token}/print", handle_queue_print),
             web.get("/q/{token}/queue.csv", handle_queue_csv),
+            web.get("/b/{token}", handle_base),
         ]
     )
     return app
@@ -81,6 +85,34 @@ def build_app(container: Container) -> web.Application:
 
 async def handle_health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
+
+
+# ---------------------------------------------------------------- база
+
+
+async def handle_base(request: web.Request) -> web.Response:
+    """Справочник должников целиком: кто заведён и что про него известно.
+
+    Отвечает на вопрос, которого очередь не закрывает: она показывает только
+    проверенных, то есть уже оплаченных. А «кто у меня вообще есть» спрашивают
+    каждый день, и сегодня за ответом лезут в 1С.
+    """
+    container = request.app[CONTAINER_KEY]
+    token = request.match_info["token"]
+    link = await container.share_service.resolve(token, ShareKind.BASE)
+    if link is None:
+        return _not_found(container)
+    async with container.database.session() as session:
+        debtors = await DebtorRepository(session).all_by_name(
+            limit=container.settings.batch_max_debtors
+        )
+    html = render_base_page(
+        debtors,
+        app_name=container.settings.app_name,
+        demo_mode=container.settings.app_mode is AppMode.DEMO,
+        print_mode="print" in request.query,
+    )
+    return web.Response(text=html, content_type="text/html", headers=PRIVATE_HEADERS)
 
 
 # ---------------------------------------------------------------- отчёт

@@ -96,6 +96,15 @@ IMPORT_ACTION = OwnerOnlyAction(
 )
 
 
+BASE_ACTION = OwnerOnlyAction(
+    title="Список должников",
+    why=(
+        "За ссылкой вся база: имена, даты рождения, адреса, машины и суммы. "
+        "Кому её открывать, решает владелец, а не тот, кому она понадобилась."
+    ),
+)
+
+
 CALC_ACTION = OwnerOnlyAction(
     title="Как считается пошлина",
     why=(
@@ -248,6 +257,7 @@ async def notify_user(bot: Bot, user_id: int, text: str) -> bool:
 __all__ = [
     "APPROVED_NOTICE",
     "AUDIT_ACTION",
+    "BASE_ACTION",
     "BATCH_ACTION",
     "CALC_ACTION",
     "IMPORT_ACTION",

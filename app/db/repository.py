@@ -128,6 +128,16 @@ class DebtorRepository:
         needle = f"{normalize_token(surname_and_name)}%"
         return await self._all(select(Debtor).where(Debtor.fio_normalized.like(needle)))
 
+    async def all_by_name(self, *, limit: int) -> list[Debtor]:
+        """Все должники по алфавиту — для выгрузки списка и для глаз.
+
+        Порядок по ФИО, а не по идентификатору: список читает человек, и
+        искать в нём он будет по фамилии.
+        """
+        return await self._all(
+            select(Debtor).order_by(Debtor.fio_normalized.asc(), Debtor.id.asc()).limit(limit)
+        )
+
     async def find_by_phone_hash(self, phone_hash: str) -> list[Debtor]:
         return await self._all(select(Debtor).where(Debtor.phone_hash == phone_hash))
 

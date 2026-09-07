@@ -1495,3 +1495,56 @@ async def test_a_silent_bridge_asks_for_a_surname_in_one_line(
 
     assert sent.contains("Введите фамилию")
     assert not sent.contains("RECOVERY SCORE"), "платный прогон без имени"
+
+
+# ---- 31. вся база одной страницей, вместо похода в 1С
+
+
+def test_the_base_page_finds_by_every_field() -> None:
+    """Справочник должников: поиск идёт по всей строке, а не по одной колонке.
+
+    Оператор помнит то, что помнит: кусок фамилии, номер машины, улицу, номер
+    записи. Одно поле поиска дешевле, чем объяснять, в какую графу вводить.
+
+    Страница отвечает на вопрос, которого очередь не закрывает: очередь
+    показывает проверенных, то есть уже оплаченных, а «кто у меня вообще есть»
+    спрашивают каждый день — и лезут за этим в 1С.
+    """
+    from app.db.models import Debtor
+    from app.web.render_base import render_base_page
+
+    rows = [
+        Debtor(
+            id=1,
+            dedup_key="a",
+            fio="Клочкова Елена Николаевна",
+            fio_normalized="клочкова елена николаевна",
+            birth_date=date(1994, 11, 24),
+            vehicle_plates="Х376СА797, К245МЕ977",
+            address="Москва, Петровско-Разумовский проезд",
+            debt_amount=Decimal("11970"),
+            debt_is_estimated=True,
+            source_record_ids="793783, 830279",
+        )
+    ]
+    page = render_base_page(rows, app_name="Collector Bot")
+
+    # В поисковый индекс строки попадает всё, по чему её будут искать.
+    for needle in ("клочкова", "х376са797", "петровско", "793783", "24.11.1994"):
+        assert needle in page.lower(), f"по «{needle}» строка не найдётся"
+
+    # Расчётная сумма помечена: документ и оценка не должны выглядеть одинаково.
+    assert "11 970 ₽*" in page
+    assert "по тарифу" in page
+
+    # Страница не индексируется: за ссылкой персональные данные.
+    assert "noindex" in page
+
+
+async def test_the_base_link_is_owner_only(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """За ссылкой вся база — кому её открывать, решает владелец."""
+    await feed(dispatcher, bot, message=make_message("/base", user_id=OPERATOR_ID + 555))
+
+    assert not sent.contains("Открыть список")

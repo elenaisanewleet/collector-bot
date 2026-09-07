@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from app.bot.access_view import AUDIT_ACTION, CALC_ACTION, refuse_owner_only
+from app.bot.access_view import AUDIT_ACTION, BASE_ACTION, CALC_ACTION, refuse_owner_only
 from app.container import Container
 from app.db.repository import AuditRepository, DebtorRepository
 from app.domain.enums import PROVIDER_TITLES
 from app.services.explain import explain_calculation
+from app.services.share import ShareKind, ShareTarget
 from app.utils.dates import format_datetime
 from app.utils.formatting import pluralize_ru
 from app.utils.masking import mask_secret
@@ -174,5 +175,39 @@ def build_router() -> Router:
             await refuse_owner_only(message, action=CALC_ACTION, user_id=user_id)
             return
         await message.answer(explain_calculation(container.settings))
+
+    @router.message(Command("base"))
+    async def base(message: Message, container: Container, user_id: int) -> None:
+        """Ссылка на справочник должников — весь список одной страницей.
+
+        Отвечает на вопрос, которого очередь не закрывает: она показывает
+        проверенных, то есть уже оплаченных, а «кто у меня вообще есть»
+        спрашивают каждый день. Сегодня за этим лезут в 1С.
+
+        Владельцу: за ссылкой вся база с именами, адресами и суммами. Срок
+        жизни у неё короткий, как у ссылки на очередь, и погасить её можно
+        командой /revoke — радиус поражения тот же.
+        """
+        if not container.access_service.is_owner(user_id):
+            await refuse_owner_only(message, action=BASE_ACTION, user_id=user_id)
+            return
+        async with container.database.session() as session:
+            total = await DebtorRepository(session).count()
+        if not total:
+            await message.answer("В базе никого нет. Загрузите выгрузку — /import.")
+            return
+        url = await container.share_service.issue(
+            ShareTarget(ShareKind.BASE, 0), telegram_user_id=user_id
+        )
+        if url is None:
+            await message.answer("Веб-отчёты выключены — ссылку выдать не могу.")
+            return
+        noun = pluralize_ru(total, "должник", "должника", "должников")
+        await message.answer(
+            f"{total} {noun} в базе.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="Открыть список", url=url)]]
+            ),
+        )
 
     return router

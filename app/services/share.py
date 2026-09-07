@@ -32,6 +32,9 @@ TOKEN_BYTES = 32
 class ShareKind(StrEnum):
     REPORT = "report"
     QUEUE = "queue"
+    # Справочник должников целиком. Отдельный вид, а не «очередь без прогона»:
+    # за ним вся база, а не результат одной проверки, и срок жизни у него свой.
+    BASE = "base"
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,12 +137,12 @@ class ShareLinkService:
         один человек, а за ссылкой на прогон — вся выгрузка целиком. Радиус
         поражения отличается на три порядка, значит и обращение должно.
         """
-        if kind is ShareKind.QUEUE:
+        if kind in (ShareKind.QUEUE, ShareKind.BASE):
             return self._settings.share_queue_ttl_hours
         return self._settings.share_link_ttl_hours
 
     def url_for(self, token: str, kind: ShareKind) -> str:
-        prefix = "r" if kind is ShareKind.REPORT else "q"
+        prefix = {ShareKind.REPORT: "r", ShareKind.QUEUE: "q", ShareKind.BASE: "b"}[kind]
         return f"{self._settings.web_public_url}/{prefix}/{token}"
 
     def export_urls(self, url: str, kind: ShareKind) -> tuple[str, str]:
