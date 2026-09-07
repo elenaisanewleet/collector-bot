@@ -27,7 +27,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.bot.identifiers import Field
 from app.bot.keyboards import BACK_LABEL, MENU_HOME
 from app.bot.view import missing_reason
-from app.domain.enums import PROVIDER_TITLES, ProviderName, SearchType
+from app.domain.enums import SearchType
 from app.domain.identity import (
     INN_INDIVIDUAL_LENGTH,
     PASSPORT_LENGTH,
@@ -175,7 +175,7 @@ MENU_NOTHING = (
     "Искать пока не по чему: все три вопроса пропущены. Ничего страшного — "
     "начать можно с любого поля ниже."
 )
-MENU_OPENS = "откроет {sources}"
+MENU_OPENS = "откроет ещё {sources}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -503,9 +503,17 @@ def _option(card: Card, spec: _Option, registry: ProviderRegistry) -> str | None
 
 
 def _unlocked(card: Card, probe: str, registry: ProviderRegistry) -> str:
-    """Кого откроет это поле — на нынешнем содержимом карточки, а не вообще."""
+    """Сколько источников откроет это поле — на нынешнем содержимом карточки.
+
+    Числом, а не списком имён, по тому же правилу, что и строка покрытия:
+    карточку видит любой допущенный сотрудник, и перечислять на ней, у кого мы
+    покупаем данные, незачем. Считается по гейтам самих провайдеров, а не по
+    написанному руками списку: захардкоженный разъезжается с провайдером при
+    первой правке и начинает обещать источник, который откажется отвечать.
+    """
     base = card.subject() or SearchSubject(search_type=SearchType.PERSON.value)
-    return _titles(coverage.unlocked_by(probe, base, registry))
+    opened = coverage.unlocked_by(probe, base, registry)
+    return _count(len(opened)) if opened else ""
 
 
 def _head(card: Card) -> str:
@@ -616,10 +624,6 @@ def _count(number: int) -> str:
 
 def _lead(card: Card) -> str:
     return "Спросил" if card.checked_at else "Сейчас спрошу"
-
-
-def _titles(names: tuple[ProviderName, ...]) -> str:
-    return ", ".join(PROVIDER_TITLES.get(name, name.value) for name in names)
 
 
 # ---------------------------------------------------------------- кнопки

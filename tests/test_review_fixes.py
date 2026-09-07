@@ -496,3 +496,35 @@ async def test_the_queue_fills_up_while_the_run_is_going(container: Container) -
     assert summary.processed > 0
     # Хоть один снимок до конца прогона уже видел строки.
     assert any(count > 0 for count in seen[:-1]), f"очередь была пуста весь прогон: {seen}"
+
+
+# ------------------------------------------------- 11. каждая нижняя кнопка жива
+
+
+async def test_every_bottom_label_reaches_a_handler(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Подпись без обработчика становится фамилией должника.
+
+    Нижняя клавиатура живёт на стороне Telegram и обновляется только со
+    следующим /start, поэтому у всех, кто его не нажимал, кнопки остаются
+    старыми. Любая подпись — нынешняя или снятая — приходит обычным текстом, и
+    без точного совпадения доезжает до карточки запроса, которая разбирает её
+    как данные о должнике: нажатие «Главное меню» отвечало вопросом «это другой
+    человек или исправление?».
+
+    Тест перебирает ВСЕ подписи, которые бот когда-либо ставил на клавиатуру, и
+    требует от каждой осмысленного ответа. Он и поймал этот дефект.
+    """
+    from app.bot.keyboards import REPLY_BUTTONS
+
+    for label in REPLY_BUTTONS:
+        sent.texts.clear()
+        await feed(dispatcher, bot, message=make_message(label))
+
+        answered = sent.joined
+        assert answered, f"«{label}» осталась без ответа"
+        assert "это другой человек или исправление" not in answered, (
+            f"«{label}» ушла в разбор свободного текста"
+        )
+        assert "Фамилия: " + label.split()[0] not in answered, f"«{label}» легла в поле карточки"
