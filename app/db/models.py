@@ -46,6 +46,14 @@ class Debtor(Base):
     # ИНН физлица не маскируется и не хэшируется, в отличие от телефона: по нему
     # ищут банкротство, ИП и арбитраж, и маскированный он для этого бесполезен.
     inn: Mapped[str | None] = mapped_column(String(12), index=True)
+    # Паспорт — по тому же правилу, что телефон: маска всегда, сам номер только
+    # при поднятом STORE_SENSITIVE_IDENTIFIERS. Он здесь ради одного —
+    # моста «паспорт → ИНН»: банкротство, статус ИП и арбитраж ищут только по
+    # ИНН, а его в выгрузке заказчика нет ни у одного должника. Маска для моста
+    # бесполезна, поэтому при выключенном флаге три источника так и молчат — и
+    # это осознанный выбор развёртывания, а не умолчание кода.
+    passport: Mapped[str | None] = mapped_column(String(16))
+    passport_masked: Mapped[str | None] = mapped_column(String(32))
     contract_number: Mapped[str | None] = mapped_column(String(64), index=True)
     claim_number: Mapped[str | None] = mapped_column(String(64), index=True)
     debt_amount: Mapped[Decimal | None] = mapped_column(Money)

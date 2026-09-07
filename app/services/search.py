@@ -642,6 +642,14 @@ def _enrich_from_internal(
         found_inn = next((record.inn for record in records if record.inn), None)
         if found_inn is not None:
             update["inn"] = found_inn
+    if subject.passport is None:
+        # Паспорт нужен не отчёту, а мосту: он единственный способ получить ИНН,
+        # когда в выгрузке его нет, а без ИНН банкротство, статус ИП и арбитраж
+        # не проверяются вовсе. В отчёт паспорт не попадает — мост печатает
+        # только результат, и вендорские ошибки чистятся от него отдельно.
+        found_passport = next((record.passport for record in records if record.passport), None)
+        if found_passport is not None:
+            update["passport"] = found_passport
 
     return subject.model_copy(update=update) if update else subject
 

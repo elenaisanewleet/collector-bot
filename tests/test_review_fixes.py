@@ -1382,3 +1382,61 @@ async def test_without_the_bridge_a_phone_alone_still_refuses(
     await feed(dispatcher, bot, callback_query=make_callback("qc:run"))
 
     assert not sent.contains("RECOVERY SCORE"), "прогон ни о ком за деньги"
+
+
+# ---- 26. паспорт из выгрузки открывает три источника через мост к ИНН
+
+
+async def test_the_passport_from_the_export_unlocks_the_inn_bridge(
+    container: Container,
+) -> None:
+    """Паспорт доезжает до субъекта поиска — ради ИНН, а не ради отчёта.
+
+    Банкротство, статус ИП и арбитраж физлица ищут ТОЛЬКО по двенадцатизначному
+    ИНН. В выгрузке заказчика его нет ни у одного из 2052, поэтому три источника
+    из шести молчали по всей базе и молчали бы всегда. Паспорт есть у 1304 из
+    них, мост «паспорт → ИНН» написан и включён — не хватало ровно одного:
+    импорт выбрасывал колонку.
+
+    Хранение по правилу телефона: маска всегда, сам номер только при поднятом
+    STORE_SENSITIVE_IDENTIFIERS. Маска мосту бесполезна, поэтому выключенный
+    флаг оставляет три источника молчащими — и это выбор развёртывания, а не
+    умолчание кода.
+    """
+    container.settings.store_sensitive_identifiers = True
+    await container.import_service.import_text(
+        "ФИО,Дата рождения,Паспорт\nТестов Андрей Сергеевич,15.03.1980,45 09 123456"
+    )
+
+    async with container.database.session() as session:
+        row = (await DebtorRepository(session).find_by_fio("Тестов Андрей Сергеевич"))[0]
+    assert row.passport == "4509123456"
+    assert row.passport_masked and "123456" not in row.passport_masked
+
+    # И он доезжает до субъекта: мост ищет паспорт именно там.
+    subject = SearchSubject(
+        search_type=SearchType.PERSON.value,
+        name=PersonName(last_name="Тестов", first_name="Андрей", middle_name="Сергеевич"),
+        birth_date=date(1980, 3, 15),
+    )
+    enriched = await container.search_service.lookup_internal(subject)
+    assert enriched and enriched[0].passport == "4509123456"
+
+
+async def test_words_in_the_passport_column_are_not_an_error(container: Container) -> None:
+    """«Сведения отсутствуют» — это не испорченный паспорт, а его отсутствие.
+
+    В выгрузке заказчика колонка наполовину заполнена словами. Звать оператора
+    чинить восемьсот строк, в которых чинить нечего, — тот же ложный сигнал, что
+    и тридцать «ошибок» в машинах без номера: за ним теряются настоящие.
+    """
+    report = await container.import_service.import_text(
+        "ФИО,Паспорт\n"
+        "Тестов Андрей Сергеевич,сведения отсутствуют\n"
+        "Тестова Мария Ивановна,нет\n"
+        "Тестов Пётр Петрович,45 09 12"
+    )
+
+    warnings = " ".join(report.warnings)
+    assert "Паспорт" in warnings, "испорченный паспорт промолчал"
+    assert report.warning_count == 1, "слова в колонке подняли ложную тревогу"

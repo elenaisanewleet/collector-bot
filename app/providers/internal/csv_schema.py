@@ -29,6 +29,7 @@ from app.domain.identity import (
     NameParseError,
     normalize_address,
     normalize_inn,
+    normalize_passport,
     normalize_phone,
     normalize_plate,
     normalize_vin,
@@ -54,6 +55,7 @@ CANONICAL_COLUMNS = (
     "source_id",
     "impounded_at",
     "released_at",
+    "passport",
 )
 
 # Как поле зовут в разговоре с оператором. Внутреннее имя колонки в текст не
@@ -76,6 +78,7 @@ COLUMN_TITLES: dict[str, str] = {
     "source_id": "ИД записи",
     "impounded_at": "Дата постановки",
     "released_at": "Дата выдачи",
+    "passport": "Паспорт",
 }
 
 # Синонимы пишутся так, как их печатает 1С, — со словами, точками и «№».
@@ -134,6 +137,15 @@ COLUMN_ALIASES: dict[str, str] = {
     # ИНН физлица. Ради него колонка и заводится: без него банкротство, статус
     # ИП и арбитраж не проверяются вовсе — эти источники ищут только по нему.
     # Выгрузка из 1С его обычно содержит, а импорт до сих пор молча выбрасывал.
+    # Паспорт. Ради него колонка и заводится: банкротство, статус ИП и арбитраж
+    # ищут ТОЛЬКО по 12-значному ИНН физлица, а его в выгрузке заказчика нет ни
+    # у одного из 2052. Паспорт есть у 1474 — и мост «паспорт → ИНН» через ФНС
+    # превращает его в тот самый ИНН. Без этой колонки три источника из шести
+    # молчат по всей базе навсегда.
+    "паспорт": "passport",
+    "паспортные данные": "passport",
+    "серия и номер паспорта": "passport",
+    "документ": "passport",
     "inn": "inn",
     "инн": "inn",
     "innfiz": "inn",
@@ -277,6 +289,7 @@ class DebtorRow:
     birth_date: date | None = None
     phone: str | None = None
     inn: str | None = None
+    passport: str | None = None
     contract_number: str | None = None
     claim_number: str | None = None
     debt_amount: Decimal | None = None
@@ -427,6 +440,7 @@ class DebtorRow:
             "birth_date",
             "phone",
             "inn",
+            "passport",
             "contract_number",
             "claim_number",
             "debt_amount",
@@ -670,6 +684,7 @@ def _build_row(mapping: dict[int, str | None], raw_row: list[str]) -> DebtorRow:
     )
     row.phone = _parse_optional_phone(values.get("phone"), row)
     row.inn = _parse_optional_inn(values.get("inn"), row)
+    row.passport = _parse_optional_passport(values.get("passport"), row)
     row.debt_amount = _parse_optional_amount(values.get("debt_amount"), row)
     row.address = normalize_address(values.get("address"))
     row.vehicle_plate = _parse_optional_plate(values.get("vehicle_plate"), row)
@@ -723,6 +738,22 @@ def _parse_optional_inn(raw: str | None, row: DebtorRow) -> str | None:
     if normalized is None or len(normalized) != INN_INDIVIDUAL_LENGTH:
         row.warnings.append(f"ИНН: не похоже на ИНН физлица «{raw}»")
         return None
+    return normalized
+
+
+def _parse_optional_passport(raw: str | None, row: DebtorRow) -> str | None:
+    """Серия и номер паспорта — десять цифр, и только они.
+
+    В выгрузке заказчика колонка наполовину заполнена словами: «сведения
+    отсутствуют», «нет», единица. Это не паспорт и замечанием быть не должно:
+    оператор его не терял, его не было. Замечание остаётся для непустого
+    значения, которое на паспорт не похоже, — вот его чинят в выгрузке.
+    """
+    if not raw:
+        return None
+    normalized = normalize_passport(raw)
+    if normalized is None and any(ch.isdigit() for ch in raw):
+        row.warnings.append("Паспорт: не похоже на серию и номер")
     return normalized
 
 

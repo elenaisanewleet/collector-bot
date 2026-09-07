@@ -34,7 +34,7 @@ from app.providers.internal.xlsx import (
     xlsx_to_sheet,
 )
 from app.utils.hashing import normalize_token
-from app.utils.masking import mask_phone
+from app.utils.masking import mask_passport, mask_phone
 
 logger = get_logger(__name__)
 
@@ -338,6 +338,8 @@ class ImportService:
             phone_masked=mask_phone(row.phone),
             phone_hash=phone_hash(row.phone),
             inn=row.inn,
+            passport=row.passport if store_raw else None,
+            passport_masked=mask_passport(row.passport),
             contract_number=row.contract_number,
             claim_number=row.claim_number,
             debt_amount=row.debt_amount,

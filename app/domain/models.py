@@ -82,6 +82,11 @@ class InternalDebtorRecord(SourcedFact):
     phone: str | None = None
     phone_masked: str | None = None
     inn: str | None = None
+    # Паспорт — как телефон: сам номер только при STORE_SENSITIVE_IDENTIFIERS,
+    # маска всегда. Нужен мосту «паспорт → ИНН», без которого банкротство,
+    # статус ИП и арбитраж не проверяются вовсе.
+    passport: str | None = None
+    passport_masked: str | None = None
     contract_number: str | None = None
     claim_number: str | None = None
     debt_amount: Decimal | None = None
