@@ -1294,3 +1294,38 @@ async def test_the_telegram_bridge_stays_out_of_the_batch_run(settings: Settings
 
     assert result.status is ProviderStatus.NOT_CONFIGURED
     assert not fake.talks, "мост написал боту во время массового прогона"
+
+
+def test_the_telegram_bridge_reads_the_real_reply_shape() -> None:
+    """Разбор проверен на настоящем ответе сервиса, а не на придуманном.
+
+    Две вещи в нём ломают наивный разбор, и обе видны только на живом примере:
+    имя разделено ДВОЙНЫМИ пробелами, а само сообщение начинается с блока про
+    телефон, оператора и регион — то есть до ФИО идёт текст, в котором тоже
+    есть слова с большой буквы.
+
+    Номер здесь пример проекта, а не чужой: настоящий в репозиторий не едет.
+    """
+    from app.providers.phone_bridge_telegram import _BIRTH_IN_TEXT, _find_name
+
+    reply = (
+        "📱\n"
+        "├ Телефон: 89160000000\n"
+        "├ Оператор: МТС\n"
+        "├ Регион: г.Москва и Московская область\n"
+        "└ Страна: Россия\n"
+        "\n"
+        "👤 Основные данные\n"
+        "├ ФИО: Клочкова  Елена  Николаевна\n"
+        "├ Дата рождения: 24.11.1994\n"
+        "└ Возраст: 31\n"
+    )
+
+    name = _find_name(reply)
+    assert name is not None, "ФИО из настоящего ответа не разобралось"
+    assert name.last_name == "Клочкова"
+    assert name.first_name == "Елена"
+    assert name.middle_name == "Николаевна"
+
+    birth = _BIRTH_IN_TEXT.search(reply)
+    assert birth is not None and birth.group(1) == "24.11.1994"
