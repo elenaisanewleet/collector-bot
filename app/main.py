@@ -21,7 +21,12 @@ from aiogram.exceptions import (
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommandScopeChat, MenuButtonCommands
 
-from app.bot.commands import owner_telegram_commands, telegram_commands
+from app.bot.commands import (
+    BOT_DESCRIPTION,
+    BOT_SHORT_DESCRIPTION,
+    owner_telegram_commands,
+    telegram_commands,
+)
 from app.bot.router import setup_dispatcher
 from app.config import Settings, get_settings
 from app.container import build_container
@@ -160,6 +165,17 @@ async def publish_commands(bot: Bot, settings: Settings | None = None) -> None:
         await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     except TelegramAPIError as exc:
         logger.warning("commands.publish_failed", detail=str(exc))
+
+    # Описание — экран до кнопки «Начать», первое, что человек видит вообще.
+    # Отдельным try: отказ Telegram на описании не должен лишить бота меню
+    # команд, а меню — описания. Отдельным запросом ещё и потому, что Telegram
+    # молча игнорирует повторную установку того же текста, и ошибки тут ждать
+    # неоткуда, кроме превышения лимита длины.
+    try:
+        await bot.set_my_description(BOT_DESCRIPTION)
+        await bot.set_my_short_description(BOT_SHORT_DESCRIPTION)
+    except TelegramAPIError as exc:
+        logger.warning("description.publish_failed", detail=str(exc))
 
     for owner_id in sorted(settings.owner_user_ids) if settings else ():
         try:

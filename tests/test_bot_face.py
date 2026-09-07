@@ -457,6 +457,55 @@ async def test_publish_commands_sets_the_blue_menu(
     assert [command.command for command in published.commands] == [name for name, _ in BOT_COMMANDS]
 
 
+async def test_publish_sets_the_description_the_user_sees_before_start(
+    bot: Bot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Описание бота ставит код, а не человек в @BotFather.
+
+    Это экран, который человек видит ДО кнопки «Начать», не написав боту ни
+    слова, — и он единственный жил на стороне Telegram, а не в репозитории.
+    Разошлось немедленно: пока из текстов бота убирали перечисление источников,
+    описание продолжало обещать «проверю по официальным источникам» и называть
+    их поимённо. Выкладка такое не чинит — код должен ставить описание сам.
+    """
+    from aiogram.methods import SetMyDescription, SetMyShortDescription
+
+    from app.bot.commands import BOT_DESCRIPTION, BOT_SHORT_DESCRIPTION
+    from app.main import publish_commands
+
+    calls: list[Any] = []
+
+    async def capture(self: Bot, method: Any, *args: Any, **kwargs: Any) -> Any:
+        calls.append(method)
+        return True
+
+    monkeypatch.setattr(Bot, "__call__", capture, raising=True)
+    await publish_commands(bot)
+
+    described = next(call for call in calls if isinstance(call, SetMyDescription))
+    assert described.description == BOT_DESCRIPTION
+    short = next(call for call in calls if isinstance(call, SetMyShortDescription))
+    assert short.short_description == BOT_SHORT_DESCRIPTION
+
+
+def test_the_description_keeps_the_same_rules_as_the_first_screen() -> None:
+    """То же правило, что и на первом экране: из чего собран ответ — не реклама.
+
+    Плюс лимиты Telegram: описание длиннее 512 знаков он отвергает целиком, и
+    бот остаётся с прежним текстом, ничего не сказав.
+    """
+    from app.bot.commands import BOT_DESCRIPTION, BOT_SHORT_DESCRIPTION
+
+    for text in (BOT_DESCRIPTION, BOT_SHORT_DESCRIPTION):
+        assert "реестр" not in text.lower()
+        assert "источник" not in text.lower()
+        assert "1С" not in text and "1с" not in text
+    assert len(BOT_DESCRIPTION) <= 512
+    assert len(BOT_SHORT_DESCRIPTION) <= 120
+    # Оговорка про «не проверено» обязана дожить до самого первого экрана.
+    assert "не проверено" in BOT_DESCRIPTION
+
+
 async def test_publish_commands_survives_a_refusal(
     bot: Bot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
