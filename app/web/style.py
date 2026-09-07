@@ -64,6 +64,7 @@ body{margin:0;background:var(--paper);color:var(--ink);
 @media(max-width:860px){body{font-size:var(--t-md)}}
 a{color:var(--accent)}
 h1,h2,h3{text-wrap:balance}
+.card h3{margin:var(--s-5) 0 var(--s-2);font-size:var(--t-sm)}
 .lbl{font-size:var(--t-3xs);font-weight:600;letter-spacing:.08em;
   text-transform:uppercase;color:var(--ink-3)}
 .num{font-family:var(--mono);font-variant-numeric:tabular-nums}

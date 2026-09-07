@@ -44,7 +44,12 @@ ACCESS_ALLOW = f"{ACCESS_PREFIX}:allow"
 ACCESS_DENY = f"{ACCESS_PREFIX}:deny"
 ACCESS_REVOKE = f"{ACCESS_PREFIX}:revoke"
 REFRESH_PREFIX = "refresh"
+# Подтверждение платного повтора. Отдельный префикс, а не флаг в старом:
+# кнопки ``refresh:*`` висят в чате под каждым прошлым отчётом, и все они
+# обязаны теперь спрашивать, а не списывать.
+REFRESH_CONFIRM_PREFIX = "refreshgo"
 REPEAT_PREFIX = "repeat"
+REPEAT_CONFIRM_PREFIX = "repeatgo"
 BATCH_PREFIX = "batch"
 
 REGION_COMBINED = "moscow_and_oblast"
@@ -66,6 +71,7 @@ REGION_COMBINED = "moscow_and_oblast"
 # 2. Менять подпись — значит менять ключ. У старых клиентов клавиатура
 #    остаётся прежней до следующего /start, и переименованная кнопка на день-два
 #    перестанет работать. Если менять, то вместе с приветствием.
+BUTTON_MENU = "Главное меню"
 BUTTON_BATCH = "Проверить всю базу"
 BUTTON_SEARCH = "Проверить человека"
 BUTTON_HISTORY = "История проверок"
@@ -73,79 +79,96 @@ BUTTON_SOURCES = "Откуда данные"
 BUTTON_HELP = "Как это работает"
 BUTTON_MORE = "Другие способы поиска"
 
-# Нижняя клавиатура — только две кнопки, и это осознанное сокращение: всё, что
-# читают один раз, ушло в меню. Остальные подписи остаются здесь, потому что
-# кнопки с ними ещё висят у тех, кто не нажимал /start после правки.
+# Подписи, которые стояли на нижней клавиатуре в прошлых версиях. Обработчики у
+# них остаются навсегда, и это не аккуратность, а необходимость: нижняя
+# клавиатура живёт на стороне Telegram и меняется только на следующем /start.
+# У всех, кто /start после выкладки не нажал (в том числе у заказчика с его
+# скриншотом), кнопки остаются старыми — и без этих строк каждое нажатие
+# попадало бы в разбор свободного текста и отвечало простынёй «не понял».
+LEGACY_BUTTON_BATCH = "📊 Проверить всю базу"
+LEGACY_BUTTON_SEARCH = "🔍 Проверить одного"
+LEGACY_BUTTON_HISTORY = "🕘 История"
+LEGACY_BUTTON_SOURCES = "ℹ️ Откуда данные"
+LEGACY_BUTTON_HELP = "❓ Как это работает"
+
+# Нижняя клавиатура — ровно две кнопки, одинаково широкие, в один ряд.
+#
+# «Главное меню» и «Проверить человека»: вернуться и начать. Всё остальное —
+# инлайн, под тем сообщением, к которому относится. Это прямо списано с бота,
+# который владелица показала как образец: «две кнопки внизу, простота».
+#
+# Прогона по всей базе здесь нет намеренно, хотя он и главный по мощности:
+# кнопка нужна одному человеку и раз в неделю, а место под пальцем — всем и
+# каждый день. Он первой строкой в главном меню у владельца.
 REPLY_BUTTONS: tuple[str, ...] = (
+    BUTTON_MENU,
     BUTTON_SEARCH,
     BUTTON_BATCH,
     BUTTON_MORE,
     BUTTON_HISTORY,
     BUTTON_SOURCES,
     BUTTON_HELP,
+    LEGACY_BUTTON_BATCH,
+    LEGACY_BUTTON_SEARCH,
+    LEGACY_BUTTON_HISTORY,
+    LEGACY_BUTTON_SOURCES,
+    LEGACY_BUTTON_HELP,
 )
 
-# То же без «Проверить всю базу». Прогон по всей выгрузке доступен только
-# владельцу, а кнопка, которая отвечает «нельзя», — это не забота о безопасности,
-# а обещание, которого бот не держит: допущенный сотрудник жмёт её первой, она
-# стоит верхней.
+# То же без прогона по базе: он только владельцу. Кнопка, которая отвечает
+# «нельзя», — это не забота о безопасности, а обещание, которого бот не держит.
 ALLOWED_REPLY_BUTTONS: tuple[str, ...] = tuple(
-    label for label in REPLY_BUTTONS if label != BUTTON_BATCH
+    label for label in REPLY_BUTTONS if label not in {BUTTON_BATCH, LEGACY_BUTTON_BATCH}
 )
 
 
 def main_reply_keyboard(*, owner: bool) -> ReplyKeyboardMarkup:
-    """Постоянная клавиатура под полем ввода.
+    """Постоянная клавиатура под полем ввода: две кнопки в один ряд.
 
     ``is_persistent=True`` — чтобы Telegram не сворачивал её в иконку: свёрнутая
     клавиатура ничем не лучше её отсутствия, а именно отсутствие и было
     жалобой. ``one_time_keyboard`` не выставляется вовсе (по умолчанию False):
     она обязана пережить нажатие, а не исчезнуть после первого.
 
-    Две кнопки, и то у владельца. Было пять, четыре из них повторяли
-    инлайн-меню: на экране одновременно висели две «Истории», две «Откуда
-    данные» и две «Как это работает». Именно это и назвали «кучей кнопок».
-    Справочные экраны читают один раз, поэтому им место в меню, а не под пальцем.
+    Две кнопки, и обе — про навигацию, а не про справку: «Главное меню» —
+    вернуться откуда угодно, «Проверить человека» — начать следующего должника.
+    Справочные экраны читают один раз, им место в меню, а не под пальцем.
 
-    Первой стоит проверка одного человека: заказчик начинает с неё, вводит
-    телефон и получает отчёт. Прогон по всей базе — второй, он мощнее, но реже,
-    и виден только владельцу: кнопка, которая отвечает «нельзя», — обещание,
-    которого бот не держит, а нажимают её первой.
+    Подсказка в поле ввода говорит главное про этот бот: номер можно просто
+    написать, ничего перед этим не нажимая.
 
-    Третьей — дверь к редким способам поиска. Она здесь, а не в инлайн-меню,
-    потому что инлайн-меню на приветствии убрано: у сообщения бывает либо
-    инлайн-клавиатура, либо нижняя, и ради нижней уходило второе сообщение с
-    объяснением интерфейса. Один экран вместо двух, и ничего не потеряно.
-
-    ``owner`` без значения по умолчанию намеренно: забытый аргумент должен
-    ломаться на mypy, а не показывать чужую кнопку живому человеку.
+    ``owner`` пока не меняет состав — обе кнопки видны всем, — но остаётся в
+    сигнатуре: у владельца и у сотрудника разные меню, и клавиатура обязана
+    уметь различать их без правки всех вызовов.
     """
-    rows = [[KeyboardButton(text=BUTTON_SEARCH)]]
-    if owner:
-        rows.append([KeyboardButton(text=BUTTON_BATCH)])
-    rows.append([KeyboardButton(text=BUTTON_MORE)])
+    del owner  # состав одинаковый; см. докстринг
     return ReplyKeyboardMarkup(
-        keyboard=rows,
+        keyboard=[[KeyboardButton(text=BUTTON_MENU), KeyboardButton(text=BUTTON_SEARCH)]],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Номер телефона должника",
+        input_field_placeholder="Напишите номер телефона должника",
     )
 
 
 MENU_MORE = f"{MENU_PREFIX}:more"
+#: «В меню» — возврат на главный экран. Есть под каждым экраном без исключений:
+#: экран без выхода это тупик, из которого человек уходит нажатием /start.
+MENU_HOME = f"{MENU_PREFIX}:home"
+#: Одна подпись на все «назад», и это дословное требование: её не должны
+#: искать глазами заново на каждом экране.
+BACK_LABEL = "В меню"
+MENU_HISTORY = f"{MENU_PREFIX}:history"
 
 
 def main_menu(*, owner: bool) -> InlineKeyboardMarkup:
-    """Главное меню: два действия и дверь во всё остальное.
+    """Главное меню: одно сообщение и пять-шесть кнопок в столбик.
 
-    Было одиннадцать кнопок сразу, и это назвали кучей. Из одиннадцати каждый
-    день нажимают две: проверить человека и проверить всю базу. Остальные девять
-    — способы поиска на случай, когда телефона нет, — ушли за «Другие способы
-    поиска» и никуда не делись.
+    Порядок — по частоте, а не по мощности. Первой стоит проверка одного
+    человека: заказчик начинает с неё, вводит телефон и получает сводку.
+    Прогон по всей базе — второй и только у владельца.
 
-    Порядок против прежнего: первым идёт человек, а не массовый прогон. Прогон
-    мощнее, но заказчик начинает не с него — он вводит телефон должника, который
-    только что звонил, и хочет отчёт.
+    Кнопки в столбик, а не в сетку, и это не вкус: подписи здесь разной длины,
+    а в два столбца короткая кнопка рядом с длинной читается как менее важная.
 
     ``owner`` без значения по умолчанию: забытый аргумент должен ломаться на
     mypy, а не показывать чужую кнопку живому человеку.
@@ -156,14 +179,29 @@ def main_menu(*, owner: bool) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start")]
         )
     buttons.append([InlineKeyboardButton(text="Другие способы поиска", callback_data=MENU_MORE)])
+    buttons.append(
+        [InlineKeyboardButton(text="История проверок", callback_data=f"{MENU_PREFIX}:history")]
+    )
+    if owner:
+        buttons.append(
+            [InlineKeyboardButton(text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import")]
+        )
+    buttons.append(
+        [
+            InlineKeyboardButton(text="Откуда данные", callback_data=f"{MENU_PREFIX}:sources"),
+            InlineKeyboardButton(text="Как это работает", callback_data=f"{MENU_PREFIX}:help"),
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def more_menu(*, owner: bool) -> InlineKeyboardMarkup:
-    """Всё, что не нужно каждый день.
+    """Способы поиска, когда телефона нет.
 
-    Открывается отдельной кнопкой из главного меню. Здесь можно быть подробным:
-    сюда приходят, когда телефона нет и надо искать иначе.
+    Открывается отдельной кнопкой из главного меню и содержит ровно их: справка,
+    история и загрузка выгрузки переехали в само меню, и держать их ещё и здесь
+    значило бы иметь по две кнопки на каждое действие — ровно та куча, на
+    которую жаловались.
 
     Загрузка выгрузки — только владельцу: чужой файл, подмешанный в базу, меняет
     решения о взыскании по чужим строкам.
@@ -179,20 +217,11 @@ def more_menu(*, owner: bool) -> InlineKeyboardMarkup:
             _menu_button("Договор или заявка", SearchType.CONTRACT),
         ],
     ]
-    fourth = [InlineKeyboardButton(text="История проверок", callback_data=f"{MENU_PREFIX}:history")]
     if owner:
-        fourth.insert(
-            0,
-            InlineKeyboardButton(text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import"),
+        buttons.append(
+            [InlineKeyboardButton(text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import")]
         )
-    buttons.append(fourth)
-    buttons.append(
-        [
-            InlineKeyboardButton(text="Откуда данные", callback_data=f"{MENU_PREFIX}:sources"),
-            InlineKeyboardButton(text="Как это работает", callback_data=f"{MENU_PREFIX}:help"),
-        ]
-    )
-    buttons.append([InlineKeyboardButton(text="Назад", callback_data=BACK_CALLBACK)])
+    buttons.append([InlineKeyboardButton(text=BACK_LABEL, callback_data=MENU_HOME)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -270,16 +299,40 @@ def external_check_keyboard(token: str) -> InlineKeyboardMarkup:
     )
 
 
-def history_keyboard(tokens: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+def history_keyboard() -> InlineKeyboardMarkup:
+    """Две кнопки под историей: назад и обновить.
+
+    Кнопок «Повторить проверку #N» здесь больше нет. Каждая из них — платный
+    прогон мимо кэша, и десять таких кнопок под списком стоят ровно столько,
+    сколько по ним нажмут; повтор остался под самим отчётом, где рядом видно,
+    что именно повторяется.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=BACK_LABEL, callback_data=MENU_HOME),
+                InlineKeyboardButton(text="Обновить", callback_data=MENU_HISTORY),
+            ]
+        ]
+    )
+
+
+def spend_confirm_keyboard(prefix: str, token: str) -> InlineKeyboardMarkup:
+    """Подтверждение перед повторным платным прогоном.
+
+    «Обновить» выглядит как чтение, а стоит как проверка: кнопка идёт мимо
+    кэша — в этом её назначение — и каждое нажатие обращается к платным
+    источникам заново. Массовый прогон подтверждения требует давно; одиночный
+    повтор ничем от него не отличается, кроме масштаба.
+    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"Повторить проверку #{index}",
-                    callback_data=f"{REPEAT_PREFIX}:{token}",
+                    text="Да, спросить источники заново", callback_data=f"{prefix}:{token}"
                 )
-            ]
-            for index, token in tokens
+            ],
+            [InlineKeyboardButton(text="Отмена", callback_data=CANCEL_CALLBACK)],
         ]
     )
 

@@ -151,7 +151,6 @@ def test_welcome_says_what_to_do_and_stays_short(container: Container) -> None:
     """
     text = welcome_text(container)
 
-    assert "Проверить человека" in text
     assert "номер телефона" in text
     assert "не проверено" in text
     # Ненавязчиво — значит без пиктограмм в тексте.
@@ -292,10 +291,15 @@ async def test_help_works_in_the_middle_of_a_dialog(
 async def test_new_search_button_is_not_a_dead_end(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """«Новая проверка» под отчётом раньше висела часиками до таймаута."""
+    """«Новая проверка» под отчётом ведёт к чистой карточке следующего должника.
+
+    Раньше она висела часиками до таймаута, потом показывала меню — и через
+    меню оператор попадал в карточку ПРЕДЫДУЩЕГО человека. Одноимённая кнопка
+    на самой карточке при этом чистила. Одна подпись обязана значить одно.
+    """
     await feed(dispatcher, bot, callback_query=make_callback("menu:back"))
 
-    assert sent.contains("Что делаем?")
+    assert sent.contains("Отправьте значение сообщением")
     assert sent.callback_answers
 
 
@@ -350,11 +354,18 @@ def test_menu_offers_the_reading_screens() -> None:
     from app.bot.keyboards import MENU_MORE, main_menu, more_menu
 
     main = [button.callback_data for row in main_menu(owner=True).inline_keyboard for button in row]
-    assert main == ["menu:person", "batch:start", MENU_MORE]
+    # Пять-шесть кнопок в столбик, первой — то, что нажимают каждый день.
+    assert main[:3] == ["menu:person", "batch:start", MENU_MORE]
+    assert "menu:sources" in main
+    assert "menu:help" in main
+    assert len(main) <= 7
 
+    # За «Другими способами» — только способы поиска: справка и история
+    # переехали в само меню, и держать их в двух местах значило бы иметь по две
+    # кнопки на каждое действие.
     more = [button.callback_data for row in more_menu(owner=True).inline_keyboard for button in row]
-    assert "menu:sources" in more
-    assert "menu:help" in more
+    assert "menu:contract" in more
+    assert "menu:sources" not in more
 
 
 def test_the_expensive_buttons_are_not_shown_to_a_plain_operator() -> None:
@@ -371,11 +382,12 @@ def test_the_expensive_buttons_are_not_shown_to_a_plain_operator() -> None:
     assert "batch:start" not in main
     assert "menu:person" in main
 
+    assert "menu:history" in main
+
     more = [
         button.callback_data for row in more_menu(owner=False).inline_keyboard for button in row
     ]
     assert "menu:import" not in more
-    assert "menu:history" in more
 
 
 # ---------------------------------------------------------------- меню команд

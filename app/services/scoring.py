@@ -38,6 +38,7 @@ from app.domain.scoring import (
     ACTIVE_SOLE_PROPRIETOR_BONUS,
     BASE_SCORE,
     CLAIM_AGAINST_DEBTOR_PENALTY,
+    CLOSED_ENFORCEMENT_PENALTY,
     COMPLETED_BANKRUPTCY_PENALTY,
     CONFIRMED_PROBATE_CASE_PENALTY,
     CONFIRMED_PROPERTY_BONUS,
@@ -58,6 +59,7 @@ from app.domain.scoring import (
     TERMINATED_BUSINESS_PENALTY,
     UNKNOWN_BANKRUPTCY_STATE_PENALTY,
     WEAK_IDENTITY_CONFIDENCE_FACTOR,
+    WRITTEN_OFF_ENFORCEMENT_PENALTY,
     categorize,
     clamp,
 )
@@ -212,9 +214,40 @@ def _enforcement_factors(report: DebtorReport) -> list[ScoreFactor]:
         return []
 
     active = report.active_proceedings
+    closed = report.closed_proceedings
     if not active:
         if result.is_partial:
             return []
+        if closed:
+            # Оконченные производства бонус за «чисто» отменяют всегда: у
+            # должника уже были приставы, и подавать это доводом ЗА уплату
+            # пошлины нельзя. Отдельно — окончание без взыскания: пристав искал
+            # должника и имущество и не нашёл, и это прямой ответ на вопрос
+            # «стоит ли тратить пошлину».
+            written_off = report.written_off_proceedings
+            if written_off:
+                noun = pluralize_ru(len(written_off), "производство", "производства", "производств")
+                return [
+                    ScoreFactor(
+                        name="enforcement_written_off",
+                        delta=WRITTEN_OFF_ENFORCEMENT_PENALTY,
+                        reason=(
+                            f"{len(written_off)} оконченных исполнительных {noun} "
+                            "без взыскания (ст. 46 ч. 1): пристав должника или его "
+                            "имущество не нашёл"
+                        ),
+                        source=ProviderName.FSSP,
+                    )
+                ]
+            noun = pluralize_ru(len(closed), "производство", "производства", "производств")
+            return [
+                ScoreFactor(
+                    name="enforcement_closed",
+                    delta=CLOSED_ENFORCEMENT_PENALTY,
+                    reason=f"активных производств нет, {len(closed)} оконченных {noun}",
+                    source=ProviderName.FSSP,
+                )
+            ]
         # Несопоставленная запись здесь бонус НЕ отменяет, в отличие от
         # остальных источников, и разница не в осторожности, а в вопросе.
         # ФССП ищется по ФИО с датой рождения, то есть возвращает в том числе

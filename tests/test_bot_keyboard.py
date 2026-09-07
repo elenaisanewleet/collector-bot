@@ -24,7 +24,7 @@ from app.bot.keyboards import (
     BUTTON_BATCH,
     BUTTON_HELP,
     BUTTON_HISTORY,
-    BUTTON_MORE,
+    BUTTON_MENU,
     BUTTON_SEARCH,
     BUTTON_SOURCES,
     MENU_MORE,
@@ -57,13 +57,18 @@ def test_keyboard_stays_open_and_does_not_collapse() -> None:
     assert not markup.one_time_keyboard
 
 
-def test_keyboard_holds_between_three_and_five_buttons() -> None:
-    """Нижняя клавиатура занимает экран всегда, поэтому в ней только частое."""
+def test_the_keyboard_holds_exactly_two_buttons() -> None:
+    """Ровно две кнопки в один ряд — прямой ориентир из бота-образца.
+
+    «Главное меню» и «Проверить человека»: вернуться и начать. Всё остальное
+    живёт инлайн, под тем сообщением, к которому относится. Было пять, четыре из
+    них повторяли инлайн-меню — это и назвали «кучей кнопок».
+    """
     labels = _labels(main_reply_keyboard(owner=True))
 
-    # Две: проверить человека и проверить всю базу. Было пять, и четыре из них
-    # повторяли инлайн-меню — это и назвали «кучей кнопок».
-    assert labels == [BUTTON_SEARCH, BUTTON_BATCH, BUTTON_MORE]
+    assert labels == [BUTTON_MENU, BUTTON_SEARCH]
+    # Один ряд: две одинаково широкие кнопки, как на образце.
+    assert len(main_reply_keyboard(owner=True).keyboard) == 1
 
 
 # Всё, что человек может набрать с русской или английской раскладки. Значок в
@@ -118,26 +123,26 @@ async def test_start_delivers_the_keyboard(
     assert len(keyboards) == 1
     # Не весь REPLY_BUTTONS: там остались подписи снятых кнопок — они ещё висят
     # у тех, кто не нажимал /start после сокращения, и обработчики им нужны.
-    assert _labels(keyboards[0]) == [BUTTON_SEARCH, BUTTON_BATCH, BUTTON_MORE]
-    # Одним сообщением: отдельная строка «внизу постоянные кнопки» объясняла
-    # интерфейс вместо того, чтобы работать, и была вторым экраном на /start.
-    assert len(sent.texts) == 1
+    assert _labels(keyboards[0]) == [BUTTON_MENU, BUTTON_SEARCH]
+    # Носитель клавиатуры удаляется сразу же: в чате остаётся одно приветствие.
+    assert sent.deleted, "сообщение-носитель нижней клавиатуры не убрано"
 
 
 async def test_the_welcome_keeps_its_inline_menu(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """У сообщения не бывает обеих клавиатур сразу, и выбрана нижняя.
+    """На /start остаётся одно сообщение — приветствие с меню под ним.
 
-    Раньше на приветствии висело инлайн-меню, а нижняя клавиатура приезжала
-    вторым сообщением с объяснением, что это такое. Пунктов в меню осталось
-    три, и все три влезли вниз — второе сообщение стало ни к чему.
+    У сообщения не бывает обеих клавиатур сразу, поэтому нижняя приезжает
+    отдельным носителем, который тут же удаляется: она принадлежит чату, а не
+    сообщению. Раньше за неё платили вторым экраном, объясняющим интерфейс.
     """
     await feed(dispatcher, bot, message=make_message("/start"))
 
-    first = sent.markups[0]
-    assert isinstance(first, ReplyKeyboardMarkup)
-    assert len(sent.texts) == 1
+    inline = [markup for markup in sent.markups if getattr(markup, "inline_keyboard", None)]
+    assert inline, "приветствие осталось без меню"
+    labels = [button.text for row in inline[-1].inline_keyboard for button in row]
+    assert "Проверить человека" in labels
 
 
 async def test_the_keyboard_is_sent_once_per_start(
@@ -161,7 +166,7 @@ async def test_the_keyboard_is_sent_once_per_start(
         # Пустая база — это и есть ответ массовой проверки на пустую базу,
         # то есть кнопка дошла до /batch.
         (BUTTON_BATCH, "Внутренняя база пуста"),
-        (BUTTON_SEARCH, "Напишите номер телефона"),
+        (BUTTON_SEARCH, "Телефон"),
         (BUTTON_HISTORY, "История пуста"),
         (BUTTON_SOURCES, "ОТКУДА ДАННЫЕ"),
         (BUTTON_HELP, "как это работает"),
@@ -199,7 +204,7 @@ async def test_the_search_button_keeps_the_rarer_searches_reachable(
     должна: она за «Другие способы поиска».
     """
     await feed(dispatcher, bot, message=make_message(BUTTON_SEARCH))
-    assert sent.contains("Напишите номер телефона")
+    assert sent.contains("Отправьте значение сообщением")
 
     await feed(dispatcher, bot, callback_query=make_callback(MENU_MORE))
 

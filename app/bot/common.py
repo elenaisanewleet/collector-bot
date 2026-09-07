@@ -9,12 +9,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from contextlib import suppress
+from datetime import timedelta
 
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.bot import report_actions, view
 from app.container import Container
+from app.db.repository import SearchRepository
 from app.domain.enums import SearchType
 from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport
@@ -22,6 +24,7 @@ from app.logging_setup import get_logger
 from app.providers.newdb import individual_inn
 from app.services.reporting import render_report
 from app.services.share import ShareKind, ShareTarget
+from app.utils.dates import utcnow
 from app.utils.formatting import split_message
 
 logger = get_logger(__name__)
@@ -35,6 +38,42 @@ STAGE_INTERVAL_SECONDS = 1.6
 #: избавляет от вопроса «почему тут пусто».
 NO_INN_NOTE = "Без ИНН не спрошу банкротство, ИП и арбитраж — добавить можно кнопкой под отчётом."
 
+#: Сутки — окно суточной квоты. Скользящее, а не «до полуночи»: календарный
+#: день сбрасывал бы счётчик разом всем и превращал бы полночь в окно, когда
+#: остаток тратится вдвое быстрее.
+QUOTA_WINDOW = timedelta(hours=24)
+
+QUOTA_SPENT = (
+    "На сегодня проверки закончились: {limit} в сутки на человека.\n\n"
+    "Это не поломка — каждая проверка обращается к платным реестрам, и лимит "
+    "бережёт оплаченный остаток. Счётчик отпускает по одной, через сутки после "
+    "каждой проверки. Нужно больше — напишите владельцу бота."
+)
+
+
+async def within_quota(message: Message, container: Container, user_id: int) -> bool:
+    """Можно ли этому человеку потратить ещё одну платную проверку.
+
+    Владелец без лимита: это его деньги и его решение. Всем остальным — суточная
+    квота, потому что бот может работать открытым, и тогда оплаченный остаток
+    тратит любой, кто его нашёл.
+
+    Отказ говорит вслух и сразу: молчаливое «ничего не произошло» на нажатие
+    оператор читает как поломку бота, а не как исчерпанный лимит.
+    """
+    limit = container.settings.daily_search_quota
+    if limit <= 0 or container.access_service.is_owner(user_id):
+        return True
+    async with container.database.session() as session:
+        spent = await SearchRepository(session).count_for_user_since(
+            user_id, utcnow() - QUOTA_WINDOW
+        )
+    if spent < limit:
+        return True
+    logger.info("search.quota_spent", telegram_user_id=user_id, limit=limit)
+    await message.answer(QUOTA_SPENT.format(limit=limit))
+    return False
+
 
 async def run_and_send_report(
     message: Message,
@@ -44,8 +83,12 @@ async def run_and_send_report(
     user_id: int,
     force_refresh: bool = False,
     notes: Sequence[str] = (),
-) -> DebtorReport:
-    """Проверить должника и показать результат.
+) -> DebtorReport | None:
+    """Проверить должника и показать результат. ``None`` — квота на сегодня выбрана.
+
+    Квота проверяется здесь, а не в восьми хендлерах: платный прогон уходит
+    только отсюда, и единственная проверка на общем пути не разъедется с
+    девятым способом её обойти.
 
     В чат уходит карточка с вердиктом и кнопкой на веб-отчёт, а не текст на
     три сообщения: таблицу производств в сообщении Telegram всё равно не
@@ -61,6 +104,9 @@ async def run_and_send_report(
     исчезла бы вместе с ним — а «я выбросил часть вашего ввода» обязано
     остаться на виду рядом с результатом.
     """
+    if not await within_quota(message, container, user_id):
+        return None
+
     accepted = view.accepted_line(subject)
     note = "\n".join([*notes, *filter(None, (_progress_note(subject),))]) or None
     notice = await message.answer(
@@ -101,6 +147,7 @@ async def run_and_send_report(
         bridge=container.registry.inn_bridge,
         text_url=text_url,
         print_url=print_url,
+        records=report.fact_count,
     )
 
     if url is None:

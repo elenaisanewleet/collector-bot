@@ -67,6 +67,10 @@ class SentMessages:
         # выглядят одинаково.
         self.sends: list[str] = []
         self.edits: list[str] = []
+        # Номера удалённых сообщений. Одно сообщение на экран — это не только
+        # «отправили одно», но и «лишнее убрали»: носитель нижней клавиатуры,
+        # карточка перед отчётом, вопрос про подтверждение.
+        self.deleted: list[int] = []
 
     @property
     def joined(self) -> str:
@@ -136,6 +140,7 @@ def intercept(sent: SentMessages) -> Any:
             sent.callback_answers.append(method.text or "")
             return True
         if isinstance(method, DeleteMessage):
+            sent.deleted.append(method.message_id)
             return True
         return True
 

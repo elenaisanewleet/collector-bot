@@ -404,7 +404,9 @@ def _enforcement_block(report: DebtorReport) -> str:
     # считается: ФССП ищет по ФИО и штатно возвращает однофамильцев.
     notes = _source_notes(result)
     if not active:
-        lines = [header, "Активных исполнительных производств не найдено.", *notes]
+        lines = [header, "Активных исполнительных производств не найдено."]
+        lines.extend(_closed_lines(report))
+        lines.extend(notes)
         lines.append(_checked_at(result))
         return "\n".join(lines)
 
@@ -418,17 +420,51 @@ def _enforcement_block(report: DebtorReport) -> str:
     hidden = len(active) - MAX_LISTED_PROCEEDINGS
     if hidden > 0:
         lines.append(f"…и ещё {hidden}")
+    lines.extend(_closed_lines(report))
     lines.extend(notes)
     lines.append(_checked_at(result))
     return "\n".join(lines)
 
 
-def _proceeding_lines(item: EnforcementProceeding) -> list[str]:
+def _closed_lines(report: DebtorReport) -> list[str]:
+    """Оконченные производства — отдельным списком, а не молчанием.
+
+    Они разбирались и терялись: раздел писал «активных не найдено», а список
+    источников в том же отчёте — «ФССП, 4 зап.». Найденное выглядело
+    ненайденным, причём именно то найденное, которое отвечает на главный вопрос
+    заказчика: пристав уже искал должника и его имущество.
+
+    Причина окончания печатается дословно, как её прислал источник: «ст. 46
+    ч. 1 п. 4» — это не наш вывод, а цитата, и переписывать её своими словами
+    в документе, который несут в суд, нельзя.
+    """
+    closed = report.closed_proceedings
+    if not closed:
+        return []
+    written_off = report.written_off_proceedings
+    lines = ["", f"Оконченных производств: {len(closed)}"]
+    if written_off:
+        lines.append(
+            f"Из них без взыскания (ст. 46 ч. 1): {len(written_off)} — "
+            "пристав должника или его имущество не нашёл."
+        )
+    lines.append("")
+    for item in closed[:MAX_LISTED_PROCEEDINGS]:
+        lines.extend(_proceeding_lines(item, closed=True))
+    hidden = len(closed) - MAX_LISTED_PROCEEDINGS
+    if hidden > 0:
+        lines.append(f"…и ещё {hidden}")
+    return lines
+
+
+def _proceeding_lines(item: EnforcementProceeding, *, closed: bool = False) -> list[str]:
     lines = [f"• {item.proceeding_number}"]
     if item.amount is not None:
         lines.append(f"  {format_amount(item.amount)}")
     if item.subject:
         lines.append(f"  {truncate(item.subject, 90)}")
+    if closed and item.status_text:
+        lines.append(f"  {truncate(item.status_text, 90)}")
     lines.append(f"  {_match_note(item.match_level)}")
     return lines
 
@@ -1098,33 +1134,78 @@ def render_history_line(
     category: str | None,
     provider_summary: str,
 ) -> str:
+    """Одна строка истории: чем кончилось, что искали, когда.
+
+    Строка ужата до двух: раньше их было четыре на запрос, и десять запросов
+    давали экран, который листают, а не читают. Значок в начале отвечает на
+    вопрос «сработало ли», и это ровно то, ради чего в историю заходят.
+
+    ``index`` остаётся в подписи, потому что кнопка повтора называет номер, а
+    номер, которого нет в строке, — это лотерея.
+    """
     score_text = (
         f"{score}/100 — {SCORE_CATEGORY_TITLES.get(ScoreCategory(category), category)}"
         if score is not None and category
         else "оценка недоступна"
     )
     return (
-        f"{index}. {created_at} · {search_type}\n"
-        f"   {masked_query}\n"
-        f"   {score_text}\n"
-        f"   {provider_summary}"
+        f"{index}. {masked_query} — {created_at}\n"
+        f"   {search_type} · {score_text} · {provider_summary}"
     )
 
 
 def render_provider_summary(results: Iterable[tuple[str, str]]) -> str:
-    """Compact per-provider status line for the history list."""
-    icons = {
-        ProviderStatus.SUCCESS.value: "✓",
-        ProviderStatus.NO_RESULTS.value: "✓",
-        ProviderStatus.NOT_CONFIGURED.value: "○",
-        ProviderStatus.UNAVAILABLE.value: "✗",
-        ProviderStatus.ERROR.value: "✗",
-    }
-    parts: list[str] = []
-    for provider, status in results:
-        try:
-            title = PROVIDER_TITLES[ProviderName(provider)]
-        except (ValueError, KeyError):
-            title = provider
-        parts.append(f"{icons.get(status, '?')}{title}")
-    return " ".join(parts) if parts else "—"
+    """Чем кончился опрос источников — числами, а не списком имён.
+
+    Две причины, и обе из ревью.
+
+    Первая: имена источников на экране, который видит любой допущенный
+    сотрудник, — это выдача поставщиков наружу. Правило владелицы дословно:
+    «не надо про это рассказывать всем». Для отчёта решение уже принято, и
+    история жила по другому.
+
+    Вторая: шесть состояний источника сводились к двум значкам, и «ответил, но
+    ничего не нашёл» выглядел так же, как «не ответил вовсе». Здесь считаются
+    три группы, и «не спрашивали» (источник не настроен) отделено от «спросили
+    и не получили».
+    """
+    answered = 0
+    failed = 0
+    skipped = 0
+    for _provider, status in results:
+        if status in {ProviderStatus.SUCCESS.value, ProviderStatus.NO_RESULTS.value}:
+            answered += 1
+        elif status == ProviderStatus.NOT_CONFIGURED.value:
+            skipped += 1
+        else:
+            failed += 1
+    total = answered + failed
+    if not total and not skipped:
+        return "источники не опрашивались"
+    parts = [f"ответили {answered} из {total}"] if total else []
+    if failed:
+        parts.append(f"молчат {failed}")
+    if skipped:
+        parts.append(f"не спрашивали {skipped}")
+    return ", ".join(parts)
+
+
+def history_mark(results: Iterable[tuple[str, str]]) -> str:
+    """Значок строки истории: сработало, сработало наполовину, не сработало.
+
+    Три состояния, а не два. «Часть источников молчала» — это не успех и не
+    провал: отчёт есть, но неполный, и человек, который зайдёт в него за
+    решением о пошлине, обязан знать об этом до, а не после.
+    """
+    answered = 0
+    failed = 0
+    for _provider, status in results:
+        if status in {ProviderStatus.SUCCESS.value, ProviderStatus.NO_RESULTS.value}:
+            answered += 1
+        elif status != ProviderStatus.NOT_CONFIGURED.value:
+            failed += 1
+    if failed and not answered:
+        return "✗"
+    if failed:
+        return "~"
+    return "✓"

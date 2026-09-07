@@ -26,10 +26,11 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.bot.keyboards import REFRESH_PREFIX
+from app.bot.keyboards import BACK_CALLBACK, BACK_LABEL, MENU_HOME, REFRESH_PREFIX
 from app.domain.enums import SearchType
 from app.domain.identity import PASSPORT_LENGTH, SearchSubject
 from app.providers.identity_bridge import InnBridgeProvider
+from app.utils.formatting import pluralize_ru
 
 #: ``padd:<поле>:<токен субъекта>``. Двадцать семь байт при лимите Telegram в 64.
 PERSON_ADD_PREFIX = "padd"
@@ -53,25 +54,30 @@ def report_keyboard(
     bridge: InnBridgeProvider | None,
     text_url: str | None = None,
     print_url: str | None = None,
+    records: int | None = None,
 ) -> InlineKeyboardMarkup:
-    """Клавиатура под карточкой: ссылка, выгрузка, чем добрать проверку, и повтор.
+    """Клавиатура под карточкой: одно главное действие, под ним второстепенные.
 
-    При полном вводе (ФИО, дата, ИНН) остаются ровно три кнопки — столько же,
-    сколько было до правки. Предложения появляются там, где чего-то не хватило,
-    и исчезают, как только его дали.
+    Порядок здесь и есть решение. Первой и во всю ширину — ссылка на отчёт: за
+    ней вся таблица, и это то, ради чего проверку запускали. Число записей стоит
+    прямо в подписи, потому что оно отвечает на вопрос «а есть ли там что
+    смотреть» до нажатия, а не после загрузки страницы.
 
-    Ссылка идёт первой и отдельной строкой: за ней вся таблица, и это главное
-    действие. Выгрузка стоит сразу за ней — отчёт чаще печатают и подшивают,
-    чем дочитывают до конца.
+    Дальше — выгрузка (отчёт чаще печатают и подшивают, чем дочитывают),
+    потом сужение региона, потом платное обновление, и последней строкой выход:
+    следующий должник и главное меню. Тупиков нет ни на одном экране.
+
+    ``records`` — сколько фактов в отчёте. ``None`` значит «не считали», и тогда
+    подпись остаётся без числа: соврать нулём хуже, чем промолчать.
     """
     rows: list[list[InlineKeyboardButton]] = []
     if url:
-        rows.append([InlineKeyboardButton(text="Полный отчёт", url=url)])
+        rows.append([InlineKeyboardButton(text=_report_label(records), url=url)])
     export: list[InlineKeyboardButton] = []
     if print_url:
         export.append(InlineKeyboardButton(text="Печать", url=print_url))
     if text_url:
-        export.append(InlineKeyboardButton(text="Текстом", url=text_url))
+        export.append(InlineKeyboardButton(text="Файлом", url=text_url))
     if export:
         rows.append(export)
     if refresh_token:
@@ -79,12 +85,25 @@ def report_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="Обновить", callback_data=f"{REFRESH_PREFIX}:{refresh_token}"
+                    text="Спросить источники заново",
+                    callback_data=f"{REFRESH_PREFIX}:{refresh_token}",
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="Новая проверка", callback_data="menu:back")])
+    rows.append(
+        [
+            InlineKeyboardButton(text="Новая проверка", callback_data=BACK_CALLBACK),
+            InlineKeyboardButton(text=BACK_LABEL, callback_data=MENU_HOME),
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _report_label(records: int | None) -> str:
+    if not records:
+        return "Открыть отчёт"
+    noun = pluralize_ru(records, "запись", "записи", "записей")
+    return f"Открыть отчёт ({records} {noun})"
 
 
 def _offers(

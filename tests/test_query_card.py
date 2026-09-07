@@ -148,8 +148,8 @@ async def test_the_conflict_question_does_not_lock_the_card(
     await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
 
     assert "другой человек или исправление" in last(sent)
-    assert "🔍 Проверить" in buttons(sent)
-    assert "+ Дата рождения" in buttons(sent)
+    assert "Проверить" in buttons(sent)
+    assert "Дата рождения" in buttons(sent)
 
 
 async def test_a_guess_is_shown_not_hidden(
@@ -377,8 +377,8 @@ async def test_the_card_is_reposted_below_the_report(
     after = await card_of(container)
     assert after is not None
     assert after.card_message_id != old_message_id
-    assert last(sent).startswith("Проверено в ")
-    assert "🔍 Перепроверить" in buttons(sent)
+    assert last(sent).startswith("Проверка должника — проверено в ")
+    assert "Перепроверить" in buttons(sent)
 
 
 # ---------------------------------------------------------------- честность
@@ -562,7 +562,7 @@ async def test_an_old_report_button_pours_its_subject_into_the_card(
 
     assert "Фамилия: Тестов" in last(sent)
     assert "Дата рождения: 12.03.1985" in last(sent)
-    assert "Напишите ИНН." in last(sent)
+    assert "✎ ИНН" in last(sent)
 
     await feed(dispatcher, bot, message=make_message("770912345601"))
     row = await card_of(container)

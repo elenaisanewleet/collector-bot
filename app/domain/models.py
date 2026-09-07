@@ -7,6 +7,7 @@ are willing to show an operator.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal
@@ -120,6 +121,34 @@ class EnforcementProceeding(SourcedFact):
     @property
     def is_active(self) -> bool:
         return self.status is ProceedingStatus.ACTIVE
+
+    @property
+    def is_closed(self) -> bool:
+        return self.status is ProceedingStatus.CLOSED
+
+    @property
+    def is_written_off(self) -> bool:
+        """Окончено без взыскания: ст. 46 ч. 1 п. 3 или п. 4.
+
+        Это самая тяжёлая новость, какую ФССП может сообщить о должнике, и до
+        сих пор она не доезжала никуда: пристав уже искал должника и его
+        имущество и ничего не нашёл (п. 3) либо имущества нет вовсе (п. 4).
+        Отличается от окончания по фактическому исполнению, которое, наоборот,
+        говорит, что деньги взыскать удалось.
+
+        Разбирается из свободного текста источника, потому что кода у него нет:
+        в ответе приходит человеческая строка «Окончено 01.03.2026, ст. 46 ч.1
+        п.4». Цифры пункта ищутся рядом со «ст. 46», а не где угодно в строке.
+        """
+        return _WRITE_OFF_RE.search(self.status_text or "") is not None
+
+
+#: «ст. 46 ч. 1 п. 3» и «п. 4» в любой записи, какой их печатает источник:
+#: с пробелами и без, с точками и без, «ч.1» и «ч. 1».
+_WRITE_OFF_RE = re.compile(
+    r"ст\.?\s*46[^\d]{0,12}ч\.?\s*1[^\d]{0,12}п\.?\s*([34])",
+    re.IGNORECASE,
+)
 
 
 class BankruptcyRecord(SourcedFact):
@@ -553,8 +582,50 @@ class DebtorReport(BaseModel):
         return max(self.internal_records, key=lambda record: record.match_confidence)
 
     @property
+    def fact_count(self) -> int:
+        """Сколько записей стоит за отчётом — всех, из всех источников.
+
+        Число едет в подпись кнопки «Открыть отчёт (N записей)»: оно отвечает
+        на вопрос «есть ли там что смотреть» до нажатия, а не после загрузки
+        страницы. Считаются все найденные записи, включая оконченные
+        производства и слабые совпадения: на странице они есть, а кнопка обещает
+        именно её содержимое, а не наш вывод о нём.
+        """
+        return sum(
+            len(items)
+            for items in (
+                self.internal_records,
+                self.enforcement_proceedings,
+                self.bankruptcies,
+                self.business_relations,
+                self.court_cases,
+                self.pledges,
+                self.inheritance_cases,
+                self.vehicles,
+                self.properties,
+            )
+        )
+
+    @property
     def active_proceedings(self) -> list[EnforcementProceeding]:
         return [item for item in self.enforcement_proceedings if item.is_active and item.is_usable]
+
+    @property
+    def closed_proceedings(self) -> list[EnforcementProceeding]:
+        """Оконченные производства по этому должнику.
+
+        Отдельным списком, а не молчанием. Раньше они разбирались и терялись:
+        раздел отчёта печатал «активных производств не найдено», список
+        источников тут же писал «ФССП — 4 зап.», а балл получал бонус за
+        чистую ФССП. Найденное выглядело ненайденным — прямо против главного
+        инварианта отчёта, который несут в суд.
+        """
+        return [item for item in self.enforcement_proceedings if item.is_closed and item.is_usable]
+
+    @property
+    def written_off_proceedings(self) -> list[EnforcementProceeding]:
+        """Оконченные без взыскания — ст. 46 ч. 1 п. 3 и п. 4."""
+        return [item for item in self.closed_proceedings if item.is_written_off]
 
     @property
     def active_bankruptcies(self) -> list[BankruptcyRecord]:

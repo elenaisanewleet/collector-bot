@@ -205,6 +205,24 @@ class BatchRepository:
         run.finished_at = utcnow()
         await self._session.flush()
 
+    async def active_run(self, *, not_older_than: datetime | None = None) -> BatchRun | None:
+        """Идущий прогон — чей угодно, а не только свой.
+
+        Прогон платит за ВСЮ выгрузку, поэтому «уже идёт» — свойство базы, а не
+        оператора: второй владелец, нажавший «Запустить» через минуту, оплатил
+        бы тех же должников второй раз.
+
+        ``not_older_than`` отсекает строки, оставшиеся в ``running`` после
+        падения процесса: живого прогона за ними нет, и держать из-за них
+        кнопку заблокированной навсегда нельзя.
+        """
+        stmt = select(BatchRun).where(BatchRun.status == "running")
+        if not_older_than is not None:
+            stmt = stmt.where(BatchRun.started_at >= not_older_than)
+        stmt = stmt.order_by(BatchRun.started_at.desc(), BatchRun.id.desc()).limit(1)
+        found: BatchRun | None = await self._session.scalar(stmt)
+        return found
+
     async def latest_run(self, telegram_user_id: int) -> BatchRun | None:
         stmt = (
             select(BatchRun)
@@ -344,6 +362,22 @@ class SearchRepository:
         )
         result = await self._session.scalars(stmt)
         return list(result.all())
+
+    async def count_for_user_since(self, telegram_user_id: int, since: datetime) -> int:
+        """Сколько проверок этот человек запустил после указанного момента.
+
+        Считаются запросы, а не ответы источников: квота защищает оплаченный
+        остаток, а списывается он в момент запроса, чем бы тот ни кончился.
+        Взятое из кэша сюда тоже попадает, и это осознанно — иначе счётчик
+        зависел бы от того, чем ответил кэш, и предсказать его было бы нельзя.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(SearchRequest)
+            .where(SearchRequest.telegram_user_id == telegram_user_id)
+            .where(SearchRequest.created_at >= since)
+        )
+        return int(await self._session.scalar(stmt) or 0)
 
     async def get_request(self, request_id: int) -> SearchRequest | None:
         return await self._session.get(SearchRequest, request_id)

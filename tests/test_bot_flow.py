@@ -43,11 +43,11 @@ async def test_start_shows_the_main_menu(
     assert not sent.contains(container.settings.app_name)
     # Приветствие говорит, что делать, а не описывает себя, и укладывается в
     # одно действие: нажать кнопку и прислать телефон.
-    assert sent.contains("Нажмите «Проверить человека»")
-    assert sent.contains("номер телефона")
+    # Ни одного экрана между кнопкой и вводом: номер пишут прямо в чат.
+    assert sent.contains("Напишите номер телефона")
     assert sent.contains("стоит ли тратить пошлину")
     # И не даёт прочитать молчание источника как чистую биографию.
-    assert sent.contains("Это не то же самое, что «чисто»")
+    assert sent.contains("это не то же самое, что «чисто»")
     assert sent.markups[0] is not None  # the inline menu
 
 
@@ -115,7 +115,7 @@ async def test_a_line_fills_the_card_and_one_press_runs_it(
     from app.db.repository import SearchRepository
 
     await feed(dispatcher, bot, message=make_message(FULL_LINE))
-    assert sent.contains("Собираю проверку")
+    assert sent.contains("Проверка должника")
     assert not sent.contains("RECOVERY SCORE")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
@@ -172,10 +172,10 @@ async def test_menu_person_opens_the_card_not_a_question(
     """
     await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
 
-    assert sent.contains("Напишите номер телефона")
+    assert sent.contains("✎ Телефон")
     assert "Дальше" in buttons(sent)
     # Ни сводки полей, ни прочерков тех, которых не спрашивали.
-    assert not sent.contains("Собираю проверку")
+    assert not sent.contains("Проверка должника")
     assert not sent.contains("Дата рождения: —")
 
     await collect_and_run(dispatcher, bot)
@@ -202,10 +202,10 @@ async def test_the_phone_has_its_own_button_and_opens_nothing_external(
     запись в своей базе. Обещать по нему источники значило бы врать формой.
     """
     await feed(dispatcher, bot, message=make_message(FULL_LINE))
-    assert "+ Телефон" in buttons(sent)
+    assert "Телефон" in buttons(sent)
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:phone"))
-    assert sent.contains("Напишите номер телефона")
+    assert sent.contains("✎ Телефон")
 
     await feed(dispatcher, bot, message=make_message("+7 916 123 45 67"))
     # В карточку едет маска, полный номер — только в память процесса.
@@ -464,8 +464,8 @@ async def test_the_card_is_reposted_under_the_report(
     """Иначе карточка навсегда уезжает выше отчёта, и правят то, чего не видят."""
     await collect_and_run(dispatcher, bot)
 
-    assert sent.texts[-1].startswith("Проверено в ")
-    assert "🔍 Перепроверить" in buttons(sent)
+    assert sent.texts[-1].startswith("Проверка должника — проверено в ")
+    assert "Перепроверить" in buttons(sent)
 
 
 # ---------------------------------------------------------------- other flows
@@ -570,7 +570,7 @@ async def test_passport_is_not_asked_before_the_report(
     assert not sent.contains("Серия и номер паспорта, 10 цифр")
     assert sent.contains("RECOVERY SCORE")
     # Паспорт предлагает карточка под отчётом, а не отдельный ряд кнопок.
-    assert "+ Паспорт" in buttons(sent)
+    assert "Паспорт" in buttons(sent)
 
 
 @pytest.mark.parametrize(
@@ -618,7 +618,7 @@ async def test_the_passport_button_masks_the_number_and_feeds_the_bridge(
     await collect_and_run(dispatcher, bot)
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:passport"))
 
-    assert sent.contains("Напишите серию и номер паспорта")
+    assert sent.contains("✎ Паспорт")
     assert sent.contains("Номер не сохраняю")
     assert sent.contains("сообщение удалю")
 
@@ -661,7 +661,7 @@ async def test_adding_an_inn_reruns_with_a_different_query_hash(
     before = next(iter(container.subject_store._items.values()))[0]
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:inn"))
-    assert sent.contains("Напишите ИНН")
+    assert sent.contains("✎ ИНН")
 
     await feed(dispatcher, bot, message=make_message("770912345601"))
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
@@ -740,7 +740,7 @@ async def test_history_is_empty_then_populated(
     sent.texts.clear()
     await feed(dispatcher, bot, message=make_message("/history"))
 
-    assert sent.contains("Последние проверки")
+    assert sent.contains("История проверок")
     assert sent.contains("Тестов А. С.")
 
 
@@ -756,6 +756,11 @@ async def test_history_repeat_reruns_the_search(
 
     sent.texts.clear()
     await feed(dispatcher, bot, callback_query=make_callback(f"repeat:{request_id}"))
+    # Повтор идёт мимо кэша и стоит денег, поэтому сначала спрашивает.
+    assert sent.contains("Спросить источники заново")
+    assert not sent.contains("RECOVERY SCORE")
+
+    await feed(dispatcher, bot, callback_query=make_callback(f"repeatgo:{request_id}"))
 
     assert sent.contains("RECOVERY SCORE")
     # Re-running is always fresh, never served from the cache.
@@ -778,7 +783,7 @@ async def test_repeat_of_another_operators_search_is_refused(
         )
         foreign_id = request.id
 
-    await feed(dispatcher, bot, callback_query=make_callback(f"repeat:{foreign_id}"))
+    await feed(dispatcher, bot, callback_query=make_callback(f"repeatgo:{foreign_id}"))
 
     assert sent.contains("Данные устарели")
     assert not sent.contains("RECOVERY SCORE")

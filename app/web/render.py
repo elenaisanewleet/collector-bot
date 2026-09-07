@@ -516,12 +516,15 @@ def enforcement_section(report: DebtorReport) -> str:
         return section("fssp", "ФССП", unchecked, state=state)
 
     active = report.active_proceedings
-    hidden = _hidden_note(len(report.enforcement_proceedings), len(active))
+    closed = report.closed_proceedings
+    closed_block = _closed_proceedings(report)
+    hidden = _hidden_note(len(report.enforcement_proceedings), len(active) + len(closed))
     if not active:
         return section(
             "fssp",
             "ФССП",
             '<p class="empty">Активных исполнительных производств не найдено.</p>'
+            + closed_block
             + hidden
             + _checked_note(result),
             state=state,
@@ -542,9 +545,46 @@ def enforcement_section(report: DebtorReport) -> str:
         "ФССП",
         table(("Производство", "Сумма", "Предмет", "Отдел", "Совпадение"), rows)
         + _enforcement_summary(report, len(active))
+        + closed_block
         + hidden
         + _checked_note(result),
         state=state,
+    )
+
+
+def _closed_proceedings(report: DebtorReport) -> str:
+    """Оконченные производства своей таблицей.
+
+    Их прятала нота «слабое совпадение либо непрочитанный статус записи» —
+    неправда в обе стороны: совпадение подтверждено, статус прочитан. И это не
+    мелочь: окончание по ст. 46 ч. 1 значит, что пристав уже искал должника и
+    его имущество и не нашёл, — прямой ответ на вопрос про пошлину.
+    """
+    closed = report.closed_proceedings
+    if not closed:
+        return ""
+    rows = [
+        (
+            cell(item.proceeding_number, label="Производство", numeric=True, copy=True),
+            cell(format_amount(item.amount), label="Сумма", numeric=True, right=True),
+            cell(item.status_text, label="Окончено"),
+            cell(item.subject, label="Предмет"),
+            raw_cell(match_tag(item.match_level), label="Совпадение"),
+        )
+        for item in closed
+    ]
+    written_off = report.written_off_proceedings
+    note = f'<p class="note">Оконченных производств: {len(closed)}.'
+    if written_off:
+        note += (
+            f" Из них без взыскания (ст. 46 ч. 1): {len(written_off)} — "
+            "пристав должника или его имущество не нашёл."
+        )
+    note += "</p>"
+    return (
+        "<h3>Оконченные производства</h3>"
+        + table(("Производство", "Сумма", "Окончено", "Предмет", "Совпадение"), rows)
+        + note
     )
 
 
@@ -580,7 +620,7 @@ def _hidden_note(total: int, shown: int) -> str:
         return ""
     return (
         f'<p class="note">Источник вернул ещё {hidden} записей, которые сюда не попали: '
-        f"слабое совпадение с должником либо непрочитанный статус записи.</p>"
+        f"слабое совпадение с должником.</p>"
     )
 
 

@@ -292,7 +292,7 @@ async def test_a_single_check_stays_open_to_an_employee(
     # ``/search`` — явный вход «дай выбрать», в отличие от нижней кнопки, которая
     # ведёт сразу к телефону. Сотруднику он открыт: закрывали не бота, а два
     # дорогих действия в нём.
-    assert sent.contains("Что делаем?")
+    assert sent.contains("Вы в главном меню")
 
     sent.texts.clear()
     await feed(
@@ -370,10 +370,11 @@ async def test_start_keeps_the_batch_button_for_the_owner(
 ) -> None:
     await feed(dispatcher, bot, message=make_message("/start", user_id=OPERATOR_ID))
 
-    # Инлайн-меню на приветствии убрано: у сообщения бывает либо инлайн, либо
-    # нижняя клавиатура, и второе сообщение с объяснением интерфейса ушло.
-    keyboard = next(markup for markup in sent.markups if getattr(markup, "keyboard", None))
-    labels = [button.text for row in keyboard.keyboard for button in row]
+    # Прогон по базе живёт в инлайн-меню приветствия: нижняя клавиатура — это
+    # две кнопки навигации, и место под пальцем нужнее тому, что жмут каждый
+    # день, чем тому, что жмут раз в неделю.
+    menu = next(markup for markup in sent.markups if getattr(markup, "inline_keyboard", None))
+    labels = [button.text for row in menu.inline_keyboard for button in row]
     assert BUTTON_BATCH in labels
 
 

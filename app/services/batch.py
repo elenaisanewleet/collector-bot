@@ -29,7 +29,7 @@ import json
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
@@ -45,11 +45,32 @@ from app.logging_setup import get_logger
 from app.providers.newdb import individual_inn
 from app.services.search import SearchService, build_query_hash
 from app.services.verdict import VerdictEngine
+from app.utils.dates import utcnow
 
 logger = get_logger(__name__)
 
 PAGE_SIZE = 200
 ProgressCallback = Callable[["BatchProgress"], Awaitable[None]]
+
+#: Сколько строка ``running`` считается живым прогоном. Больше — процесс упал,
+#: и держать кнопку заблокированной из-за мертвеца нельзя: оператор останется
+#: без единственного способа проверить базу.
+STALE_RUN_MINUTES = 30
+
+
+class BatchAlreadyRunningError(RuntimeError):
+    """Прогон уже идёт — второй оплатил бы тех же должников заново.
+
+    Это отказ, а не очередь. Замок, который просто ждёт своей очереди, здесь
+    хуже нынешнего поведения: после первого прогона молча начался бы второй, за
+    те же деньги и без спроса. Поэтому второе нажатие получает «уже идёт» и
+    ссылку на очередь, которая наполняется прямо сейчас.
+    """
+
+    def __init__(self, run_id: int) -> None:
+        super().__init__(f"batch run {run_id} is already running")
+        self.run_id = run_id
+
 
 # Коды отказа, после которых продолжать прогон — значит платить за пустоту.
 # Оба невосстановимы по своей природе: ``payment_required`` — кончившийся
@@ -286,6 +307,12 @@ class BatchService:
         self._database = database
         self._search = search_service
         self._verdict = verdict_engine or VerdictEngine(settings)
+        # Замок на два уровня, потому что у двойного запуска два входа. Флаг
+        # закрывает двойной тап одного человека — он приходит в тот же процесс
+        # раньше, чем первая строка ``running`` доедет до базы. Строка в базе
+        # закрывает второго владельца и переживает перезапуск.
+        self._start_lock = asyncio.Lock()
+        self._running_run_id: int | None = None
         # Остановить прогон может только источник, за который платят. См.
         # :func:`_refusals` и ``BaseProvider.is_free``.
         self._paid_sources = frozenset(
@@ -412,22 +439,54 @@ class BatchService:
         telegram_user_id: int,
         progress: ProgressCallback | None = None,
     ) -> BatchSummary:
-        """Прогнать выгрузку и построить очередь."""
+        """Прогнать выгрузку и построить очередь.
+
+        Поднимает :class:`BatchAlreadyRunningError`, если прогон уже идёт. Проверка
+        и создание строки прогона стоят под одним замком: между «свободно» и
+        «занято» не должно быть ни одного ``await``, иначе два нажатия
+        разъезжаются ровно в этой щели.
+        """
         estimate = await self.estimate()
         total = estimate.debtors
 
-        async with self._database.session() as session:
-            run = await BatchRepository(session).create_run(
-                telegram_user_id=telegram_user_id, total=total
-            )
-            run_id = run.id
-            await AuditRepository(session).record(
-                telegram_user_id=telegram_user_id,
-                action="batch.started",
-                entity_id=str(run_id),
-                detail=f"должников {total}",
-            )
+        async with self._start_lock:
+            if self._running_run_id is not None:
+                raise BatchAlreadyRunningError(self._running_run_id)
+            async with self._database.session() as session:
+                repo = BatchRepository(session)
+                active = await repo.active_run(
+                    not_older_than=utcnow() - timedelta(minutes=STALE_RUN_MINUTES)
+                )
+                if active is not None:
+                    raise BatchAlreadyRunningError(active.id)
+                run = await repo.create_run(telegram_user_id=telegram_user_id, total=total)
+                run_id = run.id
+                await AuditRepository(session).record(
+                    telegram_user_id=telegram_user_id,
+                    action="batch.started",
+                    entity_id=str(run_id),
+                    detail=f"должников {total}",
+                )
+            self._running_run_id = run_id
 
+        try:
+            return await self._execute(
+                run_id=run_id, total=total, telegram_user_id=telegram_user_id, progress=progress
+            )
+        finally:
+            # Снимается в любом исходе, включая отмену: флаг, оставшийся после
+            # упавшего прогона, запрещает следующий до перезапуска бота.
+            self._running_run_id = None
+
+    async def _execute(
+        self,
+        *,
+        run_id: int,
+        total: int,
+        telegram_user_id: int,
+        progress: ProgressCallback | None,
+    ) -> BatchSummary:
+        """Тело прогона. Отдельно от :meth:`run`, чтобы замок снимался в ``finally``."""
         state = BatchProgress(processed=0, total=total, failed=0, run_id=run_id)
         semaphore = asyncio.Semaphore(self._settings.batch_concurrency)
         lock = asyncio.Lock()

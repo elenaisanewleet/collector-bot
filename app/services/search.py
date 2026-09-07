@@ -281,27 +281,27 @@ class SearchService:
         if subject.debtor_id:
             found = await provider.find_by_debtor_id(subject.debtor_id)
             if found:
-                return found, True
+                return _narrow_by_person(found, subject), True
         if subject.contract_number:
             found = await provider.find_by_contract(subject.contract_number)
             if found:
-                return found, True
+                return _narrow_by_person(found, subject), True
         if subject.claim_number:
             found = await provider.find_by_claim(subject.claim_number)
             if found:
-                return found, True
+                return _narrow_by_person(found, subject), True
         if subject.vehicle and subject.vehicle.vin:
             found = await provider.find_by_vin(subject.vehicle.vin)
             if found:
-                return found, True
+                return _narrow_by_person(found, subject), True
         if subject.vehicle and subject.vehicle.plate:
             found = await provider.find_by_plate(subject.vehicle.plate)
             if found:
-                return found, True
+                return _narrow_by_person(found, subject), True
         if subject.phone:
             found = await provider.find_by_phone(subject.phone)
             if found:
-                return found, True
+                return _narrow_by_person(found, subject), True
 
         candidates: list[InternalDebtorRecord] = []
         if subject.name:
@@ -621,6 +621,67 @@ def _enrich_from_internal(
             update["inn"] = found_inn
 
     return subject.model_copy(update=update) if update else subject
+
+
+def _narrow_by_person(
+    records: list[InternalDebtorRecord], subject: SearchSubject
+) -> list[InternalDebtorRecord]:
+    """Отсеять из точного попадания тех, кто не сходится по ФИО и дате.
+
+    Один телефон в 1С — обычное дело: семейный номер, номер поручителя, общий
+    контакт по двум договорам. Точное попадание по такому ключу возвращает
+    несколько РАЗНЫХ людей, и дальше вся цепочка — подстановка даты рождения,
+    сумма долга, пошлина — брала первую попавшуюся строку. Отчёт выходил про
+    Сидорову с долгом Петрова.
+
+    Фильтр ставится тут, а не в матчере, потому что дело не в уверенности
+    сопоставления: у точного попадания она максимальная у всех строк разом.
+    Дело в том, что оператор уже сказал фамилию — и строки, которые ей
+    противоречат, не про того человека.
+
+    Ослабление одностороннее: если после фильтра не осталось никого, отдаём
+    исходный список. Расхождение выгрузки с тем, что оператор набрал руками
+    (девичья фамилия, опечатка в 1С), — это факт для отчёта, а не повод
+    выбросить единственную найденную строку.
+    """
+    name = subject.name
+    if name is None and subject.birth_date is None:
+        return records
+    kept = [record for record in records if _same_person(record, subject)]
+    return kept or records
+
+
+def _same_person(record: InternalDebtorRecord, subject: SearchSubject) -> bool:
+    """Не противоречит ли строка выгрузки тому, что ввёл оператор.
+
+    Именно «не противоречит», а не «совпадает»: пустое поле в выгрузке ничего
+    не опровергает, и строка без даты рождения остаётся кандидатом. Сравниваются
+    только те поля, которые есть с обеих сторон.
+    """
+    if subject.birth_date and record.birth_date and record.birth_date != subject.birth_date:
+        return False
+    name = subject.name
+    if name is None:
+        return True
+    found = record.name
+    if found is None:
+        return True
+    if not _same_word(found.last_name, name.last_name):
+        return False
+    if name.first_name and found.first_name and not _same_word(found.first_name, name.first_name):
+        return False
+    return not (
+        name.middle_name
+        and found.middle_name
+        and not _same_word(found.middle_name, name.middle_name)
+    )
+
+
+def _same_word(left: str | None, right: str | None) -> bool:
+    """Сравнение слов имени: регистр и «ё» разницей не считаются."""
+    if not left or not right:
+        return True
+    return left.casefold().replace("ё", "е") == right.casefold().replace("ё", "е")
 
 
 def _has_internal_query(subject: SearchSubject) -> bool:

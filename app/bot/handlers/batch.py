@@ -37,6 +37,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from decimal import Decimal
 
 from aiogram import F, Router
@@ -60,7 +61,13 @@ from app.db.repository import BatchRepository
 from app.domain.enums import PROVIDER_TITLES, ProviderName
 from app.domain.verdict import VERDICT_TITLES, Verdict
 from app.logging_setup import get_logger
-from app.services.batch import BatchEstimate, BatchProgress, BatchSummary, RunStatus
+from app.services.batch import (
+    BatchAlreadyRunningError,
+    BatchEstimate,
+    BatchProgress,
+    BatchSummary,
+    RunStatus,
+)
 from app.services.export import queue_to_csv
 from app.services.share import ShareKind, ShareTarget
 from app.utils.formatting import group_digits, pluralize_ru, split_message
@@ -72,6 +79,13 @@ EMPTY_BASE = (
     "Внутренняя база пуста. Загрузите выгрузку должников через /import, и запускайте проверку."
 )
 NO_RUN = "Прогонов ещё не было. Запустите проверку через /batch."
+# Второе нажатие или второй владелец, пока прогон идёт. Отказ, а не очередь:
+# прогон платит за всю выгрузку, и второй заплатил бы за неё второй раз.
+ALREADY_RUNNING = (
+    "Проверка базы уже идёт — второй прогон оплатил бы тех же должников заново.\n\n"
+    "Очередь наполняется прямо сейчас, её видно по кнопке ниже. "
+    "Итог придёт в чат, когда прогон закончится."
+)
 LIST_PAGE_SIZE = 15
 # Прогон не пережил даже собственного закрытия — сводки нет и взять её неоткуда.
 RUN_CRASHED = (
@@ -445,6 +459,15 @@ def build_router() -> Router:
         if message is None:
             return
 
+        # Состояние снимается и клавиатура гасится ДО первого ``await`` наружу.
+        # Фильтр состояния — единственное, что отсекает второе нажатие, и пока
+        # смета считалась, оно проходило насквозь: два прогона, каждый платит
+        # за всех должников. Кнопка со сметы убирается тем же движением —
+        # Telegram её сам не гасит, и она остаётся под пальцем весь прогон.
+        await state.clear()
+        with suppress(Exception):
+            await message.edit_reply_markup(reply_markup=None)
+
         estimate = await container.batch_service.estimate()
         if _confirmed_debtors(callback.data) != estimate.debtors:
             # База изменилась между сметой и нажатием: кто-то импортировал
@@ -452,7 +475,6 @@ def build_router() -> Router:
             # не видел, нельзя — за них платят.
             await offer_batch(message, state, container, note=BASE_CHANGED)
             return
-        await state.clear()
 
         notice = await message.answer(
             render_progress(BatchProgress(processed=0, total=estimate.debtors, failed=0), estimate)
@@ -483,6 +505,17 @@ def build_router() -> Router:
 
         try:
             summary = await container.batch_service.run(telegram_user_id=user_id, progress=report)
+        except BatchAlreadyRunningError as busy:
+            # Второе нажатие или второй владелец. Отказ, а не очередь: прогон,
+            # молча начавшийся следом за первым, оплатил бы тех же должников
+            # ещё раз. Ссылка ведёт в ту очередь, которая наполняется сейчас.
+            url = await container.share_service.issue(
+                ShareTarget(ShareKind.QUEUE, busy.run_id), telegram_user_id=user_id
+            )
+            with suppress(Exception):
+                await notice.delete()
+            await message.answer(ALREADY_RUNNING, reply_markup=batch_running_keyboard(url))
+            return
         except Exception:
             # Прогон закрывает себя сам даже на сбое, так что сюда попадает
             # только то, что сломалось вокруг него. Молчать нельзя: оператор

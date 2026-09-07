@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.bot.identifiers import Field
+from app.bot.keyboards import BACK_LABEL, MENU_HOME
 from app.bot.view import missing_reason
 from app.domain.enums import PROVIDER_TITLES, ProviderName, SearchType
 from app.domain.identity import (
@@ -37,6 +38,7 @@ from app.providers.registry import ProviderRegistry
 from app.services import coverage
 from app.services.query_card import FIELD_ORDER, FIELD_TITLES, OPTIONAL_ROWS, Card
 from app.utils.dates import format_datetime
+from app.utils.formatting import pluralize_ru
 
 # ---------------------------------------------------------------- callbacks
 
@@ -72,23 +74,26 @@ NOT_ASKED = "Это «не спрашивали», а не «не найдено
 #: ничего».
 NEXT_LABEL = "Дальше"
 
-#: Сам вопрос — одной строкой и повелительным наклонением, для каждого поля.
-#: Не «Телефон» с пояснением, зачем он нужен, а прямо то, что надо сделать.
-#: Один вопрос на экран: «напишите что вы знаете» и сводка всех полей разом —
-#: ровно то, на что жаловались.
+#: Заголовок экрана-вопроса: имя поля со значком правки. Ровно как в боте,
+#: который владелица показала образцом: «✎ Фамилия» и одна строка под ним.
+#: Значок стоит в тексте, а не в подписи кнопки, — там он ничего не решает.
 ASK_TITLES: dict[str, str] = {
-    Field.PHONE.value: "Напишите номер телефона.",
-    Field.LAST_NAME.value: "Напишите фамилию.",
-    Field.FIRST_NAME.value: "Напишите имя.",
-    Field.MIDDLE_NAME.value: "Напишите отчество.",
-    Field.FIO.value: "Напишите фамилию, имя и отчество.",
-    Field.BIRTH_DATE.value: "Напишите дату рождения.",
-    Field.INN.value: "Напишите ИНН.",
-    Field.PASSPORT.value: "Напишите серию и номер паспорта.",
-    Field.AUTO.value: "Напишите госномер или VIN.",
-    Field.CONTRACT.value: "Напишите номер договора или заявки.",
-    Field.ADDRESS.value: "Напишите адрес.",
+    Field.PHONE.value: "Телефон",
+    Field.LAST_NAME.value: "Фамилия",
+    Field.FIRST_NAME.value: "Имя",
+    Field.MIDDLE_NAME.value: "Отчество",
+    Field.FIO.value: "ФИО",
+    Field.BIRTH_DATE.value: "Дата рождения",
+    Field.INN.value: "ИНН",
+    Field.PASSPORT.value: "Паспорт",
+    Field.AUTO.value: "Госномер или VIN",
+    Field.CONTRACT.value: "Договор или заявка",
+    Field.ADDRESS.value: "Адрес",
 }
+
+#: Одна строка под заголовком — что сделать. Одинаковая почти везде: экран,
+#: который каждый раз объясняет заново, читают один раз, а потом перестают.
+ASK_PROMPT = "Отправьте значение сообщением."
 
 #: Пример на каждом экране: «везде показывается пример как заполнять, но ты
 #: можешь просто нажать дальше».
@@ -140,6 +145,15 @@ ASK_SKIPPABLE = "Не знаете — «Пропустить»."
 #: На трёх основных шагах кнопка называется «Дальше», на доборе поля —
 #: «Пропустить». Подпись в тексте обязана совпадать с подписью на кнопке.
 STEP_SKIPPABLE = f"Не знаете — «{NEXT_LABEL}»."
+#: Заголовок формы. Первое, что читают на экране, где ничего не спрашивают.
+FORM_HEAD = "Проверка должника"
+#: Подпись под заголовком формы, курсивом её сделать нечем — разметки нет.
+FORM_LEAD = "Заполните что знаете и нажмите «Проверить»."
+#: Значок поля в заголовке вопроса.
+ASK_MARK = "✎"
+#: Значок заполненного поля на кнопке. Не эмодзи-украшение, а состояние формы:
+#: «видно и в тексте, и на кнопках» — дословный ориентир владелицы.
+FILLED_MARK = "✅"
 
 #: Опознали в выгрузке ровно одного — вопросов больше нет.
 FOUND_ONE = "Нашёл в вашей базе: {who}."
@@ -153,8 +167,9 @@ FOUND_MANY_STUCK = "Различить их нечем: основные воп�
 
 MENU_HEAD = "Что ещё можно добавить и что это откроет:"
 MENU_AFTER_EMPTY = (
-    "Ничего не нашлось по тем данным, что были. Это не «должника нет» — это «мы спросили "
-    "не тем ключом». Попробуйте другой:"
+    "Фактов по этим данным не пришло. Это не «должник чист»: часть источников по таким "
+    "данным не ищет вовсе, часть могла не ответить — что именно, написано в отчёте выше. "
+    "Другим ключом можно спросить снова:"
 )
 MENU_NOTHING = (
     "Искать пока не по чему: все три вопроса пропущены. Ничего страшного — "
@@ -403,7 +418,7 @@ def _text(
         lines.extend(_ask_lines(pending, skip_label=skip_label))
         return "\n".join(lines)
 
-    lines = [_head(card), ""]
+    lines = [_head(card), FORM_LEAD, ""]
     lines.extend(_rows(card))
     lines.append("")
     if notice:
@@ -433,8 +448,9 @@ def _ask_lines(field_name: str, *, skip_label: str) -> list[str]:
     вместо прочерка, то есть «не нашли» вместо «не спрашивали».
     """
     lines = [
-        ASK_TITLES.get(field_name, "Напишите значение."),
+        f"{ASK_MARK} {ASK_TITLES.get(field_name, 'Значение')}",
         "",
+        ASK_PROMPT,
         ASK_EXAMPLE.format(example=ASK_EXAMPLES.get(field_name, "")),
         f"Не знаете — «{skip_label}».",
     ]
@@ -458,15 +474,20 @@ def _menu_lines(card: Card, registry: ProviderRegistry) -> list[str]:
     ни один внешний реестр по номеру не ищет, и обещать иное было бы враньём
     формой.
     """
-    options = [line for line in (_option(card, spec, registry) for spec in OPTIONS) if line]
-    if not options:
-        return []
     if card.last_run_empty:
         lead = MENU_AFTER_EMPTY
     elif card.subject() is None:
         lead = MENU_NOTHING
     else:
-        lead = MENU_HEAD
+        # На собранной карточке списка нет вовсе, и это главное сокращение
+        # экрана: что заполнено и что нет, видно по галочкам на кнопках, а
+        # восемь строк «+ поле — что оно откроет» под ними превращали форму в
+        # то самое полотно, на которое жаловались. Список возвращается там, где
+        # он отвечает на вопрос: проверка ничего не дала или собирать ещё нечего.
+        return []
+    options = [line for line in (_option(card, spec, registry) for spec in OPTIONS) if line]
+    if not options:
+        return []
     return [lead, *options, ""]
 
 
@@ -489,8 +510,8 @@ def _unlocked(card: Card, probe: str, registry: ProviderRegistry) -> str:
 
 def _head(card: Card) -> str:
     if card.checked_at:
-        return f"Проверено в {format_datetime(card.checked_at)}"
-    return HEAD
+        return f"{FORM_HEAD} — проверено в {format_datetime(card.checked_at)}"
+    return FORM_HEAD
 
 
 def _current_name(card: Card) -> str:
@@ -550,11 +571,21 @@ def _hint(field_name: str, *, store_sensitive: bool) -> str:
 
 
 def _coverage_lines(card: Card, registry: ProviderRegistry) -> list[str]:
-    """«Сейчас спрошу» и «Не спрошу» — посчитанные, а не написанные.
+    """«Сейчас спрошу» и «Не спрошу» — числами, а не списком источников.
 
-    Пустая карточка не показывает ни того, ни другого: список источников,
-    которым «нужно ФИО», под пустой формой читается как список неудач, тогда
-    как никакой проверки ещё и не начиналось.
+    Числа посчитаны, а не написаны: разница между «кого спросим сейчас» и «кого
+    спросили бы с этим полем» берётся у :mod:`app.services.coverage`.
+    Захардкоженный список разъезжается с гейтом провайдера при первой же правке
+    и, разъехавшись, обещает источник, который откажется отвечать.
+
+    Имён источников здесь нет намеренно, и это правило владелицы: «не надо про
+    это рассказывать всем». Карточка — главный экран, её видит любой допущенный
+    сотрудник, и список агрегаторов на нём — это выдача поставщиков наружу.
+    Причину нехватки бот при этом называет: она про то, что оператор может
+    исправить, а не про то, у кого мы покупаем.
+
+    Пустая карточка не показывает ни того, ни другого: «нужны ФИО или ИНН» под
+    пустой формой читается как список неудач, тогда как проверки ещё и не было.
     """
     subject = card.subject()
     if subject is None:
@@ -564,16 +595,23 @@ def _coverage_lines(card: Card, registry: ProviderRegistry) -> list[str]:
 
     lines: list[str] = []
     answering = coverage.will_answer(subject, registry)
-    if answering:
-        lines.append(f"{_lead(card)}: {_titles(answering)}.")
     gaps = coverage.blocked(subject, registry)
+    blocked_count = sum(len(names) for names in gaps.values())
+    total = len(answering) + blocked_count
+    if answering:
+        lines.append(f"{_lead(card)}: {_count(len(answering))} из {total}.")
     if gaps:
         reasons = "; ".join(
-            f"{_titles(names)} — {missing_reason(tuple(reason))}" for reason, names in gaps.items()
+            f"{_count(len(names))} — {missing_reason(tuple(reason))}"
+            for reason, names in gaps.items()
         )
         lines.append(f"{'Не спрошено' if card.checked_at else 'Не спрошу'}: {reasons}.")
         lines.append(NOT_ASKED)
     return lines
+
+
+def _count(number: int) -> str:
+    return f"{number} {pluralize_ru(number, 'источник', 'источника', 'источников')}"
 
 
 def _lead(card: Card) -> str:
@@ -607,7 +645,7 @@ def keyboard(card: Card, *, conflict: PersonName | None = None) -> InlineKeyboar
                     _button("Это исправление", QC_FIX_NAME),
                 ],
                 *_field_rows(card),
-                _run_row(card),
+                *_run_row(card),
             ]
         )
     if card.awaiting_field == _AWAITING_TEN:
@@ -617,7 +655,7 @@ def keyboard(card: Card, *, conflict: PersonName | None = None) -> InlineKeyboar
                     _button("Паспорт", QC_TEN_PASSPORT),
                     _button("Телефон", QC_TEN_PHONE),
                 ],
-                [_button("Отмена", QC_CANCEL)],
+                [_button("Назад", QC_CANCEL)],
             ]
         )
     if card.step is not None:
@@ -625,44 +663,70 @@ def keyboard(card: Card, *, conflict: PersonName | None = None) -> InlineKeyboar
         # Второй кнопки здесь нет намеренно: шаг — это один вопрос, и выбор
         # «ответить или пропустить» не должен соревноваться с выбором «а не
         # нажать ли что-нибудь ещё». Меню опций придёт следом само.
-        return _rows_markup([[_button(NEXT_LABEL, QC_NEXT)]])
+        return _rows_markup([[_button(NEXT_LABEL, QC_NEXT)], [_button(BACK_LABEL, MENU_HOME)]])
     if card.awaiting_field:
         # Все ряды схлопываются в один: пока ждём поле, любая другая кнопка
         # означала бы «а нажми-ка вместо ответа что-нибудь ещё».
-        return _rows_markup([[_button("Пропустить", QC_SKIP), _button("Отмена", QC_CANCEL)]])
+        return _rows_markup([[_button("Пропустить", QC_SKIP)], [_button("Назад", QC_CANCEL)]])
 
-    return _rows_markup([*_field_rows(card), _run_row(card)])
+    return _rows_markup([*_field_rows(card), *_run_row(card)])
 
 
 def _field_rows(card: Card) -> list[list[InlineKeyboardButton]]:
-    """Кнопки полей. Ряды фиксированы, включая те, что уже заполнены.
+    """Сетка полей: три кнопки в ряд, позиции постоянные.
 
-    Заполненное поле не исчезает, а меняет префикс на «✎»: «любое поле правится
-    кнопкой, не начиная сначала» — и правится там же, где добавлялось, иначе
-    исправление приходится искать.
+    Сотня должников в день делается мышечной памятью, и кнопка, переезжающая
+    между рядами по мере заполнения, — это промах пальцем по «Очистить».
+    Поэтому ряды фиксированы, включая заполненные поля: заполненное не
+    исчезает, а получает галочку и правится там же, где добавлялось.
 
-    Договор и адрес стоят последним рядом и вместе: они не открывают ни одного
-    внешнего реестра и нужны ровно за тем, чтобы поднять строку из 1С.
+    Порядок рядов — по тому, как человека называют: сперва имя, потом даты и
+    номера, потом всё, что поднимает строку из 1С.
     """
     return [
-        [_ask(card, Field.BIRTH_DATE, "Дата рождения"), _ask(card, Field.INN, "ИНН")],
-        [_ask(card, Field.PHONE, "Телефон"), _ask(card, Field.PASSPORT, "Паспорт")],
-        [_ask(card, Field.AUTO, "Госномер или VIN"), _ask(card, Field.FIO, "ФИО")],
-        [_ask(card, Field.MIDDLE_NAME, "Отчество"), _ask(card, Field.CONTRACT, "Договор")],
+        [
+            _ask(card, Field.LAST_NAME, "Фамилия"),
+            _ask(card, Field.FIRST_NAME, "Имя"),
+            _ask(card, Field.MIDDLE_NAME, "Отчество"),
+        ],
+        [
+            _ask(card, Field.BIRTH_DATE, "Дата рождения"),
+            _ask(card, Field.INN, "ИНН"),
+            _ask(card, Field.PHONE, "Телефон"),
+        ],
+        [
+            _ask(card, Field.PASSPORT, "Паспорт"),
+            _ask(card, Field.AUTO, "Госномер"),
+            _ask(card, Field.CONTRACT, "Договор"),
+        ],
         [_ask(card, Field.ADDRESS, "Адрес")],
     ]
 
 
-def _run_row(card: Card) -> list[InlineKeyboardButton]:
-    run = "🔍 Перепроверить" if card.checked_at else "🔍 Проверить"
+def _run_row(card: Card) -> list[list[InlineKeyboardButton]]:
+    """Главное действие отдельной строкой, второстепенные — под ним.
+
+    «Проверить» занимает всю ширину и стоит одно: это единственная кнопка,
+    которая тратит деньги, и соседство с «Очистить» на одной строке делает её
+    промахом пальца.
+    """
+    run = "Перепроверить" if card.checked_at else "Проверить"
     wipe = "Новая проверка" if card.checked_at else "Очистить"
-    return [_button(run, QC_RUN), _button(wipe, QC_WIPE)]
+    return [
+        [_button(run, QC_RUN)],
+        [_button(wipe, QC_WIPE), _button(BACK_LABEL, MENU_HOME)],
+    ]
 
 
 def _ask(card: Card, field: Field, title: str) -> InlineKeyboardButton:
-    filled = _is_filled(card, field)
-    prefix = "✎ Исправить" if filled else "+"
-    return _button(f"{prefix} {title}", f"{QC_ASK}:{field.value}")
+    """Кнопка поля. Галочка значит «заполнено», её отсутствие — «пусто».
+
+    Подпись при этом не меняется: «✎ Исправить Дата рождения» и «+ Дата
+    рождения» — это две разные кнопки на глаз, и глаз ищет их заново на каждом
+    экране. Меняется один значок в начале, как в боте-образце.
+    """
+    mark = f"{FILLED_MARK} " if _is_filled(card, field) else ""
+    return _button(f"{mark}{title}", f"{QC_ASK}:{field.value}")
 
 
 def _is_filled(card: Card, field: Field) -> bool:

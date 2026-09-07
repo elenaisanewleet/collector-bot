@@ -126,8 +126,11 @@ def test_a_complete_subject_keeps_the_keyboard_as_short_as_before(
     # «Добавить», а не по эмодзи — их в подписях больше нет вовсе, бот должен
     # выглядеть ненавязчиво.
     assert not any(text.startswith("Добавить") for text in texts)
-    assert "Полный отчёт" in texts
-    assert "Обновить" in texts
+    assert "Открыть отчёт" in texts
+    assert "Спросить источники заново" in texts
+    # Тупиков нет: с карточки отчёта видно и следующего должника, и меню.
+    assert "Новая проверка" in texts
+    assert "В меню" in texts
 
 
 def test_the_export_row_rides_along_with_the_link(
@@ -150,7 +153,7 @@ def test_the_export_row_rides_along_with_the_link(
 
     texts = button_texts(markup)
     assert "Печать" in texts
-    assert "Текстом" in texts
+    assert "Файлом" in texts
     assert "Сузить до одного региона" in texts
 
 

@@ -35,7 +35,7 @@ from aiogram.types import CallbackQuery, Message
 from app.bot import card_view
 from app.bot.card_view import Screen
 from app.bot.common import answer_callback, callback_message, run_and_send_report
-from app.bot.identifiers import Field
+from app.bot.identifiers import Field, FragmentKind, classify_fragment
 from app.bot.keyboards import MENU_PREFIX, REGION_COMBINED, REGION_PREFIX, region_keyboard
 from app.bot.report_actions import (
     FIELD_BIRTH_DATE,
@@ -80,6 +80,14 @@ async def start_person_card(message: Message, container: Container, user_id: int
     делись, они за «Другие способы поиска».
     """
     card = await container.query_cards.load(user_id, message.chat.id)
+    if card.checked_at is not None:
+        # Проверенная карточка чистится. Второй должник подряд — обычный
+        # рабочий случай: оператор жмёт ту же кнопку и вводит следующий телефон.
+        # До этой правки он получал карточку ПРЕДЫДУЩЕГО человека, новый номер
+        # ложился рядом с чужой фамилией, и отчёт выходил про прошлого должника,
+        # подписанный телефоном нового, — с чужим долгом и чужой пошлиной.
+        # Условие ``blank`` этот случай не ловит: у проверенной заполнено всё.
+        card = await container.query_cards.wipe(user_id, message.chat.id)
     # Начинают — значит карточка обязана быть видна прямо сейчас, даже если её
     # сообщение уже уехало вверх чата.
     container.query_cards.forget_screen(card)
@@ -161,6 +169,18 @@ async def _remember(container: Container, card: Card, screen: Screen) -> None:
     await container.query_cards.save(card)
 
 
+def _starts_new_person(text: str | None) -> bool:
+    """Начинает ли присланное нового должника. Сейчас — только телефон.
+
+    Проверяется разбором, а не длиной строки: «89160000000», «8 916 000-00-00»
+    и «+7 (916) 000 00 00» — один и тот же номер, и любая запись обязана
+    сработать одинаково.
+    """
+    if not text:
+        return False
+    return classify_fragment(text).kind is FragmentKind.PHONE
+
+
 def _pending_conflict(card: Card):  # type: ignore[no-untyped-def]
     """Отложенное ФИО, если вопрос «другой человек или исправление» ещё открыт."""
     from app.domain.identity import NameParseError, parse_fio
@@ -183,6 +203,15 @@ async def absorb(message: Message, container: Container, user_id: int) -> None:
     запрос, оно продолжает предыдущий.
     """
     card = await container.query_cards.load(user_id, message.chat.id)
+    if card.checked_at is not None and _starts_new_person(message.text):
+        # Присланный телефон после законченной проверки — это следующий
+        # должник, а не добавка к прошлому. Дописать номер в проверенную
+        # карточку значит выпустить отчёт про прежнего человека под новым
+        # номером. Остальные поля («дошлите ИНН — перепроверю того же»)
+        # по-прежнему дописываются: телефон здесь единственный ключ, с которого
+        # начинается НОВЫЙ человек.
+        card = await container.query_cards.wipe(user_id, message.chat.id)
+        container.query_cards.begin_steps(card)
     applied = container.query_cards.apply(card, message.text or "")
     if applied.delete_message:
         # Паспорт: убираем сообщение оператора, чтобы номер не остался в
@@ -335,6 +364,12 @@ async def run_card(message: Message, container: Container, card: Card, user_id: 
     report = await run_and_send_report(
         message, container, subject, user_id=user_id, notes=run_notes(subject, container)
     )
+    if report is None:
+        # Квота на сегодня выбрана. Карточка не помечается проверенной: ничего
+        # не проверялось, и следующее нажатие обязано снова быть нажатием на
+        # «Проверить», а не на «Перепроверить».
+        await show(message, container, card)
+        return
 
     card.checked_at = utcnow()
     card.last_run_hash = container.query_cards.run_hash(card)

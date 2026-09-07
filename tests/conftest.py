@@ -166,6 +166,7 @@ def make_proceeding(
     birth_date: date | None = date(1985, 3, 12),
     confidence: float = 1.0,
     active: bool = True,
+    status_text: str | None = None,
 ) -> EnforcementProceeding:
     from decimal import Decimal
 
@@ -177,6 +178,10 @@ def make_proceeding(
         debtor_birth_date=birth_date,
         amount=Decimal(amount),
         status=ProceedingStatus.ACTIVE if active else ProceedingStatus.CLOSED,
+        # Причина окончания приходит от источника свободным текстом, и по ней
+        # отличается «окончено, потому что взыскали» от «окончено, потому что
+        # взыскивать не с чего».
+        status_text=status_text,
     )
     record.match_confidence = confidence
     return record
