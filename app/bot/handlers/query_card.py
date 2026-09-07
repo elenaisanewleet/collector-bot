@@ -305,8 +305,34 @@ async def settle(
         message,
         container,
         card,
-        notice=bridge_note or _ambiguous(found, card) or _missed(found, card) or notice,
+        notice=bridge_note
+        or _ambiguous(found, card)
+        or _once(container, card, _missed(found, card))
+        or notice,
     )
+
+
+def _once(container: Container, card: Card, notice: str | None) -> str | None:
+    """Сказать это, только если на прошлом экране этого ещё не было.
+
+    «По номеру телефона никого не нашёл» — новость ровно один раз. Дальше
+    оператор отвечает на вопрос за вопросом, номер при этом не меняется, и
+    строка висела над каждым следующим экраном, повторяя одно и то же три раза
+    подряд. Такое перестают читать целиком — вместе с тем, что правда ново.
+
+    Проверяется по уже запомненному прошлому экрану
+    (:meth:`QueryCardService.last_screen`), тому же, по которому ``show``
+    решает, изменилось ли сообщение вообще. Отдельного поля в карточке под это
+    не заводится: миграция ради одной строки дороже, чем взять то, что есть.
+
+    Гасится только эта новость, а не все подряд. «Не понял» на два кривых ввода
+    подряд обязано прозвучать дважды: там экран иначе не изменится вовсе, и
+    молчание прочитается как «бот меня не услышал».
+    """
+    if not notice:
+        return None
+    previous = container.query_cards.last_screen(card)
+    return None if previous is not None and notice in previous.text else notice
 
 
 async def _resolve_name(container: Container, card: Card) -> str | None:

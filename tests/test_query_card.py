@@ -585,3 +585,24 @@ async def test_an_expired_token_says_so_instead_of_pretending(
 ) -> None:
     await feed(dispatcher, bot, callback_query=make_callback("padd:inn:no-such-token"))
     assert sent.contains("Данные устарели")
+
+
+async def test_the_miss_is_reported_once_not_over_every_question(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """«По номеру никого не нашёл» — новость ровно один раз.
+
+    Дальше оператор отвечает на вопрос за вопросом, номер при этом не меняется,
+    и строка висела над каждым следующим экраном, повторяя одно и то же три
+    раза подряд. Такие экраны перестают читать целиком — вместе с тем, что
+    правда ново.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+
+    assert "никого не нашёл" in last(sent)
+
+    await feed(dispatcher, bot, message=make_message("Несуществующев"))
+
+    assert "никого не нашёл" not in last(sent), "новость повторена на следующем вопросе"
+    assert "✎ Имя" in last(sent), "разговор при этом обязан идти дальше"
