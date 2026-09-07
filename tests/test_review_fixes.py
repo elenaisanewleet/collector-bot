@@ -1458,7 +1458,7 @@ def test_a_blank_numeric_setting_does_not_crash_the_bot() -> None:
     """
     from app.config import Settings
 
-    settings = Settings(_env_file=None, TELEGRAM_LOOKUP_API_ID="")  # type: ignore[call-arg]
+    settings = Settings(_env_file=None, TELEGRAM_LOOKUP_API_ID="")
 
     assert settings.telegram_lookup_api_id == 0
     assert not settings.telegram_lookup_configured
