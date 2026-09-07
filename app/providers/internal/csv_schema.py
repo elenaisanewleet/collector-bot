@@ -311,6 +311,11 @@ class DebtorRow:
     #: хранения, а из срока — долг по тарифу.
     impounded_at: datetime | None = None
     released_at: datetime | None = None
+    #: Все задержания этого должника парами дат. Долг складывается по ним, а не
+    #: по одной паре: каждое задержание — своя эвакуация и своё хранение.
+    #: Человек с тремя эпизодами должен за три, и требование к нему втрое
+    #: больше — а от размера требования зависит, стоит ли вообще подавать.
+    episodes: list[tuple[datetime | None, datetime | None]] = field(default_factory=list)
     #: Сумма посчитана по тарифу, а не взята из выгрузки. Признак едет до самого
     #: отчёта: расчётная сумма не имеет права выглядеть подтверждённой.
     debt_is_estimated: bool = False
@@ -462,6 +467,10 @@ class DebtorRow:
         self.source_ids = [
             *earlier.source_ids,
             *(sid for sid in self.source_ids if sid not in earlier.source_ids),
+        ]
+        self.episodes = [
+            *earlier.episodes,
+            *(pair for pair in self.episodes if pair not in earlier.episodes),
         ]
 
 
@@ -694,6 +703,8 @@ def _build_row(mapping: dict[int, str | None], raw_row: list[str]) -> DebtorRow:
     row.created_at = _parse_created_at(values.get("created_at"))
     row.impounded_at = _parse_moment(values.get("impounded_at"))
     row.released_at = _parse_moment(values.get("released_at"))
+    if row.impounded_at is not None or row.released_at is not None:
+        row.episodes.append((row.impounded_at, row.released_at))
     source_id = values.get("source_id") or None
     if source_id:
         row.source_ids.append(source_id)

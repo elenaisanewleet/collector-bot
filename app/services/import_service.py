@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 
 from app.config import Settings
@@ -255,21 +256,35 @@ class ImportService:
         должников суток хранения ноль и долг равен одной эвакуации. Считать их
         по началу суток значило бы завысить требование двум тысячам человек.
 
+        Складывается по ВСЕМ задержаниям, а не по последнему. Выгрузка — список
+        эпизодов: 183 должника приезжали по два-пять раз, и каждый раз это
+        отдельная эвакуация и отдельное хранение. Пока считался один эпизод, у
+        этих людей терялось 216 задержаний, требование выходило заниженным — а
+        от его размера зависит, стоит ли вообще платить пошлину.
+
         Сумма из выгрузки всегда сильнее расчёта: документ важнее оценки.
         """
         if row.debt_amount is not None:
             return
-        if not self._settings.tow_fee and not self._settings.storage_fee_per_day:
+        tow = self._settings.tow_fee
+        per_day = self._settings.storage_fee_per_day
+        if not tow and not per_day:
             return
-        if row.impounded_at is None or row.released_at is None:
+        total = Decimal("0")
+        counted = 0
+        for impounded_at, released_at in row.episodes or [(row.impounded_at, row.released_at)]:
+            if impounded_at is None or released_at is None:
+                continue
+            hours = (released_at - impounded_at).total_seconds() / 3600
+            if hours < 0:
+                # Выдали раньше, чем привезли: в выгрузке опечатка, и считать по
+                # ней нельзя. Молчаливый ноль тут хуже пустого места.
+                continue
+            total += tow + per_day * int(hours // 24)
+            counted += 1
+        if not counted:
             return
-        hours = (row.released_at - row.impounded_at).total_seconds() / 3600
-        if hours < 0:
-            # Выдали раньше, чем привезли: в выгрузке опечатка, и считать по ней
-            # нельзя. Молчаливый ноль тут хуже пустого места.
-            return
-        full_days = int(hours // 24)
-        row.debt_amount = self._settings.tow_fee + self._settings.storage_fee_per_day * full_days
+        row.debt_amount = total
         row.debt_is_estimated = True
 
     async def _store(self, rows: list[tuple[int, DebtorRow]], report: ImportReport) -> None:
