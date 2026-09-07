@@ -10,10 +10,11 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.bot.access_view import AUDIT_ACTION, refuse_owner_only
+from app.bot.access_view import AUDIT_ACTION, CALC_ACTION, refuse_owner_only
 from app.container import Container
 from app.db.repository import AuditRepository, DebtorRepository
 from app.domain.enums import PROVIDER_TITLES
+from app.services.explain import explain_calculation
 from app.utils.dates import format_datetime
 from app.utils.formatting import pluralize_ru
 from app.utils.masking import mask_secret
@@ -154,5 +155,24 @@ def build_router() -> Router:
             for event in events
         )
         await message.answer("\n".join(lines))
+
+    @router.message(Command("calc"))
+    async def calc(message: Message, container: Container, user_id: int) -> None:
+        """Как бот считает долг, пошлину и решение.
+
+        Владельцу, а не всем: экран раскрывает тариф и пороги окупаемости — то
+        есть внутреннюю кухню решения. Оператору она не нужна, а решение о
+        деньгах подписывает владелец, и проверить расчёт он вправе.
+
+        Числа в ответе посчитаны, а не переписаны: тарифы берутся из настроек,
+        ступени — из той же таблицы, по которой считает продукт, примеры
+        прогоняются через настоящие функции. Справка, набранная руками,
+        разъезжается с кодом на первой правке и врёт убедительно — она же
+        выглядит документацией.
+        """
+        if not container.access_service.is_owner(user_id):
+            await refuse_owner_only(message, action=CALC_ACTION, user_id=user_id)
+            return
+        await message.answer(explain_calculation(container.settings))
 
     return router

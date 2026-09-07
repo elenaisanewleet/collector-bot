@@ -1378,3 +1378,54 @@ async def test_a_typo_in_the_dates_does_not_poison_the_sum(container: Container)
         row = (await DebtorRepository(session).find_by_fio("Тестов Андрей Сергеевич"))[0]
 
     assert row.debt_amount == Decimal("5000"), "испорченный эпизод утащил за собой целый"
+
+
+# ---- 29. владельцу видно, из чего получилось решение о деньгах
+
+
+def test_the_calculation_screen_is_computed_not_retyped() -> None:
+    """Экран «как считается» берёт числа из настроек и из тех же функций.
+
+    Справка, набранная руками, разъезжается с кодом на первой правке и врёт
+    убедительно — она же выглядит документацией. Поэтому тариф читается из
+    настроек, ступени из той самой таблицы, а примеры прогоняются через
+    настоящие claim_fee и court_order_fee.
+    """
+    from app.config import Settings
+    from app.services.explain import explain_calculation
+
+    settings = Settings(_env_file=None, TOW_FEE="7000", STORAGE_FEE_PER_DAY="1500")
+    text = explain_calculation(settings)
+
+    assert "7 000 ₽" in text and "1 500 ₽" in text, "тариф переписан, а не прочитан"
+    assert "50% от пошлины по иску" in text
+    assert "4 000 ₽" in text, "первая ступень не из таблицы"
+
+
+def test_the_percentage_never_loses_a_trailing_zero() -> None:
+    """«50%» не должно превращаться в «5%».
+
+    Обрезка хвостовых нулей, применённая к целому числу, съедала последний
+    ноль: экран объявлял пошлину по судебному приказу впятеро меньше
+    настоящей — и объявлял уверенно, потому что это справка о расчёте.
+    """
+    from app.services.explain import _percent
+
+    assert _percent(Decimal("0.5")) == "50%"
+    assert _percent(Decimal("0.2")) == "20%"
+    assert _percent(Decimal("1")) == "100%"
+    assert _percent(Decimal("0.025")) == "2,5%"
+    assert _percent(Decimal("0.0035")) == "0,35%"
+
+
+async def test_the_calculation_screen_is_owner_only(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Тариф и пороги — не для всех допущенных.
+
+    Экран раскрывает, из чего складывается решение о деньгах. Подписывает это
+    решение владелец, а сотруднику внутренняя кухня не нужна.
+    """
+    await feed(dispatcher, bot, message=make_message("/calc", user_id=OPERATOR_ID + 777))
+
+    assert not sent.contains("перемещение"), "тариф показан не владельцу"

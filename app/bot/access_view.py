@@ -96,6 +96,16 @@ IMPORT_ACTION = OwnerOnlyAction(
 )
 
 
+CALC_ACTION = OwnerOnlyAction(
+    title="Как считается пошлина",
+    why=(
+        "Экран раскрывает тариф, ступени и порог окупаемости — то, из чего "
+        "складывается решение о деньгах. Подписывает это решение владелец, "
+        "и проверять расчёт — его дело."
+    ),
+)
+
+
 AUDIT_ACTION = OwnerOnlyAction(
     title="Журнал событий",
     why=(
@@ -239,6 +249,7 @@ __all__ = [
     "APPROVED_NOTICE",
     "AUDIT_ACTION",
     "BATCH_ACTION",
+    "CALC_ACTION",
     "IMPORT_ACTION",
     "OWNER_HEADER",
     "REQUEST_PENDING",
