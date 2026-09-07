@@ -321,7 +321,7 @@ async def test_new_search_button_is_not_a_dead_end(
     """
     await feed(dispatcher, bot, callback_query=make_callback("menu:back"))
 
-    assert sent.contains("Отправьте значение сообщением")
+    assert sent.contains("✎ Номер")
     assert sent.callback_answers
 
 

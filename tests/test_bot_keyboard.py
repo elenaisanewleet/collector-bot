@@ -178,7 +178,7 @@ async def test_the_keyboard_is_sent_once_per_start(
         # Пустая база — это и есть ответ массовой проверки на пустую базу,
         # то есть кнопка дошла до /batch.
         (BUTTON_BATCH, "Внутренняя база пуста"),
-        (BUTTON_SEARCH, "Телефон"),
+        (BUTTON_SEARCH, "Номер"),
         (BUTTON_HISTORY, "История пуста"),
         (BUTTON_SOURCES, "ОТКУДА ДАННЫЕ"),
         (BUTTON_HELP, "как это работает"),
@@ -216,7 +216,7 @@ async def test_the_search_button_keeps_the_rarer_searches_reachable(
     должна: она за «Другие способы поиска».
     """
     await feed(dispatcher, bot, message=make_message(BUTTON_SEARCH))
-    assert sent.contains("Отправьте значение сообщением")
+    assert sent.contains("✎ Номер")
 
     await feed(dispatcher, bot, callback_query=make_callback(MENU_MORE))
 

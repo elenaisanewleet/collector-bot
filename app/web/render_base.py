@@ -72,7 +72,7 @@ def render_base_page(
     parts.append(_table(debtors, person_urls or {}))
     parts.append(f"<footer>{e(_footer(debtors))}</footer>")
 
-    nav = navigation(app_name, [("Должники", "#base")])
+    nav = navigation(app_name, [("base", "Должники")])
     body = _STYLE + "".join(parts)
     if print_mode:
         body += print_footer(app_name, utcnow())
@@ -97,7 +97,7 @@ def _hero(debtors: Sequence[Debtor]) -> str:
         )
     )
     return (
-        '<header class="card hero" id="base">'
+        '<header class="hero" id="base">'
         f"<h1>{total} {e(noun)}</h1>"
         f'<div class="nums">{figures}</div>'
         '<div class="tools">'
@@ -272,7 +272,10 @@ def render_person_page(
     parts.append(_person_facts(debtor))
     parts.append(_person_money(debtor))
 
-    nav = navigation(app_name, [("К списку", back_url or "#")])
+    # Ссылку «ко всему списку» даёт шапка, а не навигация: navigation печатает
+    # подпись текстом, и полный адрес встал бы на страницу вместе с токеном
+    # доступа — тем самым, который открывает всю базу.
+    nav = navigation(app_name, [("facts", "Что известно"), ("money", "Деньги")])
     body = _STYLE + "".join(parts)
     if print_mode:
         body += print_footer(app_name, utcnow())
@@ -283,7 +286,7 @@ def _person_hero(debtor: Debtor, back_url: str) -> str:
     back = f'<p class="hint"><a href="{e(back_url)}">← ко всему списку</a></p>' if back_url else ""
     born = debtor.birth_date.strftime("%d.%m.%Y") if debtor.birth_date else "—"
     return (
-        '<header class="card hero">'
+        '<header class="hero">'
         f"<h1>{e(debtor.fio or 'Без имени')}</h1>"
         f'<p class="hint">Дата рождения: {e(born)}</p>'
         f"{back}"

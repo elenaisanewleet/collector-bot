@@ -153,6 +153,7 @@ main > .actions{margin:0}
 main > .actions a,main > .actions button{background:var(--surface);color:var(--ink-2);
   border-color:var(--line)}
 
+.hint{color:var(--ink-2);font-size:var(--t-sm);line-height:1.5;margin:.35rem 0}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
   padding:var(--s-4) var(--s-5)}
 .card > h1{margin:0 0 var(--s-2);font-size:var(--t-xl);letter-spacing:-.02em}

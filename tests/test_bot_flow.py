@@ -168,7 +168,7 @@ async def test_menu_person_opens_the_card_not_a_question(
     """
     await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
 
-    assert sent.contains("✎ Телефон")
+    assert sent.contains("✎ Номер")
     assert "Дальше" in buttons(sent)
     # Ни сводки полей, ни прочерков тех, которых не спрашивали.
     assert not sent.contains("Проверка должника")
@@ -201,7 +201,7 @@ async def test_the_phone_has_its_own_button_and_opens_nothing_external(
     assert "Телефон" in buttons(sent)
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:phone"))
-    assert sent.contains("✎ Телефон")
+    assert sent.contains("✎ Номер")
 
     await feed(dispatcher, bot, message=make_message("+7 916 123 45 67"))
     # В карточку едет маска, полный номер — только в память процесса.

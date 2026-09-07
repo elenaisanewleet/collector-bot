@@ -1621,7 +1621,7 @@ async def test_a_cold_card_starts_a_new_person(
     screen = sent.joined
     assert "пропустили" not in screen, "показаны чужие пропуски"
     assert "пришлите заново" not in screen, "показан забытый номер"
-    assert "Телефон" in screen, "не спросил телефон заново"
+    assert "Номер" in screen, "не спросил номер заново"
 
 
 def test_a_forgotten_secret_makes_the_card_stale() -> None:
