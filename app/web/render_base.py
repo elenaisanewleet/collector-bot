@@ -161,30 +161,43 @@ def _hero(rows: Sequence[_Row]) -> str:
     fees = sum((fee for _, kind, fee in rows if fee is not None and kind is not _THIN), Decimal(0))
     worth = sum(1 for _, kind, _ in rows if kind in (_ORDER, _CLAIM))
     noun = pluralize_ru(total, "должник", "должника", "должников")
+    # Какую долю требований съедает пошлина. Число неочевидное и денежное: на
+    # живой выгрузке типичный долг — одна эвакуация с парой суток хранения, а
+    # пошлина по нему одна и та же, и вместе они забирают около трети всей
+    # суммы. Без этой строки заказчик видит два больших числа и не соотносит их.
+    share = f"{fees / debt * 100:.0f}% от требований" if debt and fees else "по всем, кого нашли"
     figures = "".join(
         (
             f'<div><span class="lbl">Всего требований</span>'
             f"<b>{e(format_amount(debt) if debt else '—')}</b></div>",
             f'<div><span class="lbl">Пошлины по ним</span>'
             f"<b>{e(format_amount(fees) if fees else '—')}</b>"
-            f"<small>по {worth} из {total}, где подавать стоит</small></div>",
+            f"<small>{e(share)}; по {worth} из {total}, где подавать стоит</small></div>",
         )
     )
     counts = {kind.key: sum(1 for _, k, _ in rows if k is kind) for kind in _KINDS}
-    tabs = "".join(
-        f'<button type="button" class="tab k-{kind.key}" data-kind="{kind.key}">'
-        f"{e(kind.tab)} <span>{counts[kind.key]}</span></button>"
-        for kind in _KINDS
-        # Пустая вкладка не рисуется: «Иск (0)» — это приглашение нажать и
-        # увидеть пустой список.
-        if counts[kind.key]
+    # Полоса вкладок рисуется, только когда есть что делить. На выгрузке
+    # заказчика все две тысячи попадают в «судебный приказ» — долги от 5 000 до
+    # 230 000 ₽, — и полоса выходила из двух кнопок, означающих одно и то же.
+    # Фильтр, который ничего не отфильтровывает, читается как сломанный.
+    used = [kind for kind in _KINDS if counts[kind.key]]
+    tabs = (
+        '<div class="tabs"><button type="button" class="tab on" data-kind="">'
+        f"Все <span>{total}</span></button>"
+        + "".join(
+            f'<button type="button" class="tab k-{kind.key}" data-kind="{kind.key}">'
+            f"{e(kind.tab)} <span>{counts[kind.key]}</span></button>"
+            for kind in used
+        )
+        + "</div>"
+        if len(used) > 1
+        else ""
     )
     return (
         '<header class="hero" id="base">'
         f"<h1>{total} {e(noun)}</h1>"
         f'<div class="nums">{figures}</div>'
-        f'<div class="tabs"><button type="button" class="tab on" data-kind="">'
-        f"Все <span>{total}</span></button>{tabs}</div>"
+        f"{tabs}"
         '<div class="tools">'
         '<input id="b-find" type="search" placeholder="Поиск: фамилия, госномер, адрес…" '
         'autocomplete="off" spellcheck="false">'
