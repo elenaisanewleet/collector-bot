@@ -741,7 +741,7 @@ async def test_help_explains_the_product_in_plain_words(
     assert sent.contains("КОМАНДЫ")
     assert sent.contains("не пользуется базами утечек")
     # Термины, на которых оператор спотыкается, объяснены на месте.
-    assert sent.contains("Recovery Score")
+    assert sent.contains("Перспектива взыскания")
     assert sent.contains("ПОЧЕМУ ВАЖНА ДАТА РОЖДЕНИЯ")
     assert sent.contains("Можно подавать заявление о судебном приказе")
 
@@ -970,7 +970,7 @@ async def test_search_sends_a_card_with_a_link_not_a_wall(
     await collect_and_run(linked_dispatcher, bot)
 
     assert sent.contains("Тестов Андрей Сергеевич")
-    assert sent.contains("Recovery Score")
+    assert sent.contains("Перспектива взыскания")
     # Полного текстового отчёта нет — он теперь на странице.
     assert not sent.contains("ИСТОЧНИКИ")
     urls = [
@@ -1024,7 +1024,7 @@ async def test_progress_message_is_edited_not_reposted(
     # Первое после нажатия — прогресс, дальше правка того же сообщения.
     progress = next(index for index, text in enumerate(sent.texts) if text.startswith("Проверяю"))
     assert progress >= 0
-    assert sent.contains("Recovery Score")
+    assert sent.contains("Перспектива взыскания")
 
 
 def test_star_opens_the_bot_to_everyone(live_settings: Settings) -> None:

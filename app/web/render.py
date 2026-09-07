@@ -342,9 +342,9 @@ def hero(
         )
     if score is not None:
         numbers.append(
-            f'<div><span class="lbl">Recovery Score</span>'
+            f'<div><span class="lbl">Перспектива взыскания</span>'
             f"<b>{score.score} / 100</b>"
-            f"<small>уверенность {round(score.confidence * 100)}%</small></div>"
+            f"<small>данные полны на {round(score.confidence * 100)}%</small></div>"
         )
 
     reasons = "".join(f"<li>{e(reason.text)}</li>" for reason in decision.reasons)
@@ -1129,7 +1129,7 @@ def score_section(report: DebtorReport) -> str:
         f"{caveat}"
         f'<div class="factors" style="margin-top:15px">{factors}</div>'
     )
-    return section("score", "Recovery Score", body)
+    return section("score", "Перспектива взыскания", body)
 
 
 # Дуга в 240° — форма, которую глаз читает как шкалу, а не как долю от целого.
@@ -1223,7 +1223,7 @@ def sources_section(report: DebtorReport) -> str:
 def build_blocks(report: DebtorReport) -> list[Block]:
     """Разделы отчёта в порядке чтения.
 
-    «Источники» стоят до Recovery Score: они объясняют, чему верить, и должны
+    «Источники» стоят до перспективы взыскания: они объясняют, чему верить, и должны
     идти до балла, а не после. Пустые секции отсеиваются здесь же, поэтому
     оглавление физически не может сослаться на несуществующий раздел.
     """
@@ -1237,7 +1237,7 @@ def build_blocks(report: DebtorReport) -> list[Block]:
         Block("court", "Суды", court_section(report)),
         Block("business", "Бизнес", business_section(report)),
         Block("sources", "Источники", sources_section(report)),
-        Block("score", "Recovery Score", score_section(report)),
+        Block("score", "Перспектива взыскания", score_section(report)),
     ]
     return [block for block in candidates if block.html]
 
