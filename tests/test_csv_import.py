@@ -96,14 +96,14 @@ def test_row_with_only_contract_is_accepted() -> None:
 def test_row_without_name_or_contract_is_rejected() -> None:
     _rows, errors = parse(csv_text(",,,,,,5000,Москва,,,"))
     assert len(errors) == 1
-    assert "fio" in errors[0].message
+    assert "ФИО" in errors[0].message
 
 
 def test_invalid_amount_is_warned_not_fatal() -> None:
     rows, errors = parse(csv_text("DEM-1,Тестов Андрей Сергеевич,,,EV-1,,не-сумма,,,,"))
     assert not errors
     assert rows[0].debt_amount is None
-    assert any("debt_amount" in warning for warning in rows[0].warnings)
+    assert any("Сумма долга" in warning for warning in rows[0].warnings)
 
 
 def test_negative_amount_is_ignored() -> None:
@@ -128,7 +128,7 @@ def test_unparseable_name_is_kept_with_a_warning() -> None:
     rows, errors = parse(csv_text("DEM-1,ООО Рога и Копыта,,,EV-1,,1000,,,,"))
     assert not errors
     assert rows[0].full_name == "ООО Рога и Копыта"
-    assert any("fio" in warning for warning in rows[0].warnings)
+    assert any("ФИО" in warning for warning in rows[0].warnings)
 
 
 def test_column_aliases_are_recognized() -> None:

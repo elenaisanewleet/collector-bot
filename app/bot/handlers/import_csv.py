@@ -88,9 +88,18 @@ def render_import_report(report: ImportReport) -> str:
         "",
         f"Всего строк: {report.total_rows}",
         f"Импортировано: {report.imported}",
-        f"Пропущено: {report.skipped}",
+        # Голое «Пропущено: 263» оператор читает как потерю данных и присылает
+        # файл заново. Причина у пропуска ровно одна — повтор того же должника,
+        # — и назвать её дешевле, чем объяснять потом.
+        f"Пропущено: {report.skipped}" + (" — повторы того же должника" if report.skipped else ""),
         f"Ошибки: {report.failed}",
     ]
+    if report.merged_episodes:
+        lines.append("")
+        lines.append(
+            f"Один должник несколько раз ({report.merged_episodes}) — строки сведены "
+            "в одну запись, машины из них сохранены все."
+        )
     if report.created or report.updated:
         lines.append("")
         lines.append(f"Новых записей: {report.created}, обновлено: {report.updated}")

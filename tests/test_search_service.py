@@ -474,7 +474,7 @@ def test_a_ten_digit_inn_never_reaches_the_card() -> None:
     row = parsed[0]
     assert isinstance(row, DebtorRow)
     assert row.inn is None
-    assert any("inn" in warning for warning in row.warnings)
+    assert any("ИНН" in warning for warning in row.warnings)
 
 
 async def test_a_source_that_never_answered_is_rechecked_not_replayed(

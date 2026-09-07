@@ -241,12 +241,13 @@ def test_plate_and_vin() -> None:
 
 
 def test_an_unparseable_name_is_reported_not_raised() -> None:
-    """«оглы» разбор ФИО не умеет. Это ограничение, а не падение."""
-    parsed = parse_query("Алиев Рашид Мамед оглы")
+    """Четыре слова без известной частицы разбор не берёт. Это ограничение, а не
+    падение: ФИО уходит в остаток, и оператор видит, что именно не понято."""
+    parsed = parse_query("Тестов Андрей Сергеевич Петрович")
 
     assert parsed.name is None
     assert parsed.name_error
-    assert parsed.leftover == ("Алиев", "Рашид", "Мамед", "оглы")
+    assert parsed.leftover == ("Тестов", "Андрей", "Сергеевич", "Петрович")
 
 
 @pytest.mark.parametrize("raw", ["", None, "   ", "asdf", "?", "🙂🙂", "!!!", "—"])

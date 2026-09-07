@@ -100,6 +100,7 @@ class DebtorRepository:
             "inn",
             "address",
             "vehicle_plate",
+            "vehicle_plates",
             "vin",
         ):
             value = getattr(debtor, column)

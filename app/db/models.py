@@ -51,6 +51,13 @@ class Debtor(Base):
     debt_amount: Mapped[Decimal | None] = mapped_column(Money)
     address: Mapped[str | None] = mapped_column(String(512))
     vehicle_plate: Mapped[str | None] = mapped_column(String(16), index=True)
+    # Остальные машины того же должника, через запятую. У взыскателя-эвакуатора
+    # выгрузка — список задержаний, и один человек приезжает в ней до пяти раз с
+    # разными номерами; сама проверка человека нужна одна, а машины из неё
+    # складывается требование, и терять их нельзя. Отдельной таблицей не сделано
+    # намеренно: список нужен только на показ и в выгрузку файлом, а поиск по
+    # номеру ходит в ``vehicle_plate``, где номер один и индекс работает.
+    vehicle_plates: Mapped[str | None] = mapped_column(String(512))
     vin: Mapped[str | None] = mapped_column(String(17), index=True)
     source: Mapped[str] = mapped_column(String(32), default="csv_import")
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)

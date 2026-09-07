@@ -46,6 +46,13 @@ _PARENTHESIZED = re.compile(r"\(([^)]*)\)")
 
 FIO_MIN_PARTS = 2
 FIO_MAX_PARTS = 3
+#: Частицы тюркского отчества: «Ахмед оглы», «Мамед кызы». В паспорте они пишутся
+#: отдельным словом, поэтому ФИО с ними — четыре слова, а не три, и строгий
+#: разбор их отвергал. На выгрузке заказчика это 72 человека из 2315: их имена
+#: оставались неразобранными, а значит не участвовали в сверке с ответами
+#: источников — совпадение по такому должнику читалось как «слабое».
+#: Частица приклеивается к отчеству и остаётся строчной, как в документе.
+NAME_PARTICLES = frozenset({"оглы", "оглу", "улы", "уулу", "угли", "кызы", "гызы", "кизи"})
 INN_INDIVIDUAL_LENGTH = 12
 INN_ENTITY_LENGTH = 10
 #: Серия и номер российского паспорта, слитно.
@@ -135,12 +142,18 @@ def parse_fio(raw: str) -> PersonName:
     if not raw or not raw.strip():
         raise NameParseError("ФИО не указано")
     parts = [part for part in _NAME_SEPARATORS.split(raw.strip()) if part]
+    # Частица отчества — не отдельное слово имени: «Ахмед оглы» это одно
+    # отчество. Склеиваем до счёта слов, иначе такое ФИО не проходит по длине.
+    if len(parts) == FIO_MAX_PARTS + 1 and parts[-1].casefold() in NAME_PARTICLES:
+        parts = [*parts[:-2], f"{parts[-2]} {parts[-1].casefold()}"]
     if len(parts) < FIO_MIN_PARTS:
         raise NameParseError("Нужно как минимум фамилия и имя. Пример: Иванов Иван Иванович")
     if len(parts) > FIO_MAX_PARTS:
         raise NameParseError("Слишком много слов. Ожидается: Фамилия Имя Отчество")
     for part in parts:
-        if not _NAME_ALLOWED.match(part):
+        # Частица уже проверена по словарю, а пробел внутри отчества алфавит
+        # имени не пропускает — проверяем слова, а не склеенную форму.
+        if not all(_NAME_ALLOWED.match(word) for word in part.split()):
             raise NameParseError(f"Недопустимые символы в «{part}»")
     normalized = [capitalize_name(part) for part in parts]
     return PersonName(

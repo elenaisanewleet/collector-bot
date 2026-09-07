@@ -176,7 +176,7 @@ async def test_repeated_warnings_are_grouped_and_counted(container: Container) -
     assert report.warning_count == 12
     message = render_import_report(report)
     assert "Предупреждения (всего 12)" in message
-    assert "phone: не распознан российский номер — строк: 12" in message
+    assert "Телефон: не распознан российский номер — строк: 12" in message
 
 
 async def test_error_section_shows_the_total_not_the_first_five(

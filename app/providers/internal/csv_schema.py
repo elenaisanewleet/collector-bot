@@ -53,6 +53,25 @@ CANONICAL_COLUMNS = (
     "created_at",
 )
 
+# Как поле зовут в разговоре с оператором. Внутреннее имя колонки в текст не
+# уходит: «Нужна хотя бы одна из колонок: fio или contract_number» — это ответ
+# программиста программисту, а получает его человек, который правит выгрузку в
+# Excel и ищет там колонку с таким названием.
+COLUMN_TITLES: dict[str, str] = {
+    "debtor_id": "Код должника",
+    "fio": "ФИО",
+    "birth_date": "Дата рождения",
+    "phone": "Телефон",
+    "inn": "ИНН",
+    "contract_number": "Номер договора",
+    "claim_number": "Номер заявки",
+    "debt_amount": "Сумма долга",
+    "address": "Адрес",
+    "vehicle_plate": "Госномер",
+    "vin": "VIN",
+    "created_at": "Дата создания",
+}
+
 # Синонимы пишутся так, как их печатает 1С, — со словами, точками и «№».
 # Ключи нормализуются один раз при импорте модуля (см. ``_ALIAS_INDEX``), поэтому
 # «Гос. номер», «гос номер» и «ГосНомер» попадают в одну и ту же запись.
@@ -144,6 +163,10 @@ COLUMN_ALIASES: dict[str, str] = {
     "address": "address",
     "адрес": "address",
     "адрес регистрации": "address",
+    # 1С печатает адрес с уточнением, какой именно он из нескольких.
+    "актуальный адрес регистрации": "address",
+    "адрес регистрации по месту жительства": "address",
+    "адрес по прописке": "address",
     "адрес проживания": "address",
     "адрес должника": "address",
     "адрес фактический": "address",
@@ -172,6 +195,25 @@ COLUMN_ALIASES: dict[str, str] = {
 SUPPORTED_ENCODINGS = ("utf-8-sig", "utf-8", "cp1251")
 SUPPORTED_DELIMITERS = ",;\t"
 MAX_FIELD_LENGTH = 512
+
+# «Без номера» в колонке госномера. Пишут кто во что горазд, поэтому сравнение
+# идёт по буквам без разделителей: «б/н», «б\н», «б.н», «б...н», «бн», «н/у».
+# Хвост после маркера («Б/Н МОПЕД», «Б/Н ЧЁРНАЯ») — описание машины, а не номер.
+_NO_PLATE_MARKERS = frozenset({"бн", "ну", "безгрз", "безномера", "безнор", "нетномера"})
+
+
+def _letters_only(raw: str) -> str:
+    return re.sub(r"[^А-Яа-яЁёA-Za-z]", "", raw).casefold().replace("ё", "е")
+
+
+def _means_no_plate(raw: str) -> bool:
+    words = raw.split()
+    if not words:
+        return False
+    # Целиком — ради «без ГРЗ» из двух слов; по первому слову — ради «Б/Н МОПЕД»,
+    # где второе слово описывает машину, а не номер.
+    return _letters_only(raw) in _NO_PLATE_MARKERS or _letters_only(words[0]) in _NO_PLATE_MARKERS
+
 
 # Итоговая строка отчёта 1С в первой значимой колонке. Как должник она даёт
 # лишнюю запись и завышает счётчик импортированных.
@@ -218,6 +260,12 @@ class DebtorRow:
     vin: str | None = None
     created_at: datetime | None = None
     warnings: list[str] = field(default_factory=list)
+    #: Все машины должника, а не одна. У взыскателя-эвакуатора выгрузка — это
+    #: список задержаний, и один человек приезжает в ней несколько раз с разными
+    #: госномерами. Схлопывание таких строк в одного должника правильно (платная
+    #: проверка человека нужна одна), но машины при этом терялись все, кроме
+    #: последней, — а именно из них складывается требование.
+    vehicle_plates: list[str] = field(default_factory=list)
 
     @property
     def dedup_key(self) -> str:
@@ -276,6 +324,90 @@ class DebtorRow:
         сказать оператору.
         """
         return (*self.identity_parts, self.debt_amount, self.claim_number)
+
+    @property
+    def personal_parts(self) -> tuple[str | None, ...]:
+        """Кто это за человек — без того, что относится к отдельному случаю.
+
+        Машина, VIN, сумма и номер заявки сюда не входят намеренно. У эвакуатора
+        один и тот же должник встречается в выгрузке несколько раз, каждый раз с
+        другой машиной, и это не повод кричать про однофамильцев: имя, дата
+        рождения, ИНН, телефон и адрес совпали.
+        """
+        return (self.full_name, self.contract_number, self.inn, self.phone, self.address)
+
+    @property
+    def hard_identifiers(self) -> tuple[str | None, ...]:
+        """Поля, расхождение в которых означает, что это разные люди.
+
+        Адреса здесь нет намеренно, и это стоило отдельного разбора. На живой
+        выгрузке все 83 предупреждения «возможно, тёзка» разошлись ровно по
+        адресу — при совпавших ФИО **и** дате рождения. Полный тёзка с точностью
+        до дня рождения — редкость; переезд и другая запись того же адреса в 1С —
+        обычное дело. Восемьдесят три ложные тревоги подряд не осторожность: за
+        ними перестают читать настоящие.
+        """
+        return (self.full_name, self.contract_number, self.inn, self.phone)
+
+    def contradicts(self, other: DebtorRow) -> bool:
+        """Расходятся ли строки в том, кто это за человек.
+
+        Сравниваются только поля, заполненные в обеих строках. Пустое место — не
+        возражение: во второй строке того же должника телефон часто просто не
+        указан, и читать это как «а вдруг тёзка» значит поднять тревогу там, где
+        никто ни с кем не спорит.
+        """
+        return any(
+            mine is not None and theirs is not None and mine != theirs
+            for mine, theirs in zip(self.hard_identifiers, other.hard_identifiers, strict=True)
+        )
+
+    @property
+    def identity_is_strong(self) -> bool:
+        """Есть ли чем отличить этого человека от полного тёзки.
+
+        Код должника, номер договора и дата рождения — есть; одно голое ФИО —
+        нет. Разница принципиальная: при слабой личности любое расхождение в
+        строках означает «возможно, это два разных человека», а при сильной —
+        «тот же человек приехал во второй раз». Молча слить двух людей дороже,
+        чем показать лишнюю строку, поэтому при слабой личности тревога
+        поднимается всегда.
+        """
+        return bool(self.debtor_id or self.contract_number or self.birth_date)
+
+    def absorb(self, earlier: DebtorRow) -> None:
+        """Дописать в строку то, чего в ней нет, из более ранней строки того же
+        должника.
+
+        Раньше на одинаковом ключе поздняя строка заменяла раннюю целиком, и
+        обещание модуля «более бедная выгрузка не затирает уже известное»
+        держалось только между импортами, но не внутри одного файла: если ИНН
+        стоял в первой строке человека, а во второй его не было, он терялся до
+        того, как строка доходила до базы. Приоритет остаётся за поздней строкой
+        — она свежее, — но пустоты в ней заполняет ранняя.
+        """
+        for name in (
+            "debtor_id",
+            "full_name",
+            "birth_date",
+            "phone",
+            "inn",
+            "contract_number",
+            "claim_number",
+            "debt_amount",
+            "address",
+            "vehicle_plate",
+            "vin",
+            "created_at",
+        ):
+            if getattr(self, name) is None and getattr(earlier, name) is not None:
+                setattr(self, name, getattr(earlier, name))
+        # Машины — в порядке файла: список читает человек, и первым он ждёт то,
+        # что стоит выше в выгрузке.
+        self.vehicle_plates = [
+            *earlier.vehicle_plates,
+            *(plate for plate in self.vehicle_plates if plate not in earlier.vehicle_plates),
+        ]
 
 
 @dataclass(slots=True)
@@ -429,11 +561,12 @@ def read_table(text: str) -> DebtorTable:
     if not known:
         raise CsvFormatError(
             "Не распознана ни одна колонка. Ожидаются, например: "
-            f"{', '.join(CANONICAL_COLUMNS[:5])}. {found}".strip()
+            f"{', '.join(COLUMN_TITLES[name] for name in CANONICAL_COLUMNS[:5])}. {found}".strip()
         )
     if not ({"fio", "contract_number"} & known):
         raise CsvFormatError(
-            f"Нужна хотя бы одна из колонок: fio или contract_number. {found}".strip()
+            f"Нужна хотя бы одна из колонок: "
+            f"{COLUMN_TITLES['fio']} или {COLUMN_TITLES['contract_number']}. {found}".strip()
         )
 
     return DebtorTable(header=mapping, rows=_iter_data_rows(reader, mapping))
@@ -489,14 +622,18 @@ def _build_row(mapping: dict[int, str | None], raw_row: list[str]) -> DebtorRow:
     row.claim_number = values.get("claim_number") or None
 
     if not row.full_name and not row.contract_number:
-        raise ValueError("Нужно указать fio или contract_number")
+        raise ValueError("нет ни ФИО, ни номера договора — проверять некого")
 
-    row.birth_date = _parse_optional_date(values.get("birth_date"), "birth_date", row)
+    row.birth_date = _parse_optional_date(
+        values.get("birth_date"), COLUMN_TITLES["birth_date"], row
+    )
     row.phone = _parse_optional_phone(values.get("phone"), row)
     row.inn = _parse_optional_inn(values.get("inn"), row)
     row.debt_amount = _parse_optional_amount(values.get("debt_amount"), row)
     row.address = normalize_address(values.get("address"))
     row.vehicle_plate = _parse_optional_plate(values.get("vehicle_plate"), row)
+    if row.vehicle_plate:
+        row.vehicle_plates.append(row.vehicle_plate)
     row.vin = _parse_optional_vin(values.get("vin"), row)
     row.created_at = _parse_created_at(values.get("created_at"))
     return row
@@ -512,7 +649,7 @@ def _clean_name(raw: str | None, row: DebtorRow) -> str | None:
         # displaying, it just cannot participate in structured name matching.
         # Без кавычек: в кавычках отчёт показывает конкретное значение поля, а
         # тут это часть самой формулировки.
-        row.warnings.append("fio: не разобрано в формате Фамилия Имя Отчество")
+        row.warnings.append("ФИО: не разобрано в формате Фамилия Имя Отчество")
         return " ".join(raw.split()) or None
 
 
@@ -538,7 +675,7 @@ def _parse_optional_inn(raw: str | None, row: DebtorRow) -> str | None:
         return None
     normalized = normalize_inn(raw)
     if normalized is None or len(normalized) != INN_INDIVIDUAL_LENGTH:
-        row.warnings.append(f"inn: не похоже на ИНН физлица «{raw}»")
+        row.warnings.append(f"ИНН: не похоже на ИНН физлица «{raw}»")
         return None
     return normalized
 
@@ -548,7 +685,7 @@ def _parse_optional_phone(raw: str | None, row: DebtorRow) -> str | None:
         return None
     normalized = normalize_phone(raw)
     if normalized is None:
-        row.warnings.append("phone: не распознан российский номер")
+        row.warnings.append("Телефон: не распознан российский номер")
     return normalized
 
 
@@ -557,10 +694,10 @@ def _parse_optional_amount(raw: str | None, row: DebtorRow) -> Decimal | None:
         return None
     amount = parse_amount(raw)
     if amount is None:
-        row.warnings.append("debt_amount: не распознана сумма")
+        row.warnings.append("Сумма долга: не распознана")
         return None
     if amount < 0:
-        row.warnings.append("debt_amount: отрицательная сумма проигнорирована")
+        row.warnings.append("Сумма долга: отрицательная, не принята")
         return None
     return amount
 
@@ -569,8 +706,12 @@ def _parse_optional_plate(raw: str | None, row: DebtorRow) -> str | None:
     if not raw:
         return None
     normalized = normalize_plate(raw)
-    if normalized is None:
-        row.warnings.append("vehicle_plate: не распознан госномер")
+    if normalized is None and not _means_no_plate(raw):
+        # «Б/Н» — не опечатка, а запись о том, что номера у машины нет, и звать
+        # оператора чинить выгрузку тут не за чем. Отличаем одно от другого:
+        # иначе тридцать машин без номера выглядят как тридцать ошибок ввода, и
+        # за ними теряются настоящие — иностранные номера и опечатки в регионе.
+        row.warnings.append("Госномер: не распознан")
     return normalized
 
 
@@ -579,7 +720,7 @@ def _parse_optional_vin(raw: str | None, row: DebtorRow) -> str | None:
         return None
     normalized = normalize_vin(raw)
     if normalized is None:
-        row.warnings.append("vin: не распознан VIN (нужно 17 символов)")
+        row.warnings.append("VIN: не распознан, нужно 17 символов")
     return normalized
 
 

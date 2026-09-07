@@ -113,6 +113,11 @@ class ImportReport:
     # Строки, схлопнутые в одну запись при несовпадающих данных: вероятные
     # однофамильцы, а не дубли.
     collapsed_conflicts: list[str] = field(default_factory=list)
+    # Повторные строки того же человека с другой машиной или суммой: у
+    # эвакуатора это следующее задержание, а не тёзка и не копия. Считаются
+    # отдельно, потому что «Пропущено: 263» без причины оператор читает как
+    # потерю данных и присылает файл заново.
+    merged_episodes: int = 0
     # Замечания к файлу целиком: имя листа, итоговые строки, вторые колонки.
     notes: list[str] = field(default_factory=list)
     error_groups: dict[str, _Group] = field(default_factory=dict)
@@ -249,17 +254,31 @@ class ImportService:
         for line_number, row in rows:
             key = row.dedup_key
             previous = deduped.get(key)
-            if previous is not None:
-                report.skipped += 1
-                if not row.debtor_id and previous[1].comparable != row.comparable:
-                    # Одинаковый составной ключ при разных данных — почти всегда
-                    # тёзки, а не повтор. «Пропущено: 1» об этом не говорит, а в
-                    # суд с чужими производствами идти нельзя. Совпадение по
-                    # коду должника сюда не относится: это ключ самого заказчика.
-                    report.collapsed_conflicts.append(
-                        f"строки {previous[0]} и {line_number}: "
-                        f"«{row.full_name or row.contract_number}»"
-                    )
+            if previous is None:
+                deduped[key] = (line_number, row)
+                continue
+            report.skipped += 1
+            kept = previous[1]
+            if kept.comparable == row.comparable:
+                pass  # Полный повтор строки — поднимать тревогу не о чем.
+            elif not row.debtor_id and (not row.identity_is_strong or kept.contradicts(row)):
+                # Одинаковый ключ при разошедшихся данных — почти всегда тёзки, а
+                # не повтор. «Пропущено: 1» об этом не говорит, а в суд с чужими
+                # производствами идти нельзя. Совпадение по коду должника сюда не
+                # относится: это ключ самого заказчика.
+                report.collapsed_conflicts.append(
+                    f"строки {previous[0]} и {line_number}: "
+                    f"«{row.full_name or row.contract_number}»"
+                )
+            else:
+                # Человек опознан надёжно, разошлись только машина или сумма: у
+                # эвакуатора это следующее задержание того же должника. Считаем
+                # отдельно — иначе владелец получает сотню ложных тревог про
+                # однофамильцев и перестаёт читать настоящие.
+                report.merged_episodes += 1
+            # Дописываем, а не заменяем: строки одного должника дополняют друг
+            # друга, и поздняя без ИНН не должна стирать ранний ИНН.
+            row.absorb(kept)
             deduped[key] = (line_number, row)
 
         async with self._database.session() as session:
@@ -296,6 +315,10 @@ class ImportService:
             debt_amount=row.debt_amount,
             address=row.address,
             vehicle_plate=row.vehicle_plate,
+            # Одна машина — не список: строка «А123ВС777» в отдельной колонке
+            # ничего не добавляет к ``vehicle_plate`` и только смотрится как
+            # второй источник правды.
+            vehicle_plates=", ".join(row.vehicle_plates) if len(row.vehicle_plates) > 1 else None,
             vin=row.vin,
             source="csv_import",
         )

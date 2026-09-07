@@ -29,11 +29,14 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 
+import pytest
 from aiogram import Bot, Dispatcher
 
+from app.bot.handlers.import_csv import render_import_report
 from app.container import Container
+from app.db.repository import DebtorRepository
 from app.domain.enums import ProviderStatus, SearchType
-from app.domain.identity import PersonName, SearchSubject
+from app.domain.identity import NameParseError, PersonName, SearchSubject
 from app.domain.models import DebtorReport
 from app.services.batch import BatchAlreadyRunningError, BatchService
 from app.services.scoring import RecoveryScoreEngine
@@ -576,3 +579,182 @@ async def test_start_shows_two_buttons_under_the_input(
     assert labels == ["Главное меню", "Проверить человека"]
     # Ровно одно сообщение: одна фраза при старте.
     assert len(sent.sends) == 1, f"на /start ушло больше одного сообщения: {sent.sends}"
+
+
+# ------------------------------------------ 14. живая выгрузка: ФИО с частицей
+
+
+def test_a_patronymic_particle_is_part_of_the_name() -> None:
+    """«Ахмед оглы» — одно отчество, а не четвёртое слово.
+
+    В паспорте частица стоит отдельным словом, поэтому такое ФИО состоит из
+    четырёх слов, и строгий разбор отвергал его целиком. В выгрузке заказчика
+    так записаны 72 человека из 2315. Цена отказа не в том, что имя выглядит
+    непричёсанным: неразобранное ФИО не участвует в сверке с ответами
+    источников, и найденное по такому должнику производство подписывается
+    «слабое совпадение» — то есть найденное выглядит ненайденным.
+    """
+    from app.domain.identity import parse_fio
+
+    name = parse_fio("Алиев Ислам Ахмед оглы")
+
+    assert name.last_name == "Алиев"
+    assert name.first_name == "Ислам"
+    assert name.middle_name == "Ахмед оглы"
+    assert name.has_middle_name
+
+    # Регистр в выгрузке любой, а частиц несколько.
+    assert parse_fio("МАМЕДОВА ЛЕЙЛА МАМЕД КЫЗЫ").middle_name == "Мамед кызы"
+
+    # Четвёртое слово, не являющееся частицей, по-прежнему не угадывается.
+    with pytest.raises(NameParseError):
+        parse_fio("Тестов Андрей Сергеевич Петрович")
+
+
+# ------------------------------ 15. живая выгрузка: строки одного должника
+
+
+async def test_a_second_row_does_not_erase_what_the_first_one_knew(
+    container: Container,
+) -> None:
+    """Внутри одного файла поздняя строка не затирает данные ранней.
+
+    Модуль импорта обещает, что более бедная выгрузка не обнуляет уже известное,
+    но обещание держалось только между импортами: внутри файла строки с
+    одинаковым ключом заменялись целиком, и ИНН, указанный в первой строке
+    человека, исчезал из-за второй, где его не было. ИНН — единственный ключ к
+    банкротству, ИП и арбитражу, так что потеря стоит трёх разделов отчёта.
+    """
+    report = await container.import_service.import_text(
+        "ФИО,Дата рождения,ИНН,Телефон,Госномер\n"
+        "Тестов Андрей Сергеевич,15.03.1980,500100732259,+79991234501,А123ВС777\n"
+        "Тестов Андрей Сергеевич,15.03.1980,,,В456ЕК750"
+    )
+
+    assert report.imported == 1
+    async with container.database.session() as session:
+        rows = await DebtorRepository(session).find_by_fio("Тестов Андрей Сергеевич")
+    assert rows[0].inn == "500100732259"
+    assert rows[0].phone_masked
+
+
+async def test_every_car_of_a_repeat_debtor_survives_the_merge(
+    container: Container,
+) -> None:
+    """Один должник, несколько задержаний — машины сохраняются все.
+
+    Выгрузка взыскателя-эвакуатора это список задержаний, а не список людей:
+    в живом файле 215 человек приезжают в нём по два-пять раз, у 97 из них
+    машины разные. Схлопывать такие строки в одного должника правильно — платная
+    проверка человека нужна одна, — но до этой правки выживал только последний
+    госномер. Именно из машин складывается требование, с которым идут в суд.
+
+    И это не «возможно, тёзка»: дата рождения совпала, разошлась только машина.
+    Сто ложных тревог подряд владелец перестаёт читать вместе с настоящими.
+    """
+    report = await container.import_service.import_text(
+        "ФИО,Дата рождения,Госномер\n"
+        "Тестов Андрей Сергеевич,15.03.1980,А123ВС777\n"
+        "Тестов Андрей Сергеевич,15.03.1980,В456ЕК750\n"
+        "Тестов Андрей Сергеевич,15.03.1980,Е789МН197"
+    )
+
+    assert report.imported == 1
+    assert report.skipped == 2
+    assert report.merged_episodes == 2
+    assert report.collapsed_conflicts == []
+
+    async with container.database.session() as session:
+        rows = await DebtorRepository(session).find_by_fio("Тестов Андрей Сергеевич")
+    assert rows[0].vehicle_plates == "А123ВС777, В456ЕК750, Е789МН197"
+
+    message = render_import_report(report)
+    assert "не однофамильцы ли это" not in message
+    assert "машины из них сохранены все" in message
+
+
+async def test_a_namesake_without_a_birth_date_still_raises_the_alarm(
+    container: Container,
+) -> None:
+    """Отличить нечем — тревога остаётся: слить двух людей дороже лишней строки.
+
+    Разделение «тот же человек» / «возможно, тёзка» держится на дате рождения,
+    договоре или коде должника. Без них одно голое ФИО — не опознание, и
+    расхождение в данных обязано остаться тревогой, а не уехать в тихий счётчик
+    повторных задержаний.
+    """
+    report = await container.import_service.import_text(
+        "ФИО,Сумма долга\nТестов Андрей Сергеевич,1000\nТестов Андрей Сергеевич,2000"
+    )
+
+    assert report.merged_episodes == 0
+    assert report.collapsed_conflicts == ["строки 2 и 3: «Тестов Андрей Сергеевич»"]
+
+
+# ------------------------------- 16. живая выгрузка: тексты для оператора
+
+
+async def test_the_import_report_speaks_russian_not_field_names(
+    container: Container,
+) -> None:
+    """Отчёт об импорте читает человек, правящий выгрузку в Excel.
+
+    «Нужно указать fio или contract_number» — это ответ программиста
+    программисту: в файле нет колонок с такими названиями, и искать их
+    бесполезно. На живой выгрузке эта строка выпадала 363 раза.
+    """
+    report = await container.import_service.import_text(
+        "ФИО,Госномер,Сумма долга\n,А123ВС777,1000\nТестов Андрей Сергеевич,В456ЕК750,не-сумма"
+    )
+    message = render_import_report(report)
+
+    assert "нет ни ФИО, ни номера договора" in message
+    assert "Сумма долга: не распознана" in message
+    for leaked in ("fio", "contract_number", "debt_amount", "vehicle_plate"):
+        assert leaked not in message
+
+
+def test_a_car_without_plates_is_not_an_unreadable_plate() -> None:
+    """«Б/Н» — это запись об отсутствии номера, а не опечатка в нём.
+
+    Тридцать машин без номера выглядели как тридцать ошибок ввода, и за ними
+    терялись настоящие: иностранные номера и опечатки в регионе, которые
+    оператор действительно может починить в выгрузке.
+    """
+    from app.providers.internal.csv_schema import DebtorRow, _parse_optional_plate
+
+    for absent in ("Б/Н", "б\\н", "Б.Н", "БН", "Н/У", "без ГРЗ", "Б/Н МОПЕД"):
+        row = DebtorRow()
+        assert _parse_optional_plate(absent, row) is None
+        assert row.warnings == [], f"«{absent}» поднял ложную тревогу"
+
+    typo = DebtorRow()
+    assert _parse_optional_plate("А12ВС777", typo) is None
+    assert typo.warnings == ["Госномер: не распознан"]
+
+
+async def test_a_new_address_is_a_move_not_a_namesake(container: Container) -> None:
+    """Адрес разошёлся, ФИО и дата рождения — нет: это переезд, а не второй человек.
+
+    На живой выгрузке все 83 предупреждения «проверьте, не однофамильцы ли это»
+    разошлись ровно по адресу при совпавшей дате рождения. Полный тёзка с
+    точностью до дня рождения — редкость; другая запись адреса в 1С — норма.
+    Тревога, которая срабатывает 83 раза подряд впустую, не осторожность: после
+    неё владелец пролистывает и ту, что настоящая.
+    """
+    report = await container.import_service.import_text(
+        "ФИО,Дата рождения,Адрес,Госномер\n"
+        "Тестов Андрей Сергеевич,15.03.1980,г. Москва ул. Ленина 1,А123ВС777\n"
+        "Тестов Андрей Сергеевич,15.03.1980,Москва Ленина 1 кв 5,В456ЕК750"
+    )
+
+    assert report.collapsed_conflicts == []
+    assert report.merged_episodes == 1
+
+    # А расхождение по телефону при том же ФИО и дате — по-прежнему тревога.
+    contradicting = await container.import_service.import_text(
+        "ФИО,Дата рождения,Телефон,Сумма долга\n"
+        "Тестова Мария Ивановна,20.07.1975,+79991234501,1000\n"
+        "Тестова Мария Ивановна,20.07.1975,+79991234502,2000"
+    )
+    assert contradicting.collapsed_conflicts
