@@ -940,3 +940,62 @@ def _ledger_row(page: str, title: str) -> tuple[str, str, str]:
     chunk = page.split(title, 1)[1]
     cells = re.findall(r'<td class="n r" data-l="[^"]+">([^<]*)</td>', chunk)[:3]
     return (cells[0], cells[1], cells[2])
+
+
+# ---------------- 21. долг, посчитанный по тарифу, и его признак
+
+
+async def test_the_debt_is_computed_from_dates_and_marked_as_computed(
+    container: Container,
+) -> None:
+    """Сумма долга считается по тарифу — и остаётся видно, что она расчётная.
+
+    В выгрузке взыскателя-эвакуатора суммы нет: в учёте она не хранится, а
+    считается из двух дат по тарифу. Без неё вердикт по всем 2052 должникам
+    звучал «цену иска и пошлину посчитать не из чего», и очередь целиком стояла
+    одинаково пустой — продукт не отвечал на свой единственный вопрос.
+
+    Хранение — только за ПОЛНЫЕ сутки: почасовую оплату отменили, неполные
+    сутки не тарифицируются. Это не округление: медиана стоянки на живой
+    выгрузке десять часов, и счёт по началу суток завысил бы требование
+    тысяче шестистам должникам из двух тысяч.
+
+    Признак «расчётная» едет вместе с суммой. В цену иска идёт документ, а не
+    оценка, и это то же правило проекта, только про деньги.
+    """
+    container.settings.tow_fee = Decimal("5000")
+    container.settings.storage_fee_per_day = Decimal("1394")
+
+    await container.import_service.import_text(
+        "ИД,ФИО,Дата рождения,Дата постановки,Дата выдачи,Госномер\n"
+        # Десять часов — суток хранения ноль, платит только эвакуацию.
+        "1,Тестов Андрей Сергеевич,15.03.1980,03.03.2023 01:30,03.03.2023 11:30,А123ВС777\n"
+        # Двое полных суток и ещё немного: платит за двое, а не за трое.
+        "2,Тестова Мария Ивановна,20.07.1975,01.04.2023 10:00,03.04.2023 18:00,В456ЕК750"
+    )
+
+    async with container.database.session() as session:
+        repo = DebtorRepository(session)
+        short = (await repo.find_by_fio("Тестов Андрей Сергеевич"))[0]
+        long = (await repo.find_by_fio("Тестова Мария Ивановна"))[0]
+
+    assert short.debt_amount == Decimal("5000"), "неполные сутки не оплачиваются"
+    assert long.debt_amount == Decimal("5000") + Decimal("1394") * 2
+    assert short.debt_is_estimated and long.debt_is_estimated
+
+
+async def test_a_debt_from_the_export_beats_the_tariff(container: Container) -> None:
+    """Сумма из выгрузки сильнее расчёта: документ важнее оценки."""
+    container.settings.tow_fee = Decimal("5000")
+    container.settings.storage_fee_per_day = Decimal("1394")
+
+    await container.import_service.import_text(
+        "ФИО,Сумма долга,Дата постановки,Дата выдачи\n"
+        "Тестов Андрей Сергеевич,73500,01.04.2023 10:00,10.04.2023 10:00"
+    )
+
+    async with container.database.session() as session:
+        row = (await DebtorRepository(session).find_by_fio("Тестов Андрей Сергеевич"))[0]
+
+    assert row.debt_amount == Decimal("73500")
+    assert not row.debt_is_estimated, "сумма из выгрузки помечена расчётной"

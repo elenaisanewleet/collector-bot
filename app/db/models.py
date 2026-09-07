@@ -64,6 +64,15 @@ class Debtor(Base):
     # отдельной колонкой. Индекса нет: поиск по ним не ходит, они на показ и в
     # выгрузку файлом.
     source_record_ids: Mapped[str | None] = mapped_column(String(512))
+    # Долг посчитан по тарифу из дат, а не взят из выгрузки. Признак живёт до
+    # самого отчёта: расчётная сумма не имеет права выглядеть подтверждённой —
+    # в цену иска идёт документ, а не оценка.
+    debt_is_estimated: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Когда машину привезли на стоянку и когда забрали: из них считается срок
+    # хранения. Хранятся, чтобы расчёт можно было пересчитать другим тарифом,
+    # не перезаливая выгрузку.
+    impounded_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    released_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
     vin: Mapped[str | None] = mapped_column(String(17), index=True)
     source: Mapped[str] = mapped_column(String(32), default="csv_import")
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)

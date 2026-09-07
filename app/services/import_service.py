@@ -245,6 +245,33 @@ class ImportService:
         )
         return report
 
+    def _estimate_debt(self, row: DebtorRow) -> None:
+        """Посчитать долг по тарифу, если выгрузка суммы не принесла.
+
+        Считается ровно то, что взыскатель-эвакуатор и выставляет: перемещение
+        плюс хранение. Хранение — за ПОЛНЫЕ сутки: почасовую оплату отменили, и
+        неполные сутки не тарифицируются. Это не мелочь округления: на живой
+        выгрузке медиана стоянки — десять часов, то есть у большинства
+        должников суток хранения ноль и долг равен одной эвакуации. Считать их
+        по началу суток значило бы завысить требование двум тысячам человек.
+
+        Сумма из выгрузки всегда сильнее расчёта: документ важнее оценки.
+        """
+        if row.debt_amount is not None:
+            return
+        if not self._settings.tow_fee and not self._settings.storage_fee_per_day:
+            return
+        if row.impounded_at is None or row.released_at is None:
+            return
+        hours = (row.released_at - row.impounded_at).total_seconds() / 3600
+        if hours < 0:
+            # Выдали раньше, чем привезли: в выгрузке опечатка, и считать по ней
+            # нельзя. Молчаливый ноль тут хуже пустого места.
+            return
+        full_days = int(hours // 24)
+        row.debt_amount = self._settings.tow_fee + self._settings.storage_fee_per_day * full_days
+        row.debt_is_estimated = True
+
     async def _store(self, rows: list[tuple[int, DebtorRow]], report: ImportReport) -> None:
         if not rows:
             return
@@ -284,6 +311,7 @@ class ImportService:
         async with self._database.session() as session:
             repo = DebtorRepository(session)
             for key, (_line_number, row) in deduped.items():
+                self._estimate_debt(row)
                 _, created = await repo.upsert(self._to_model(row, key))
                 report.imported += 1
                 if created:
@@ -320,6 +348,9 @@ class ImportService:
             # второй источник правды.
             vehicle_plates=", ".join(row.vehicle_plates) if len(row.vehicle_plates) > 1 else None,
             source_record_ids=", ".join(row.source_ids) or None,
+            debt_is_estimated=row.debt_is_estimated,
+            impounded_at=row.impounded_at,
+            released_at=row.released_at,
             vin=row.vin,
             source="csv_import",
         )

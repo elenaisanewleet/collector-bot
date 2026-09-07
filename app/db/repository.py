@@ -103,6 +103,8 @@ class DebtorRepository:
             "vehicle_plate",
             "vehicle_plates",
             "source_record_ids",
+            "impounded_at",
+            "released_at",
             "vin",
         ):
             value = getattr(debtor, column)

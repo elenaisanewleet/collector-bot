@@ -52,6 +52,8 @@ CANONICAL_COLUMNS = (
     "vin",
     "created_at",
     "source_id",
+    "impounded_at",
+    "released_at",
 )
 
 # Как поле зовут в разговоре с оператором. Внутреннее имя колонки в текст не
@@ -72,6 +74,8 @@ COLUMN_TITLES: dict[str, str] = {
     "vin": "VIN",
     "created_at": "Дата создания",
     "source_id": "ИД записи",
+    "impounded_at": "Дата постановки",
+    "released_at": "Дата выдачи",
 }
 
 # Синонимы пишутся так, как их печатает 1С, — со словами, точками и «№».
@@ -195,6 +199,15 @@ COLUMN_ALIASES: dict[str, str] = {
     # ключом значило бы разбить 2052 должника обратно на 2631 эпизод и оплатить
     # 579 лишних проверок одних и тех же людей. А хранить его надо: это ссылка
     # на исходную запись и то, по чему приедут суммы, когда их выгрузят.
+    # Две даты, из которых считается срок хранения, а из него — долг. В выгрузке
+    # эвакуатора это единственный источник суммы: в учёте её нет, она считается
+    # по тарифу.
+    "дата постановки": "impounded_at",
+    "дата помещения": "impounded_at",
+    "дата задержания": "impounded_at",
+    "дата эвакуации": "impounded_at",
+    "дата выдачи": "released_at",
+    "дата возврата": "released_at",
     "ид": "source_id",
     "ид записи": "source_id",
     "номер записи": "source_id",
@@ -281,6 +294,13 @@ class DebtorRow:
     #: Номера записей в системе заказчика, из которых собран этот должник.
     #: Столько же, сколько эпизодов у человека.
     source_ids: list[str] = field(default_factory=list)
+    #: Когда машину привезли на стоянку и когда забрали. Из них считается срок
+    #: хранения, а из срока — долг по тарифу.
+    impounded_at: datetime | None = None
+    released_at: datetime | None = None
+    #: Сумма посчитана по тарифу, а не взята из выгрузки. Признак едет до самого
+    #: отчёта: расчётная сумма не имеет права выглядеть подтверждённой.
+    debt_is_estimated: bool = False
 
     @property
     def dedup_key(self) -> str:
@@ -414,6 +434,8 @@ class DebtorRow:
             "vehicle_plate",
             "vin",
             "created_at",
+            "impounded_at",
+            "released_at",
         ):
             if getattr(self, name) is None and getattr(earlier, name) is not None:
                 setattr(self, name, getattr(earlier, name))
@@ -655,6 +677,8 @@ def _build_row(mapping: dict[int, str | None], raw_row: list[str]) -> DebtorRow:
         row.vehicle_plates.append(row.vehicle_plate)
     row.vin = _parse_optional_vin(values.get("vin"), row)
     row.created_at = _parse_created_at(values.get("created_at"))
+    row.impounded_at = _parse_moment(values.get("impounded_at"))
+    row.released_at = _parse_moment(values.get("released_at"))
     source_id = values.get("source_id") or None
     if source_id:
         row.source_ids.append(source_id)
@@ -744,6 +768,26 @@ def _parse_optional_vin(raw: str | None, row: DebtorRow) -> str | None:
     if normalized is None:
         row.warnings.append("VIN: не распознан, нужно 17 символов")
     return normalized
+
+
+#: «03.03.2023 01:30» — как 1С печатает момент. ISO-разбор её не берёт, а разбор
+#: одной даты теряет часы. Часы тут не мелочь: медиана хранения на живой выгрузке
+#: десять часов при бесплатных первых сутках, то есть округление до даты
+#: превратило бы бесплатную стоянку в платную для двух тысяч должников.
+_MOMENT_FORMATS = ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d/%m/%Y %H:%M")
+
+
+def _parse_moment(raw: str | None) -> datetime | None:
+    """Момент со временем, если оно есть, и полночь, если его нет."""
+    if not raw:
+        return None
+    text = raw.strip()
+    for fmt in _MOMENT_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return _parse_created_at(text)
 
 
 def _parse_created_at(raw: str | None) -> datetime | None:
