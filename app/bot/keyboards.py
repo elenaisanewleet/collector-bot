@@ -14,6 +14,8 @@ data at 64 bytes.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from decimal import Decimal
+from typing import NamedTuple
 
 from aiogram.types import (
     InlineKeyboardButton,
@@ -23,6 +25,8 @@ from aiogram.types import (
 )
 
 from app.domain.enums import REGION_TITLES, Region, SearchType
+from app.utils.formatting import pluralize_ru
+from app.utils.money import format_compact_amount
 
 # ---------------------------------------------------------------- callbacks
 
@@ -163,32 +167,67 @@ BACK_LABEL = "В меню"
 MENU_HISTORY = f"{MENU_PREFIX}:history"
 
 
-def main_menu(*, owner: bool) -> InlineKeyboardMarkup:
-    """Главное меню: одно сообщение и пять-шесть кнопок в столбик.
+class BaseListing(NamedTuple):
+    """Ссылка на веб-список должников и то, что на ней написано.
+
+    Собирается в обработчике (нужны запрос к базе и выпуск ссылки), а сюда
+    приходит готовой: клавиатура в базу не ходит.
+    """
+
+    url: str
+    total: int
+    amount: Decimal
+
+
+def main_menu(*, owner: bool, base: BaseListing | None = None) -> InlineKeyboardMarkup:
+    """Главное меню: пять рядов у владельца, три у остальных.
 
     Порядок — по частоте, а не по мощности. Первой стоит проверка одного
-    человека: заказчик начинает с неё, вводит телефон и получает сводку.
-    Прогон по всей базе — второй и только у владельца.
+    человека: заказчик начинает с неё, вводит номер и получает сводку. Второй —
+    ссылка на весь список: «кто у меня вообще есть» спрашивают не реже, чем
+    «проверь этого», и сегодня за этим лезут в 1С.
 
-    Кнопки в столбик, а не в сетку, и это не вкус: подписи здесь разной длины,
-    а в два столбца короткая кнопка рядом с длинной читается как менее важная.
+    Рядов стало меньше вдвое, и не перестановкой: парами стоят кнопки, которые
+    и по смыслу пара. Прогон по базе и загрузка выгрузки — обе про базу целиком
+    и обе только у владельца; история и редкие способы поиска — обе про «найти
+    уже сделанное или найти иначе»; справка и источники — обе про «объясни».
+    Прежний столбик из семи кнопок был списком всего, что бот умеет, а меню
+    должно быть списком того, зачем сюда пришли.
+
+    Прежний довод против пар — «подписи разной длины, короткая рядом с длинной
+    читается как менее важная» — здесь соблюдён: в парах подписи соседней
+    длины.
 
     ``owner`` без значения по умолчанию: забытый аргумент должен ломаться на
     mypy, а не показывать чужую кнопку живому человеку.
     """
     buttons = [[_menu_button("Проверить человека", SearchType.PERSON)]]
+    if base is not None:
+        # URL-кнопка, а не callback: Telegram открывает её сам, без похода в
+        # бота. На приветствии та же ссылка стоит текстом — там места под
+        # инлайн-кнопку нет, оно занято нижней клавиатурой.
+        noun = pluralize_ru(base.total, "должник", "должника", "должников")
+        money = f", {format_compact_amount(base.amount)}" if base.amount else ""
+        buttons.append(
+            [InlineKeyboardButton(text=f"Вся база — {base.total} {noun}{money}", url=base.url)]
+        )
     if owner:
         buttons.append(
-            [InlineKeyboardButton(text="Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start")]
+            [
+                InlineKeyboardButton(
+                    text="Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start"
+                ),
+                InlineKeyboardButton(
+                    text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import"
+                ),
+            ]
         )
-    buttons.append([InlineKeyboardButton(text="Другие способы поиска", callback_data=MENU_MORE)])
     buttons.append(
-        [InlineKeyboardButton(text="История проверок", callback_data=f"{MENU_PREFIX}:history")]
+        [
+            InlineKeyboardButton(text="История проверок", callback_data=f"{MENU_PREFIX}:history"),
+            InlineKeyboardButton(text="Другие способы поиска", callback_data=MENU_MORE),
+        ]
     )
-    if owner:
-        buttons.append(
-            [InlineKeyboardButton(text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import")]
-        )
     buttons.append(
         [
             InlineKeyboardButton(text="Откуда данные", callback_data=f"{MENU_PREFIX}:sources"),

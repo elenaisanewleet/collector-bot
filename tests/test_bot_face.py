@@ -374,20 +374,28 @@ def test_report_button_and_handler_share_one_payload() -> None:
 
 
 def test_menu_offers_the_reading_screens() -> None:
-    """Справочные экраны достижимы кнопкой, но не в главном меню.
+    """Справочные экраны достижимы кнопкой, но не первым рядом.
 
-    В главном меню было одиннадцать кнопок, и это назвали кучей. Каждый день
-    нажимают две; справку читают один раз, поэтому она за «Другие способы
-    поиска» — достижима без слеша, но не мозолит глаза.
+    В главном меню было одиннадцать кнопок, и это назвали кучей. Потом семь в
+    столбик — тоже куча: столбик из семи читается как список всего, что бот
+    умеет, а меню должно быть списком того, зачем сюда пришли.
+
+    Рядов теперь пять, и парами стоят кнопки, которые и по смыслу пара: обе
+    про базу целиком, обе про «найти уже сделанное или найти иначе», обе про
+    «объясни».
     """
     from app.bot.keyboards import MENU_MORE, main_menu, more_menu
 
-    main = [button.callback_data for row in main_menu(owner=True).inline_keyboard for button in row]
-    # Пять-шесть кнопок в столбик, первой — то, что нажимают каждый день.
-    assert main[:3] == ["menu:person", "batch:start", MENU_MORE]
+    rows = main_menu(owner=True).inline_keyboard
+    main = [button.callback_data for row in rows for button in row]
+
+    # Первый ряд — один, и это то, что нажимают каждый день.
+    assert [b.callback_data for b in rows[0]] == ["menu:person"]
+    assert len(rows) <= 5, "меню снова растёт в столбик"
+    assert "batch:start" in main
+    assert MENU_MORE in main
     assert "menu:sources" in main
     assert "menu:help" in main
-    assert len(main) <= 7
 
     # За «Другими способами» — только способы поиска: справка и история
     # переехали в само меню, и держать их в двух местах значило бы иметь по две
@@ -395,6 +403,28 @@ def test_menu_offers_the_reading_screens() -> None:
     more = [button.callback_data for row in more_menu(owner=True).inline_keyboard for button in row]
     assert "menu:contract" in more
     assert "menu:sources" not in more
+
+
+def test_the_menu_carries_the_link_to_the_base() -> None:
+    """Ссылка на весь список — вторым рядом, кнопкой, а не текстом.
+
+    «Где ссылка на базу?» — вопрос владелицы после выкладки: на приветствии
+    она есть, но приветствие пролистывают, а в меню возвращаются. Здесь ссылка
+    может быть настоящей кнопкой: меню — инлайн-сообщение, нижняя клавиатура с
+    ним не спорит.
+    """
+    from decimal import Decimal
+
+    from app.bot.keyboards import BaseListing, main_menu
+
+    base = BaseListing(url="https://example.test/b/tok", total=2052, amount=Decimal("13679650"))
+    rows = main_menu(owner=True, base=base).inline_keyboard
+
+    button = rows[1][0]
+    assert button.url == "https://example.test/b/tok"
+    assert button.text == "Вся база — 2052 должника, 13,7 млн ₽"
+    # И без ссылки меню обязано собираться: база бывает пустой, веб — выключен.
+    assert all(b.url is None for row in main_menu(owner=True).inline_keyboard for b in row)
 
 
 def test_the_expensive_buttons_are_not_shown_to_a_plain_operator() -> None:

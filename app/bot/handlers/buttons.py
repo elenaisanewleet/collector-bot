@@ -47,7 +47,7 @@ from app.bot.handlers.help import send_help
 from app.bot.handlers.history import send_history
 from app.bot.handlers.query_card import start_person_card
 from app.bot.handlers.sources import send_sources
-from app.bot.handlers.start import CHOOSE_OTHER, CHOOSE_TYPE, cancel_card
+from app.bot.handlers.start import CHOOSE_OTHER, CHOOSE_TYPE, cancel_card, menu_markup
 from app.bot.keyboards import (
     BUTTON_BATCH,
     BUTTON_HELP,
@@ -61,7 +61,6 @@ from app.bot.keyboards import (
     LEGACY_BUTTON_HISTORY,
     LEGACY_BUTTON_SEARCH,
     LEGACY_BUTTON_SOURCES,
-    main_menu,
     more_menu,
 )
 from app.container import Container
@@ -94,7 +93,7 @@ def build_router() -> Router:
         await reset_state(state)
         await cancel_card(container, message.chat.id, user_id)
         await message.answer(
-            CHOOSE_TYPE, reply_markup=main_menu(owner=container.access_service.is_owner(user_id))
+            CHOOSE_TYPE, reply_markup=await menu_markup(container, user_id)
         )
 
     @router.message(F.text.in_({BUTTON_BATCH, LEGACY_BUTTON_BATCH}))

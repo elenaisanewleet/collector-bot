@@ -12,12 +12,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.common import answer_callback, callback_message, run_and_send_report
+from app.bot.handlers.start import menu_markup
 from app.bot.keyboards import (
     EXTERNAL_CHECK_PREFIX,
     MENU_PREFIX,
     cancel_keyboard,
     external_check_keyboard,
-    main_menu,
 )
 from app.bot.states import ContractSearch
 from app.container import Container
@@ -103,7 +103,7 @@ def build_router() -> Router:
         if not records:
             await message.answer(
                 NOT_FOUND,
-                reply_markup=main_menu(owner=container.access_service.is_owner(user_id)),
+                reply_markup=await menu_markup(container, user_id),
             )
             return
 

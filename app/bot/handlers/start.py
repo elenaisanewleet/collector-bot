@@ -17,6 +17,7 @@ from app.bot.keyboards import (
     CANCEL_CALLBACK,
     MENU_HOME,
     MENU_MORE,
+    BaseListing,
     main_menu,
     main_reply_keyboard,
     more_menu,
@@ -69,26 +70,23 @@ def welcome_text(container: Container, *, base: str | None = None) -> str:
     return "\n".join(lines)
 
 
-async def base_line(container: Container, user_id: int) -> str | None:
-    """Строка «Вся база — 2052 должника, 13,7 млн ₽» со ссылкой на список.
+async def base_listing(container: Container, user_id: int) -> BaseListing | None:
+    """Ссылка на веб-список должников с числом и суммой — или ``None``.
 
-    Зачем на приветствии. Заказчик открывает бота не только чтобы проверить
+    Зачем она вообще. Заказчик открывает бота не только чтобы проверить
     кого-то одного: половина вопросов — «кто у меня вообще есть». Сегодня за
-    этим лезут в 1С. Ссылка на первом экране убирает этот поход, и владелица
-    просила её именно здесь: «заказчику ссылку на базу сразу».
-
-    Почему строкой текста, а не кнопкой. У сообщения Telegram бывает либо
-    инлайн-клавиатура, либо нижняя. Приветствие несёт нижнюю — те самые две
-    кнопки, — значит места для инлайн-кнопки на нём нет, и ссылка живёт в
-    тексте. Это уже проверено дорого: прошлая попытка отправить клавиатуру
-    отдельным сообщением кончилась тем, что кнопок не видел никто.
+    этим лезут в 1С. Владелица просила её на первом экране дословно:
+    «заказчику ссылку на базу сразу».
 
     Только владельцу. За ссылкой имена, адреса и суммы двух тысяч человек, а
-    ``ALLOWED_TELEGRAM_USER_IDS=*`` пускает в бота кого угодно. Показать её на
-    приветствии всем — это отдать базу первому, кто нажал «Start».
+    ``ALLOWED_TELEGRAM_USER_IDS=*`` пускает в бота кого угодно. Показать её
+    всем — это отдать базу первому, кто нажал «Start».
 
     ``None`` — если веб-отчёты выключены, база пуста или спрашивает не
-    владелец. Приветствие тогда состоит из одной фразы, как и раньше.
+    владелец. Экран тогда обходится без ссылки, а не показывает мёртвую.
+
+    Достаёт здесь, печатают — :func:`base_html` и :func:`main_menu`: на
+    приветствии это строка текста, в меню кнопка, а данные одни и те же.
     """
     if not container.access_service.is_owner(user_id):
         return None
@@ -103,9 +101,28 @@ async def base_line(container: Container, user_id: int) -> str | None:
     )
     if url is None:
         return None
-    noun = pluralize_ru(total, "должник", "должника", "должников")
-    money = f", {format_compact_amount(amount)}" if amount else ""
-    return f'<a href="{escape(url, quote=True)}">Вся база</a> — {total} {noun}{money}'
+    return BaseListing(url=url, total=total, amount=amount)
+
+
+def base_html(base: BaseListing) -> str:
+    """Та же ссылка строкой текста — для приветствия.
+
+    Кнопкой её там поставить нельзя: у сообщения Telegram бывает либо
+    инлайн-клавиатура, либо нижняя, а приветствие несёт нижнюю — те самые две
+    кнопки. Отдельным сообщением клавиатуру уже слали: тогда кнопок не увидел
+    никто.
+    """
+    noun = pluralize_ru(base.total, "должник", "должника", "должников")
+    money = f", {format_compact_amount(base.amount)}" if base.amount else ""
+    return f'<a href="{escape(base.url, quote=True)}">Вся база</a> — {base.total} {noun}{money}'
+
+
+async def menu_markup(container: Container, user_id: int) -> InlineKeyboardMarkup:
+    """Главное меню под этого человека, со ссылкой на базу, если она положена."""
+    return main_menu(
+        owner=container.access_service.is_owner(user_id),
+        base=await base_listing(container, user_id),
+    )
 
 
 async def show_menu(message: Message, container: Container, user_id: int) -> None:
@@ -121,8 +138,7 @@ async def show_menu(message: Message, container: Container, user_id: int) -> Non
     Лишнее сообщение в чате дешевле стёртой работы. Экономия на нём и стоила
     доверия к боту.
     """
-    owner = container.access_service.is_owner(user_id)
-    await message.answer(CHOOSE_TYPE, reply_markup=main_menu(owner=owner))
+    await message.answer(CHOOSE_TYPE, reply_markup=await menu_markup(container, user_id))
 
 
 async def edit_or_answer(message: Message, text: str, markup: InlineKeyboardMarkup) -> None:
@@ -188,10 +204,10 @@ def build_router() -> Router:
         # Инлайн-меню на приветствии больше нет: оно открывается кнопкой
         # «Главное меню», как в боте-образце. Первый экран говорит ровно две
         # вещи — на какой вопрос бот отвечает и что написать.
-        base = await base_line(container, user_id)
+        base = await base_listing(container, user_id)
         await send_welcome(
             message,
-            welcome_text(container, base=base),
+            welcome_text(container, base=base_html(base) if base else None),
             reply_markup=main_reply_keyboard(owner=owner),
             # Разметка включается ТОЛЬКО когда в тексте есть ссылка. Без неё
             # приветствие остаётся простым текстом, как весь остальной бот.
@@ -204,7 +220,7 @@ def build_router() -> Router:
     ) -> None:
         await reset_state(state)
         await message.answer(
-            CHOOSE_TYPE, reply_markup=main_menu(owner=container.access_service.is_owner(user_id))
+            CHOOSE_TYPE, reply_markup=await menu_markup(container, user_id)
         )
 
     @router.message(Command("cancel"))
@@ -214,7 +230,7 @@ def build_router() -> Router:
         await reset_state(state)
         await cancel_card(container, message.chat.id, user_id)
         await message.answer(
-            CANCELLED, reply_markup=main_menu(owner=container.access_service.is_owner(user_id))
+            CANCELLED, reply_markup=await menu_markup(container, user_id)
         )
 
     @router.callback_query(F.data == BACK_CALLBACK)
