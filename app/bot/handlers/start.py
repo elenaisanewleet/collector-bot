@@ -7,7 +7,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
-from app.bot.banner import install_reply_keyboard, send_welcome
+from app.bot.banner import send_welcome
 from app.bot.common import answer_callback, callback_message, reset_state
 from app.bot.handlers import query_card
 from app.bot.keyboards import (
@@ -66,13 +66,20 @@ def welcome_text(container: Container) -> str:
 
 
 async def show_menu(message: Message, container: Container, user_id: int) -> None:
-    """Показать главное меню — правкой того же сообщения, если это возможно.
+    """Показать главное меню НОВЫМ сообщением, ничего не переписывая.
 
-    Возврат «в меню» из подменю не должен добавлять в чат ещё одно сообщение:
-    оператор нажал «назад», а не «покажи ещё раз».
+    Правка на месте была ошибкой, и дорогой. «В меню» стоит в том числе под
+    карточкой запроса, а карточка — это собранная оператором работа: телефон,
+    ФИО, дата. Правка превращала её в текст меню, и со стороны выглядело, будто
+    бот на введённый номер вообще не ответил: нажатие инлайн-кнопки не оставляет
+    в чате пузыря, поэтому шага «я нажала В меню» в переписке не видно — виден
+    только исчезнувший ответ.
+
+    Лишнее сообщение в чате дешевле стёртой работы. Экономия на нём и стоила
+    доверия к боту.
     """
     owner = container.access_service.is_owner(user_id)
-    await edit_or_answer(message, CHOOSE_TYPE, main_menu(owner=owner))
+    await message.answer(CHOOSE_TYPE, reply_markup=main_menu(owner=owner))
 
 
 async def edit_or_answer(message: Message, text: str, markup: InlineKeyboardMarkup) -> None:
@@ -124,13 +131,23 @@ def build_router() -> Router:
         # прогона и импорта есть только у владельца, и показывать их остальным
         # значит обещать то, чего бот не даст.
         owner = container.access_service.is_owner(user_id)
-        # Одно сообщение на /start, как в боте-образце: приветствие с меню под
-        # ним. Нижняя клавиатура приезжает отдельным носителем, который тут же
-        # удаляется, — она принадлежит чату и сообщение ей не нужно. Раньше за
-        # неё платили второй строкой, объясняющей интерфейс вместо того, чтобы
-        # работать.
-        await install_reply_keyboard(message, main_reply_keyboard(owner=owner))
-        await send_welcome(message, welcome_text(container), reply_markup=main_menu(owner=owner))
+        # Одно сообщение: фраза и две кнопки под полем ввода. Дословный ориентир
+        # владелицы — «одна фраза при старте, две кнопки внизу».
+        #
+        # Клавиатура едет НА самом приветствии, а не отдельным сообщением,
+        # которое тут же удаляют. Тот трюк экономил сообщение и стоил главного:
+        # у сообщения Telegram бывает либо инлайн-клавиатура, либо нижняя, и
+        # приветствие несло инлайн-меню, а нижняя приезжала носителем и
+        # исчезала вместе с ним. Настройка на стороне Telegram оставалась, но
+        # клиент сворачивал клавиатуру в значок «≡» — тех самых двух кнопок
+        # никто так и не увидел.
+        #
+        # Инлайн-меню на приветствии больше нет: оно открывается кнопкой
+        # «Главное меню», как в боте-образце. Первый экран говорит ровно две
+        # вещи — на какой вопрос бот отвечает и что написать.
+        await send_welcome(
+            message, welcome_text(container), reply_markup=main_reply_keyboard(owner=owner)
+        )
 
     @router.message(Command("search"))
     async def handle_search(

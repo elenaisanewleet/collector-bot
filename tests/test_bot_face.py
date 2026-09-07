@@ -502,8 +502,11 @@ def test_the_description_keeps_the_same_rules_as_the_first_screen() -> None:
         assert "1С" not in text and "1с" not in text
     assert len(BOT_DESCRIPTION) <= 512
     assert len(BOT_SHORT_DESCRIPTION) <= 120
-    # Оговорка про «не проверено» обязана дожить до самого первого экрана.
-    assert "не проверено" in BOT_DESCRIPTION
+    # Одна фраза: экран видит тот, кто ещё не нажал «Начать». Оговорка про
+    # «не проверено» ждёт его на первом экране после старта, где она к месту, —
+    # здесь она была бы абзацем в витрине.
+    assert BOT_DESCRIPTION.count(".") == 1
+    assert "\n" not in BOT_DESCRIPTION
 
 
 async def test_publish_commands_survives_a_refusal(

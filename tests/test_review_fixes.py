@@ -528,3 +528,51 @@ async def test_every_bottom_label_reaches_a_handler(
             f"«{label}» ушла в разбор свободного текста"
         )
         assert "Фамилия: " + label.split()[0] not in answered, f"«{label}» легла в поле карточки"
+
+
+# ------------------------------------------- 12. «В меню» не съедает карточку
+
+
+async def test_going_to_the_menu_keeps_the_card(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Карточка — собранная оператором работа, и меню её не переписывает.
+
+    «В меню» стоит в том числе под карточкой. Пока меню показывалось правкой
+    того же сообщения, нажатие превращало карточку с телефоном и ФИО в текст
+    меню. Со стороны выглядело так, будто бот на введённый номер не ответил
+    вовсе: нажатие инлайн-кнопки не оставляет в чате пузыря, поэтому шаг «я
+    нажала В меню» в переписке не виден — виден только исчезнувший ответ.
+
+    Проверяется именно способ доставки: меню приходит НОВЫМ сообщением, а не
+    правкой чужого.
+    """
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+    assert sent.contains("Проверка должника"), "на номер не пришла карточка"
+
+    before = len(sent.edits)
+    await feed(dispatcher, bot, callback_query=make_callback("menu:home"))
+
+    assert sent.contains("Вы в главном меню")
+    assert len(sent.edits) == before, "меню переписало карточку вместо нового сообщения"
+
+
+async def test_start_shows_two_buttons_under_the_input(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Две кнопки внизу — дословный ориентир владелицы, и их надо видеть.
+
+    Клавиатура ехала отдельным сообщением, которое тут же удалялось: настройка
+    на стороне Telegram оставалась, но клиент сворачивал её в значок «≡», и двух
+    кнопок никто не видел. Теперь она едет на самом приветствии.
+    """
+    from aiogram.types import ReplyKeyboardMarkup
+
+    await feed(dispatcher, bot, message=make_message("/start"))
+
+    keyboards = [m for m in sent.markups if isinstance(m, ReplyKeyboardMarkup)]
+    assert len(keyboards) == 1, "нижняя клавиатура не пришла"
+    labels = [button.text for row in keyboards[0].keyboard for button in row]
+    assert labels == ["Главное меню", "Проверить человека"]
+    # Ровно одно сообщение: одна фраза при старте.
+    assert len(sent.sends) == 1, f"на /start ушло больше одного сообщения: {sent.sends}"

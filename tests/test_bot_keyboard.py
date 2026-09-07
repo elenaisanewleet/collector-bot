@@ -124,23 +124,35 @@ async def test_start_delivers_the_keyboard(
     # Не весь REPLY_BUTTONS: там остались подписи снятых кнопок — они ещё висят
     # у тех, кто не нажимал /start после сокращения, и обработчики им нужны.
     assert _labels(keyboards[0]) == [BUTTON_MENU, BUTTON_SEARCH]
-    # Носитель клавиатуры удаляется сразу же: в чате остаётся одно приветствие.
-    assert sent.deleted, "сообщение-носитель нижней клавиатуры не убрано"
+    # Ровно одно сообщение: одна фраза при старте и две кнопки под ней.
+    assert len(sent.sends) == 1, f"на /start ушло больше одного сообщения: {sent.sends}"
 
 
-async def test_the_welcome_keeps_its_inline_menu(
+async def test_the_welcome_carries_the_keyboard_not_a_menu(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """На /start остаётся одно сообщение — приветствие с меню под ним.
+    """На приветствии — нижняя клавиатура, а не инлайн-меню.
 
-    У сообщения не бывает обеих клавиатур сразу, поэтому нижняя приезжает
-    отдельным носителем, который тут же удаляется: она принадлежит чату, а не
-    сообщению. Раньше за неё платили вторым экраном, объясняющим интерфейс.
+    У сообщения Telegram бывает либо инлайн-клавиатура, либо нижняя, и выбор
+    сделан в пользу нижней: две кнопки под полем ввода — то, что владелица
+    просила видеть всегда. Инлайн-меню открывается кнопкой «Главное меню».
+
+    Прежний вариант — инлайн-меню на приветствии, а клавиатура отдельным
+    сообщением, которое тут же удаляли, — на живом клиенте не сработал:
+    настройка на стороне Telegram оставалась, но клавиатуру сворачивало в
+    значок «≡», и двух кнопок никто не видел.
     """
+    from aiogram.types import ReplyKeyboardMarkup
+
     await feed(dispatcher, bot, message=make_message("/start"))
 
+    assert isinstance(sent.markups[0], ReplyKeyboardMarkup)
+
+    # Меню при этом в одном нажатии: «Главное меню» — левая кнопка.
+    sent.markups.clear()
+    await feed(dispatcher, bot, message=make_message(BUTTON_MENU))
     inline = [markup for markup in sent.markups if getattr(markup, "inline_keyboard", None)]
-    assert inline, "приветствие осталось без меню"
+    assert inline, "«Главное меню» не показало меню"
     labels = [button.text for row in inline[-1].inline_keyboard for button in row]
     assert "Проверить человека" in labels
 

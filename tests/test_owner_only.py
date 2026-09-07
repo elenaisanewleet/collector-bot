@@ -369,10 +369,11 @@ async def test_start_keeps_the_batch_button_for_the_owner(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
     await feed(dispatcher, bot, message=make_message("/start", user_id=OPERATOR_ID))
+    await feed(dispatcher, bot, message=make_message("Главное меню", user_id=OPERATOR_ID))
 
-    # Прогон по базе живёт в инлайн-меню приветствия: нижняя клавиатура — это
-    # две кнопки навигации, и место под пальцем нужнее тому, что жмут каждый
-    # день, чем тому, что жмут раз в неделю.
+    # Прогон по базе живёт в главном меню: нижняя клавиатура — это две кнопки
+    # навигации, и место под пальцем нужнее тому, что жмут каждый день, чем
+    # тому, что жмут раз в неделю.
     menu = next(markup for markup in sent.markups if getattr(markup, "inline_keyboard", None))
     labels = [button.text for row in menu.inline_keyboard for button in row]
     assert BUTTON_BATCH in labels

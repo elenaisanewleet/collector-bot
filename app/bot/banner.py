@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
 from pathlib import Path
 
 from aiogram.types import (
@@ -31,10 +30,6 @@ BANNER_PATH = Path(__file__).resolve().parent.parent / "assets" / "welcome.jpg"
 # длину проверяем сами и в крайнем случае отправляем текст отдельно.
 CAPTION_LIMIT = 1024
 
-#: Текст сообщения-носителя нижней клавиатуры. Живёт доли секунды и виден только
-#: в том редком случае, когда удалить его не вышло, — поэтому осмысленный.
-KEYBOARD_CARRIER = "Готово."
-
 # file_id первой удачной отправки. FSInputFile перезаливает файл на каждый
 # /start; после первого раза Telegram уже хранит картинку у себя.
 _file_id: str | None = None
@@ -42,30 +37,6 @@ _file_id: str | None = None
 
 def banner_available() -> bool:
     return BANNER_PATH.is_file()
-
-
-async def install_reply_keyboard(message: Message, markup: ReplyKeyboardMarkup) -> None:
-    """Поставить нижнюю клавиатуру, не оставляя за это сообщения в чате.
-
-    У сообщения Telegram бывает либо инлайн-клавиатура, либо нижняя, но не обе
-    сразу, — а на ``/start`` нужны обе: меню под приветствием и две кнопки под
-    полем ввода. Раньше за это платили вторым сообщением, которое только и
-    делало, что объясняло интерфейс.
-
-    Нижняя клавиатура принадлежит чату, а не сообщению: Telegram хранит её у
-    себя и не убирает вместе с сообщением, которое её принесло. Значит,
-    сообщение-носитель можно удалить сразу — клавиатура остаётся.
-
-    Удаление — best-effort. Не вышло (нет прав в группе, сообщение уже
-    удалено) — в чате останется одна короткая строка, а не сломанный экран.
-    """
-    try:
-        carrier = await message.answer(KEYBOARD_CARRIER, reply_markup=markup)
-    except Exception:  # pragma: no cover — Telegram отказал в отправке
-        logger.warning("welcome.keyboard_failed")
-        return
-    with suppress(Exception):
-        await carrier.delete()
 
 
 async def send_welcome(
@@ -124,6 +95,5 @@ __all__ = [
     "CAPTION_LIMIT",
     "banner_available",
     "forget_file_id",
-    "install_reply_keyboard",
     "send_welcome",
 ]
