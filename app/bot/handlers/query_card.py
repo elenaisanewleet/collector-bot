@@ -275,6 +275,10 @@ async def settle(
         await show(message, container, card, notice=notice)
         return
 
+    # По одному номеру искать в выгрузке нечем: телефона в ней нет и не будет.
+    # Имя добывает мост, и добывает ДО поиска — иначе искать не по чему.
+    bridge_note = await _resolve_name(container, card)
+
     found = await card_identify.identify(container.search_service, card)
     if found.only is not None:
         await recognised(
@@ -288,8 +292,43 @@ async def settle(
         message,
         container,
         card,
-        notice=_ambiguous(found, card) or _missed(found, card) or notice,
+        notice=bridge_note or _ambiguous(found, card) or _missed(found, card) or notice,
     )
+
+
+async def _resolve_name(container: Container, card: Card) -> str | None:
+    """Достать ФИО по номеру и положить его в карточку.
+
+    Оператор вводит телефон — этого от него и ждут. Но телефона нет в выгрузке
+    и не будет: это часть таблицы 1С, и колонки с номером там не появится.
+    Поэтому имя добывается на стороне, и добывается ЗДЕСЬ, до поиска: без имени
+    искать в выгрузке не по чему, а без строки выгрузки нечего спрашивать у
+    реестров.
+
+    Возвращает строку для показа, только когда сказать есть что. Успех
+    молчалив: подставленное ФИО видно в самой карточке, и подписывать его
+    отдельной фразой — лишний текст на экране, который читают каждый день.
+    """
+    bridge = container.registry.phone_bridge
+    if bridge is None or card.name is not None or not card.phone:
+        return None
+    subject = SearchSubject(search_type=SearchType.PERSON.value, phone=card.phone)
+    if not bridge.is_needed(subject):
+        return None
+
+    result = await bridge.fetch(subject)
+    name = getattr(result, "name", None)
+    if name is None:
+        # Ручка молчит или никого не знает. Разница для оператора одна: дальше
+        # он вводит фамилию. Одной строкой, без объяснений про источники.
+        return card_view.NAME_NOT_RESOLVED
+    card.last_name = name.last_name
+    card.first_name = name.first_name
+    card.middle_name = name.middle_name
+    birth = getattr(result, "birth_date", None)
+    if birth is not None and card.birth_date is None:
+        card.birth_date = birth
+    return None
 
 
 def _missed(found: card_identify.Identified, card: Card) -> str | None:

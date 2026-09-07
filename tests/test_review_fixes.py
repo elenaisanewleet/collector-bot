@@ -1051,8 +1051,15 @@ async def test_a_debtor_is_found_by_any_of_their_plates(container: Container) ->
 # ------- 23. цепочка «ввёл номер — увидел должника» через мост «телефон → ФИО»
 
 
+_DEFAULT_NAME = PersonName(last_name="Тестов", first_name="Андрей", middle_name="Сергеевич")
+
+
 class _PhoneBridgeStub(PhoneNameProvider):
-    """Сервис заказчика, отдающий ФИО по номеру. Без сети."""
+    """Ручка, отдающая ФИО по номеру. Без сети. ``name=None`` — молчит."""
+
+    def __init__(self, settings: Settings, name: PersonName | None = _DEFAULT_NAME) -> None:
+        super().__init__(settings)
+        self._name = name
 
     @property
     def is_configured(self) -> bool:
@@ -1061,10 +1068,10 @@ class _PhoneBridgeStub(PhoneNameProvider):
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         return PhoneNameResult(
             provider=self.name,
-            status=ProviderStatus.SUCCESS,
+            status=ProviderStatus.SUCCESS if self._name else ProviderStatus.NO_RESULTS,
             records=(),
-            name=PersonName(last_name="Тестов", first_name="Андрей", middle_name="Сергеевич"),
-            note="ФИО определено по номеру",
+            name=self._name,
+            note="ФИО определено по номеру" if self._name else "имя не определено",
         )
 
 
@@ -1429,3 +1436,62 @@ async def test_the_calculation_screen_is_owner_only(
     await feed(dispatcher, bot, message=make_message("/calc", user_id=OPERATOR_ID + 777))
 
     assert not sent.contains("перемещение"), "тариф показан не владельцу"
+
+
+# ---- 30. ввели номер — получили отчёт, больше ничего не вводя
+
+
+async def test_a_phone_alone_produces_the_whole_report(
+    container: Container, bot: Bot, sent: SentMessages
+) -> None:
+    """Сценарий ТЗ целиком: номер → ФИО → должник → долг → пошлина → отчёт.
+
+    Телефона в выгрузке нет и не будет — это часть таблицы 1С. Поэтому имя
+    добывает мост, и добывает до поиска: без имени искать не по чему.
+
+    Проверяется ЧЕРЕЗ БОТА. Мост уже был однажды написан, покрыт тестами и
+    недостижим из интерфейса, потому что тест дёргал сервис напрямую.
+    """
+    container.settings.tow_fee = Decimal("5000")
+    container.settings.storage_fee_per_day = Decimal("1394")
+    await container.import_service.import_text(
+        "ИД,ФИО,Дата рождения,Дата постановки,Дата выдачи,Госномер\n"
+        "440466,Македонский Василий Витальевич,07.09.1996,"
+        "01.04.2023 10:00,06.04.2023 12:00,А123ВС777"
+    )
+    container.registry._phone_bridge = _PhoneBridgeStub(
+        container.settings,
+        name=PersonName(last_name="Македонский", first_name="Василий", middle_name="Витальевич"),
+    )
+    dispatcher = dispatcher_for(container)
+
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    sent.texts.clear()
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+
+    chat = sent.joined
+    assert "Македонский Василий Витальевич" in chat, "ФИО по номеру не подставилось"
+    # Пять суток хранения плюс эвакуация — долг поднят из выгрузки, а не выдуман.
+    assert "11 970 ₽" in chat
+    assert "RECOVERY SCORE" in chat, "отчёт не собрался с одного номера"
+    assert "БАНКРОТСТВО" in chat and "ФССП" in chat
+
+
+async def test_a_silent_bridge_asks_for_a_surname_in_one_line(
+    container: Container, bot: Bot, sent: SentMessages
+) -> None:
+    """Ручка молчит или никого не знает — одна строка, и никакого платного прогона.
+
+    Для оператора оба случая — одно действие: вводить фамилию. Объяснять, что
+    именно случилось на той стороне, значит писать лишнее на экране, который
+    читают каждый день.
+    """
+    container.registry._phone_bridge = _PhoneBridgeStub(container.settings, name=None)
+    dispatcher = dispatcher_for(container)
+
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    sent.texts.clear()
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+
+    assert sent.contains("Введите фамилию")
+    assert not sent.contains("RECOVERY SCORE"), "платный прогон без имени"
