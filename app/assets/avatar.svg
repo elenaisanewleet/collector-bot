@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#2A5EB4"/>
+      <stop offset="0.5" stop-color="#1F4E9C"/>
+      <stop offset="1" stop-color="#15305F"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#DCE5F3"/>
+    </linearGradient>
+    <filter id="drop" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#080C14" flood-opacity="0.40"/>
+    </filter>
+    <clipPath id="lens">
+      <circle cx="460" cy="452" r="212"/>
+    </clipPath>
+  </defs>
+
+  <!-- Подложка. Телеграм режет аватар в круг, поэтому всё значимое живёт внутри
+       центральных 80%: углы квадрата не увидит никто. -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="452" fill="#FFFFFF" opacity="0.05"/>
+
+  <!-- Ручка лупы — под стеклом, чтобы стык не был виден. -->
+  <g filter="url(#drop)">
+    <line x1="604" y1="596" x2="784" y2="776" stroke="#FFFFFF" stroke-width="86" stroke-linecap="round"/>
+
+    <!-- Стекло. Внутри — фрагмент номерного знака: то, с чего у эвакуаторщика
+         начинается должник. Знаки не буквы, а их ритм: настоящий номер на
+         аватаре — чужие данные, пусть и выдуманные. -->
+    <circle cx="460" cy="452" r="212" fill="url(#glass)"/>
+    <g clip-path="url(#lens)">
+      <g fill="#141922">
+        <rect x="268" y="392" width="62" height="122" rx="16"/>
+        <rect x="354" y="392" width="62" height="122" rx="16"/>
+        <rect x="440" y="392" width="62" height="122" rx="16"/>
+      </g>
+      <!-- Правое поле знака с синей полосой — узнаётся даже мельком. -->
+      <rect x="566" y="240" width="140" height="424" fill="#1F4E9C"/>
+      <rect x="566" y="240" width="8" height="424" fill="#141922" fill-opacity="0.2"/>
+      <!-- Блик по стеклу: одна дуга, иначе стекло читается как заливка. -->
+      <path d="M300 372a212 212 0 0 1 96-92" fill="none" stroke="#FFFFFF" stroke-opacity="0.75"
+            stroke-width="30" stroke-linecap="round"/>
+    </g>
+
+    <!-- Оправа последней: она обязана быть поверх и стекла, и ручки. -->
+    <circle cx="460" cy="452" r="212" fill="none" stroke="#FFFFFF" stroke-width="58"/>
+  </g>
+</svg>
