@@ -18,6 +18,7 @@ from app.domain.enums import (
     MISSING_INPUT_TITLES,
     PROVIDER_TITLES,
     MissingInput,
+    ProviderName,
     SearchType,
 )
 from app.domain.identity import SearchSubject
@@ -174,6 +175,11 @@ def report_card(
             f"уверенность данных {round(score.confidence * 100)}%"
         )
 
+    facts = _facts(report)
+    if facts:
+        lines.append("")
+        lines.extend(facts)
+
     # Состояние источника определяет общая таблица (``reporting.source_state``);
     # карточка решает только, как сгруппировать и назвать. Плоского списка «Не
     # проверено: ФССП, Авто» здесь быть не должно: три беды с тремя разными
@@ -197,6 +203,53 @@ def report_card(
     lines.append("Подробный отчёт — по кнопке ниже.")
 
     return "\n".join(lines)
+
+
+#: Что показывать строкой в карточке и как это назвать. Порядок — по тому, что
+#: решает судьбу взыскания: сперва производства и банкротство (они и есть ответ
+#: на «есть ли смысл»), потом остальное. Источники, которых нет в этом списке,
+#: в карточку не идут: их место в полном отчёте по кнопке.
+_FACT_TITLES: tuple[tuple[ProviderName, str], ...] = (
+    (ProviderName.FSSP, "Производства"),
+    (ProviderName.FEDRESURS, "Банкротство"),
+    (ProviderName.INHERITANCE, "Наследственные дела"),
+    (ProviderName.PLEDGE, "Залоги"),
+    (ProviderName.FNS, "Бизнес"),
+    (ProviderName.COURT, "Суды"),
+)
+
+
+def _facts(report: DebtorReport) -> list[str]:
+    """Что нашли — по строке на источник, без объяснений.
+
+    Это главное, зачем карточку читают, и в референсе владелицы оно стоит
+    именно так: список «ключ: значение», а подробности — по кнопке. Раньше
+    карточка показывала вердикт, деньги и балл, но не сами факты: чтобы узнать,
+    есть ли производства, приходилось открывать страницу.
+
+    Печатается только то, на что ответили: найденное числом, ненайденное словом
+    «нет». Неспрошенное сюда не попадает — не потому, что о нём молчат, а
+    потому, что о нём говорят иначе: блоком ниже, причиной и сразу за всех
+    («нужна дата рождения»). Пять строк «не спрашивали» подряд читаются как
+    пять бед, хотя беда одна и чинится одним действием.
+    """
+    by_provider = {result.provider: result for result in report.provider_results}
+    lines: list[str] = []
+    for provider, title in _FACT_TITLES:
+        result = by_provider.get(provider)
+        if result is None:
+            continue
+        state = source_state(result)
+        if state.code is SourceStateCode.FOUND:
+            lines.append(f"{title}: {len(result.records)}")
+        elif state.code is SourceStateCode.EMPTY:
+            lines.append(f"{title}: нет")
+        # Неспрошенное строкой не печатается вовсе, и это правило владелицы:
+        # карточка называет, чего не хватает, но не перечисляет источники.
+        # Пропущенное не теряется — про него говорит блок ниже, причинами и
+        # сгруппированно: «нужна дата рождения» одной строкой на всех, а не
+        # пять строк «не спрашивали» подряд.
+    return lines
 
 
 def _gaps(report: DebtorReport) -> list[str]:
