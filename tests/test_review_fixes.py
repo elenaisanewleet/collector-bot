@@ -1583,3 +1583,59 @@ async def test_a_person_link_does_not_open_the_whole_base(container: Container) 
     assert share.read_person_token(token[:-1] + "x") is None
     head, _person, signature = token.split(".")
     assert share.read_person_token(f"{head}.999.{signature}") is None
+
+
+# ---- 32. «Проверить человека» начинает нового, а не показывает вчерашнего
+
+
+async def test_a_cold_card_starts_a_new_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Нажали «Проверить человека» — получили вопрос, а не остаток прошлого раза.
+
+    Недособранная карточка переживала и перезапуск бота, и сутки простоя.
+    Оператор жал кнопку и видел экран с чужим телефоном, который бот уже забыл
+    («сам номер не храню, пришлите заново»), и с «пропустили» в трёх полях,
+    которых он не пропускал. Выглядит это поломкой бота — и справедливо.
+
+    Два признака остывшей карточки, и оба означают одно: это остаток, а не
+    работа в процессе. Бот забыл секрет — запускать её нечем. Давно не трогали
+    — человек начал другого должника.
+    """
+    from datetime import timedelta
+
+    from app.utils.dates import utcnow
+
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    await feed(dispatcher, bot, message=make_message("89991234501"))
+
+    card = await container.query_cards.load(OPERATOR_ID, CHAT_ID)
+    assert card.phone_masked, "телефон не записался"
+    # Так выглядит карточка, пролежавшая ночь.
+    card.updated_at = utcnow() - timedelta(hours=12)
+    await container.query_cards.save(card)
+
+    sent.texts.clear()
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+
+    screen = sent.joined
+    assert "пропустили" not in screen, "показаны чужие пропуски"
+    assert "пришлите заново" not in screen, "показан забытый номер"
+    assert "Телефон" in screen, "не спросил телефон заново"
+
+
+def test_a_forgotten_secret_makes_the_card_stale() -> None:
+    """Бот забыл номер — карточка остаток, даже если её трогали минуту назад.
+
+    Значения нет, запускать нечем, и предлагать оператору «пришлите заново» в
+    карточке прошлого человека бессмысленно: он давно про другого.
+    """
+    from app.services.query_card import Card
+
+    fresh = Card(telegram_user_id=1, chat_id=1, phone_masked="+7 (999) ***-**-01")
+    assert fresh.stale, "карточка с забытым номером не считается остатком"
+
+    alive = Card(
+        telegram_user_id=1, chat_id=1, phone_masked="+7 (999) ***-**-01", phone="+79991234501"
+    )
+    assert not alive.stale
