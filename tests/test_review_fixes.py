@@ -54,6 +54,7 @@ from .bot_harness import (
     CHAT_ID,
     OPERATOR_ID,
     SentMessages,
+    dispatcher_for,
     feed,
     make_callback,
     make_message,
@@ -1329,3 +1330,55 @@ def test_the_telegram_bridge_reads_the_real_reply_shape() -> None:
 
     birth = _BIRTH_IN_TEXT.search(reply)
     assert birth is not None and birth.group(1) == "24.11.1994"
+
+
+async def test_a_phone_alone_runs_the_check_from_the_bot(
+    container: Container, bot: Bot, sent: SentMessages
+) -> None:
+    """«Проверить» по одному номеру доходит до прогона — проверено ЧЕРЕЗ БОТА.
+
+    Мост был написан, покрыт тестами и недостижим: до поиска из бота ведёт одна
+    дорога — ``run_card``, а она за ``Card.runnable``, которая телефон
+    основанием для прогона не считала. Оператор жал «Проверить» и получал
+    всплывашку «нужны фамилия с именем, или ИНН, или госномер». Мост при этом
+    не вызывался ни разу.
+
+    Прежний тест этого не увидел, потому что дёргал сервис напрямую, минуя
+    хендлер. Отсюда правило для этого файла: сценарий оператора проверяется
+    тем же путём, которым идёт оператор.
+
+    Само ограничение было верным ДО моста: телефон, по которому в выгрузке
+    никого нет, во внешние реестры не несёт ничего, и платный прогон дал бы пять
+    строк «нужно ФИО». С мостом номер перестаёт быть тупиком — и решает это не
+    карточка, а подключённость моста в этом развёртывании.
+    """
+    container.registry._phone_bridge = _PhoneBridgeStub(container.settings)
+    await container.import_service.import_text(
+        "ФИО,Дата рождения,Госномер\nТестов Андрей Сергеевич,15.03.1980,А123ВС777"
+    )
+    dispatcher = dispatcher_for(container)
+
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+    sent.texts.clear()
+    await feed(dispatcher, bot, callback_query=make_callback("qc:run"))
+
+    assert sent.joined, "«Проверить» по номеру не ответило ничем"
+    assert "нужны фамилия с именем" not in sent.joined, "мост из бота недостижим"
+    assert sent.contains("RECOVERY SCORE"), "прогон по одному номеру не дошёл до отчёта"
+
+
+async def test_without_the_bridge_a_phone_alone_still_refuses(
+    container: Container, bot: Bot, sent: SentMessages
+) -> None:
+    """Без моста номер по-прежнему тупик, и платный прогон по нему не идёт.
+
+    Пять строк «нужно ФИО» за деньги — это не проверка, а счёт за пустоту.
+    """
+    assert container.registry.phone_bridge is None
+    dispatcher = dispatcher_for(container)
+
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+    sent.texts.clear()
+    await feed(dispatcher, bot, callback_query=make_callback("qc:run"))
+
+    assert not sent.contains("RECOVERY SCORE"), "прогон ни о ком за деньги"

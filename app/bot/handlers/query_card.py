@@ -287,6 +287,17 @@ async def settle(
     await show(message, container, card, notice=_ambiguous(found, card) or notice)
 
 
+def _phone_resolves(container: Container) -> bool:
+    """Умеет ли это развёртывание превращать номер в ФИО.
+
+    Спрашивается у реестра, а не хранится в карточке: подключённость моста —
+    свойство развёртывания, а не должника, и засоленная в строке БД вчерашняя
+    настройка пережила бы саму настройку.
+    """
+    bridge = container.registry.phone_bridge
+    return bridge is not None and bridge.is_configured
+
+
 def _has_exact_key(card: Card) -> bool:
     """Есть ли в карточке ключ, по которому строка находится точно.
 
@@ -357,7 +368,8 @@ async def recognised(
     # когда по нему сейчас пойдёт платный запрос.
     await show(message, container, card, notice=f"{notice} {found}" if notice else found)
 
-    if autorun and card.runnable and card.last_run_hash != container.query_cards.run_hash(card):
+    runnable = card.runnable_with(phone_resolves=_phone_resolves(container))
+    if autorun and runnable and card.last_run_hash != container.query_cards.run_hash(card):
         await run_card(message, container, card, user_id)
 
 
@@ -388,7 +400,10 @@ def run_notes(subject: SearchSubject, container: Container) -> list[str]:
 
 async def run_card(message: Message, container: Container, card: Card, user_id: int) -> None:
     """Проверить то, что собрано, и переотправить карточку под отчётом."""
-    subject = card.subject()
+    # Один телефон — законный субъект, когда мост умеет перевести его в ФИО:
+    # имя добудется внутри поиска, до обращения к реестрам. Без моста номер
+    # по-прежнему тупик, и субъекта из него не выйдет.
+    subject = card.subject(allow_phone_only=_phone_resolves(container))
     if subject is None:  # pragma: no cover — проверено вызывающим
         return
 
@@ -593,7 +608,7 @@ def build_router() -> Router:
             await answer_callback(callback)
             return
         card = await container.query_cards.load(user_id, message.chat.id)
-        if not card.runnable:
+        if not card.runnable_with(phone_resolves=_phone_resolves(container)):
             await callback.answer(card_view.NOTHING_TO_RUN, show_alert=True)
             return
         if card.last_run_hash and card.last_run_hash == container.query_cards.run_hash(card):

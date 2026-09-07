@@ -228,12 +228,27 @@ class Card:
         Паспорта тоже нет: сам по себе он не открывает ничего, мост требует к
         нему ещё ФИО и дату. Договор и адрес есть: по ним поднимается строка из
         1С — главного источника, — и это законный самостоятельный запрос.
+
+        Всё сказанное верно, ПОКА нет моста «телефон → ФИО». С ним номер
+        перестаёт быть тупиком: мост переводит его в имя, и дальше запускается
+        обычная проверка человека. Поэтому есть второй вход —
+        :meth:`runnable_with`, — и решает там не карточка, а тот, кто знает,
+        подключён ли мост.
         """
         return bool(
             self.name or self.inn or self.plate or self.vin or self.contract_number or self.address
         )
 
-    def subject(self) -> SearchSubject | None:
+    def runnable_with(self, *, phone_resolves: bool) -> bool:
+        """Есть ли по чему запускать, если номер умеет превращаться в ФИО.
+
+        Отдельным методом, а не флагом на карточке: подключённость моста —
+        свойство развёртывания, а не этого должника, и хранить её в строке БД
+        значило бы засолить в карточке вчерашнюю настройку.
+        """
+        return self.runnable or (phone_resolves and bool(self.phone))
+
+    def subject(self, *, allow_phone_only: bool = False) -> SearchSubject | None:
         """Субъект поиска из карточки. ``None`` — спрашивать нечего.
 
         Живёт на самой карточке, а не в сервисе, потому что потребителей два:
@@ -248,7 +263,7 @@ class Card:
         бы отправить в ФССП субъект без ФИО и получить «нужно ФИО» там, где
         вопрос был про машину.
         """
-        if not self.runnable:
+        if not (self.runnable or (allow_phone_only and self.phone)):
             return None
         vehicle = (
             VehicleDescriptor(plate=self.plate, vin=self.vin) if (self.plate or self.vin) else None
