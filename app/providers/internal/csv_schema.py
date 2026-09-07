@@ -453,8 +453,6 @@ class DebtorRow:
             "vehicle_plate",
             "vin",
             "created_at",
-            "impounded_at",
-            "released_at",
         ):
             if getattr(self, name) is None and getattr(earlier, name) is not None:
                 setattr(self, name, getattr(earlier, name))
@@ -468,6 +466,10 @@ class DebtorRow:
             *earlier.source_ids,
             *(sid for sid in self.source_ids if sid not in earlier.source_ids),
         ]
+        # Даты постановки и выдачи в этот список НЕ входят: они свойство
+        # эпизода, а не человека. Подтянутая от чужого задержания дата собрала
+        # бы пару из разных эпизодов — и срок хранения вышел бы то нулевым, то
+        # в сто раз завышенным. Эпизоды целиком лежат ниже.
         self.episodes = [
             *earlier.episodes,
             *(pair for pair in self.episodes if pair not in earlier.episodes),
