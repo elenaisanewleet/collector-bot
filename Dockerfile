@@ -14,12 +14,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 # invalidate the dependency layer.
 COPY pyproject.toml README.md ./
 COPY app/__init__.py app/__init__.py
-# С экстра telegram-lookup: мост «телефон → ФИО» разговаривает с ботом от
-# имени пользовательского аккаунта, и без telethon он в контейнере не
-# поднимется. Экстра ставится всегда, включается настройкой — выключенный
-# мост ничего не стоит, а пересборка образа ради одной строки в .env стоит
-# простоя.
-RUN pip install --upgrade pip && pip install '.[telegram-lookup]'
+RUN pip install --upgrade pip && pip install .
 
 
 FROM python:3.12-slim AS runtime

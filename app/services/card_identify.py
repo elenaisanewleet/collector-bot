@@ -53,13 +53,24 @@ NAMES_SHOWN = 5
 class Identified:
     """Что выгрузка ответила на то, что уже собрано в карточке.
 
-    Пустой экземпляр значит «спросить было нечем ИЛИ никого нет» — и это
-    намеренно один случай: для сценария оба означают «задавай следующий вопрос».
-    Разницу между «не спрашивали» и «не нашли» держит отчёт, где у внутреннего
-    источника есть собственная строка состояния; здесь она ни на что не влияет.
+    Пустой результат раньше значил «спросить было нечем ИЛИ никого нет» одним
+    случаем: для порядка вопросов оба означают «задавай следующий». Но оператор
+    читает не порядок вопросов, а экран, и на нём эти два состояния обязаны
+    различаться — как и везде в этом продукте. Человек, приславший номер и
+    получивший вопрос «Фамилия», решает, что бот его не понял; на деле бот искал
+    и не нашёл, и это ответ, а не молчание.
+
+    Поэтому ``asked`` — спрашивали ли выгрузку вообще.
     """
 
     records: tuple[InternalDebtorRecord, ...] = ()
+    #: Выгрузку спросили. ``False`` — спрашивать было нечем.
+    asked: bool = False
+
+    @property
+    def missed(self) -> bool:
+        """Спросили и не нашли. Это ответ, и его говорят вслух."""
+        return self.asked and not self.records
 
     @property
     def only(self) -> InternalDebtorRecord | None:
@@ -87,7 +98,7 @@ async def identify(search: SearchService, card: Card) -> Identified:
     subject = probe(card)
     if subject is None:
         return Identified()
-    return Identified(tuple(await search.lookup_internal(subject)))
+    return Identified(tuple(await search.lookup_internal(subject)), asked=True)
 
 
 def probe(card: Card) -> SearchSubject | None:

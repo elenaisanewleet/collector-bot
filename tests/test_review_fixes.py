@@ -29,7 +29,6 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 from decimal import Decimal
-from types import SimpleNamespace
 
 import pytest
 from aiogram import Bot, Dispatcher
@@ -44,7 +43,6 @@ from app.domain.identity import NameParseError, PersonName, SearchSubject
 from app.domain.models import DebtorReport, ProviderResult
 from app.domain.verdict import Verdict
 from app.providers.phone_bridge import PhoneNameProvider, PhoneNameResult
-from app.providers.phone_bridge_telegram import TelegramPhoneNameProvider
 from app.services.batch import BatchAlreadyRunningError, BatchService
 from app.services.scoring import RecoveryScoreEngine
 from tests.conftest import make_proceeding
@@ -1191,147 +1189,6 @@ async def test_a_free_line_name_still_does_not_touch_the_export(
     assert "Нашёл" not in sent.joined
 
 
-# ---- 25. мост «телефон → ФИО» через переписку с ботом в Telegram
-
-
-class _FakeConversation:
-    def __init__(self, reply: str) -> None:
-        self._reply = reply
-        self.sent: list[str] = []
-
-    async def __aenter__(self) -> _FakeConversation:
-        return self
-
-    async def __aexit__(self, *exc: object) -> None:
-        return None
-
-    async def send_message(self, text: str) -> None:
-        self.sent.append(text)
-
-    async def get_response(self) -> SimpleNamespace:
-        return SimpleNamespace(text=self._reply)
-
-
-class _FakeTelegram:
-    """Клиент Telethon ровно в той части, которую трогает мост."""
-
-    def __init__(self, reply: str) -> None:
-        self.reply = reply
-        self.talks: list[_FakeConversation] = []
-
-    def is_connected(self) -> bool:
-        return True
-
-    def conversation(self, target: str, timeout: float) -> _FakeConversation:
-        talk = _FakeConversation(self.reply)
-        self.talks.append(talk)
-        return talk
-
-
-def _telegram_bridge(settings: Settings, reply: str) -> TelegramPhoneNameProvider:
-    settings.telegram_lookup_min_interval_seconds = 0.0
-    return TelegramPhoneNameProvider(settings, client=_FakeTelegram(reply))
-
-
-async def test_the_telegram_bridge_reads_the_name_out_of_free_text(
-    settings: Settings,
-) -> None:
-    """Бот отвечает свободным текстом, и ФИО достаётся из него разбором.
-
-    Подпись поля у каждого сервиса своя — «ФИО:», «Имя:», вообще без подписи, —
-    а форма имени одна. Ищем форму, а не подпись, иначе мост ломается от смены
-    формулировки, которую никто не анонсирует.
-    """
-    bridge = _telegram_bridge(
-        settings,
-        "Найдено по номеру +7 985 198-29-45\nФИО: Тестов Андрей Сергеевич\nДР: 15.03.1980",
-    )
-
-    result = await bridge.fetch(
-        SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945")
-    )
-
-    assert isinstance(result, PhoneNameResult)
-    assert result.status is ProviderStatus.SUCCESS
-    assert result.name is not None and result.name.full == "Тестов Андрей Сергеевич"
-    assert result.birth_date == date(1980, 3, 15)
-    assert not result.records, "мост принёс записи — он не источник фактов"
-
-
-async def test_the_telegram_bridge_never_guesses_a_name(settings: Settings) -> None:
-    """Не разобрали — «имя не определено», а не похожее имя.
-
-    Собранное «примерно» имя поднимет не ту строку выгрузки, и отчёт уедет про
-    другого человека — молча, без единого признака ошибки.
-    """
-    bridge = _telegram_bridge(settings, "Ничего не найдено. Проверьте номер.")
-
-    result = await bridge.fetch(
-        SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945")
-    )
-
-    assert isinstance(result, PhoneNameResult)
-    assert result.status is ProviderStatus.NO_RESULTS
-    assert result.name is None
-
-
-async def test_the_telegram_bridge_stays_out_of_the_batch_run(settings: Settings) -> None:
-    """Массовый прогон через чат не ходит: это FloodWait и потеря аккаунта.
-
-    И нужды в нём нет: в выгрузке есть ФИО и госномера, а телефона нет вовсе —
-    мосту там нечего переводить. Ответ «не спрашивали», а не «не нашли»:
-    разница обязана быть видна и здесь.
-    """
-    from app.providers.base import FetchContext
-
-    fake = _FakeTelegram("ФИО: Тестов Андрей Сергеевич")
-    settings.telegram_lookup_min_interval_seconds = 0.0
-    bridge = TelegramPhoneNameProvider(settings, client=fake)
-
-    result = await bridge.fetch(
-        SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945"),
-        FetchContext(batch=True),
-    )
-
-    assert result.status is ProviderStatus.NOT_CONFIGURED
-    assert not fake.talks, "мост написал боту во время массового прогона"
-
-
-def test_the_telegram_bridge_reads_the_real_reply_shape() -> None:
-    """Разбор проверен на настоящем ответе сервиса, а не на придуманном.
-
-    Две вещи в нём ломают наивный разбор, и обе видны только на живом примере:
-    имя разделено ДВОЙНЫМИ пробелами, а само сообщение начинается с блока про
-    телефон, оператора и регион — то есть до ФИО идёт текст, в котором тоже
-    есть слова с большой буквы.
-
-    Номер здесь пример проекта, а не чужой: настоящий в репозиторий не едет.
-    """
-    from app.providers.phone_bridge_telegram import _BIRTH_IN_TEXT, _find_name
-
-    reply = (
-        "📱\n"
-        "├ Телефон: 89160000000\n"
-        "├ Оператор: МТС\n"
-        "├ Регион: г.Москва и Московская область\n"
-        "└ Страна: Россия\n"
-        "\n"
-        "👤 Основные данные\n"
-        "├ ФИО: Клочкова  Елена  Николаевна\n"
-        "├ Дата рождения: 24.11.1994\n"
-        "└ Возраст: 31\n"
-    )
-
-    name = _find_name(reply)
-    assert name is not None, "ФИО из настоящего ответа не разобралось"
-    assert name.last_name == "Клочкова"
-    assert name.first_name == "Елена"
-    assert name.middle_name == "Николаевна"
-
-    birth = _BIRTH_IN_TEXT.search(reply)
-    assert birth is not None and birth.group(1) == "24.11.1994"
-
-
 async def test_a_phone_alone_runs_the_check_from_the_bot(
     container: Container, bot: Bot, sent: SentMessages
 ) -> None:
@@ -1456,12 +1313,12 @@ def test_a_blank_numeric_setting_does_not_crash_the_bot() -> None:
     Цена ошибки несоразмерна причине: бот молчал на все сообщения, а в .env
     стояла заготовка под настройку, которую ещё не включили.
     """
-    from app.config import Settings
 
-    settings = Settings(_env_file=None, TELEGRAM_LOOKUP_API_ID="")
+    settings = Settings(_env_file=None, WEB_PORT="", CACHE_TTL_HOURS="", TOW_FEE="")
 
-    assert settings.telegram_lookup_api_id == 0
-    assert not settings.telegram_lookup_configured
+    assert settings.web_port == 8080
+    assert settings.cache_ttl_hours == 24
+    assert settings.tow_fee == Decimal("5000")
 
 
 # ---- 28. долг складывается по всем задержаниям, а не по последнему

@@ -284,7 +284,54 @@ async def settle(
 
     if guided:
         container.query_cards.step_forward(card)
-    await show(message, container, card, notice=_ambiguous(found, card) or notice)
+    await show(
+        message,
+        container,
+        card,
+        notice=_ambiguous(found, card) or _missed(found, card) or notice,
+    )
+
+
+def _missed(found: card_identify.Identified, card: Card) -> str | None:
+    """«Искал по номеру телефона — в выгрузке никого нет».
+
+    Раньше здесь было молчание: человек присылал номер и получал следующий
+    вопрос без единого слова о том, что поиск был. Читается это как «бот меня не
+    понял», хотя бот искал и не нашёл — а это ответ, и разница между «спросили и
+    пусто» и «не спрашивали» в этом продукте держится везде.
+
+    Говорится только про ТОЧНЫЕ ключи. По одному имени выгрузка отвечает
+    похожими, а не теми же, и «не нашёл» по нему значил бы больше, чем есть:
+    человек мог быть записан с девичьей фамилией.
+    """
+    if not found.missed:
+        return None
+    key = _searched_by(card)
+    if key is None:
+        return None
+    return f"{card_view.NOT_IN_EXPORT.format(key=key)} {card_view.NOT_IN_EXPORT_TRY}"
+
+
+def _searched_by(card: Card) -> str | None:
+    """Чем искали — словами и всем сразу.
+
+    Выгрузка спрашивается всеми точными ключами разом, поэтому назвать один из
+    них значит соврать: оператор прислал госномер, прочитал «искал по номеру
+    телефона» и решил, что его не услышали.
+    """
+    named = [
+        title
+        for value, title in (
+            (card.phone, "номеру телефона"),
+            (card.plate, "госномеру"),
+            (card.vin, "VIN"),
+            (card.contract_number, "номеру договора"),
+        )
+        if value
+    ]
+    if not named:
+        return None
+    return named[0] if len(named) == 1 else ", ".join(named[:-1]) + " и " + named[-1]
 
 
 def _phone_resolves(container: Container) -> bool:

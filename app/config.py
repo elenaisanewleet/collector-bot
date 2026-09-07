@@ -225,30 +225,6 @@ class Settings(BaseSettings):
     phone_bridge_auth_name: str = "X-Api-Key"
     phone_bridge_field_map: Path | None = None
 
-    # Второй адаптер того же моста: разговор с ботом в Telegram от имени
-    # пользовательского аккаунта. Нужен, когда у сервиса нет HTTP-ручки вовсе —
-    # телеграм-бот адреса наружу не имеет, и боты не пишут друг другу.
-    #
-    # Файл сессии равен полному доступу к аккаунту, под которым выполнен вход:
-    # держится ВНЕ репозитория, режимом 600, и под эту работу заводится
-    # отдельный аккаунт, а не рабочий. Вход выполняется один раз руками
-    # (scripts/telegram_login.py); в рантайме бота интерактивного входа не
-    # происходит никогда.
-    telegram_lookup_enabled: bool = False
-    # int, но пустая строка в .env его не роняет. Незаполненная настройка —
-    # нормальное состояние, а не ошибка: «TELEGRAM_LOOKUP_API_ID=» без значения
-    # человек пишет ровно тогда, когда собирается заполнить её позже. Падение
-    # на старте из-за такой строки уже случилось на проде и увело бота в цикл
-    # перезапуска — с пустой строкой поле обязано читаться как «не задано».
-    telegram_lookup_api_id: int = 0
-    telegram_lookup_api_hash: str = ""
-    telegram_lookup_session: Path | None = None
-    telegram_lookup_bot: str = ""
-    telegram_lookup_reply_timeout_seconds: Annotated[float, Field(ge=1.0, le=120.0)] = 30.0
-    # Пауза между обращениями. Без неё интерактивная работа упирается в
-    # FloodWait, а следом — в ограничение аккаунта.
-    telegram_lookup_min_interval_seconds: Annotated[float, Field(ge=0.0, le=60.0)] = 3.0
-
     # ---------------------------------------------------------------- import
     max_import_file_bytes: Annotated[int, Field(ge=1024)] = 5 * 1024 * 1024
     max_import_rows: Annotated[int, Field(ge=1)] = 50_000
@@ -478,31 +454,35 @@ class Settings(BaseSettings):
         """
         return self.newdb_configured and self.rosreestr_enabled
 
-    @field_validator("telegram_lookup_api_id", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def _blank_api_id_is_zero(cls, value: object) -> object:
-        """Пустая строка — это «не задано», а не «не число»."""
-        if isinstance(value, str) and not value.strip():
-            return 0
-        return value
+    def _blank_means_unset(cls, data: object) -> object:
+        """Пустая строка в .env — это «не задано», а не «не число».
 
-    @property
-    def telegram_lookup_configured(self) -> bool:
-        """Разговор с ботом настроен и вход уже выполнен.
+        Незаполненная настройка — нормальное промежуточное состояние: строку
+        пишут ровно тогда, когда собираются заполнить её позже. Так и вышло:
+        заготовка «TELEGRAM_LOOKUP_API_ID=» без значения увела бота в цикл
+        перезапуска — pydantic не разобрал пустую строку как int, падение
+        случилось до настройки логгера, и в логах остался ValidationError без
+        имени поля. Бот молчал на все сообщения, пока причину искали.
 
-        Существование файла сессии проверяется здесь намеренно: без него
-        подключение попыталось бы спросить код подтверждения у несуществующего
-        человека посреди обработки сообщения. Мост обязан ответить «не
-        подключено» заранее.
+        Правило общее, а не про одно поле: так же уронила бы любая пустая
+        числовая строка — WEB_PORT, CACHE_TTL_HOURS, TOW_FEE. Пустое значение
+        выбрасывается, и поле берёт своё умолчание.
         """
-        return bool(
-            self.telegram_lookup_enabled
-            and self.telegram_lookup_api_id
-            and self.telegram_lookup_api_hash
-            and self.telegram_lookup_bot
-            and self.telegram_lookup_session is not None
-            and self.telegram_lookup_session.exists()
-        )
+        if not isinstance(data, dict):
+            return data
+        numeric = {
+            name
+            for name, field in cls.model_fields.items()
+            if field.annotation in (int, float, Decimal)
+            or (getattr(field.annotation, "__origin__", None) is not None)
+        }
+        return {
+            key: value
+            for key, value in data.items()
+            if not (isinstance(value, str) and not value.strip() and key.lower() in numeric)
+        }
 
     @property
     def phone_bridge_configured(self) -> bool:

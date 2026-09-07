@@ -189,12 +189,6 @@ def build_phone_bridge(settings: Settings) -> PhoneNameProvider | None:
     ``None``, а не выключенный провайдер: незаполненный мост не должен занимать
     строку в отчёте у тех, кто вводит ФИО и в переводе номера не нуждается.
     """
-    # Разговор с ботом в Telegram — второй адаптер того же слота, и он идёт
-    # первым: его включают тогда, когда HTTP-ручки у сервиса нет вовсе.
-    if settings.telegram_lookup_enabled:
-        from app.providers.phone_bridge_telegram import TelegramPhoneNameProvider
-
-        return TelegramPhoneNameProvider(settings)
     if not settings.phone_bridge_enabled:
         return None
     return PhoneNameProvider(settings)
