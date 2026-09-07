@@ -522,7 +522,16 @@ async def run_card(message: Message, container: Container, card: Card, user_id: 
     card.awaiting_field = None
     card.guided = False
     card.last_run_empty = _came_back_empty(report)
-    await show(message, container, card)
+    # Карточка под отчёт больше не переотправляется. Она повторяла всё, что уже
+    # сказано выше — ФИО, дату, госномер, договор, адрес, — и добавляла к ним
+    # тринадцать кнопок. На один введённый номер приходило три сообщения, из
+    # которых последнее было самым длинным и самым бесполезным; именно на него
+    # владелица показала словами «а че опять за херня, че за текста».
+    #
+    # Дописать поле по-прежнему можно: «Уточнить данные» под отчётом открывает
+    # ту же карточку. Разница в том, что теперь её показывают по просьбе, а не
+    # каждому и всегда.
+    await container.query_cards.save(card)
 
 
 def _came_back_empty(report: DebtorReport) -> bool:

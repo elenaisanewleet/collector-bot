@@ -363,22 +363,31 @@ async def test_a_field_sent_after_the_report_keeps_the_person(
     assert subject.name.middle_name == "Сергеевич"
 
 
-async def test_the_card_is_reposted_below_the_report(
+async def test_the_card_steps_aside_for_the_report(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
-    """Иначе карточка навсегда уезжает выше отчёта и оператор правит вслепую."""
+    """После проверки последним в чате остаётся отчёт, а не карточка.
+
+    Старое сообщение карточки снимается — иначе она навсегда уезжает выше
+    отчёта и оператор правит то, чего не видит. Но и заново под отчётом она
+    не появляется: это было три сообщения на один введённый номер, из которых
+    последнее повторяло всё сказанное выше и несло тринадцать кнопок.
+
+    Карточка помечена проверенной, чтобы следующее открытие через «Уточнить
+    данные» показало «Перепроверить», а не «Проверить».
+    """
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич 12.03.1985"))
     before = await card_of(container)
     assert before is not None
-    old_message_id = before.card_message_id
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
 
     after = await card_of(container)
     assert after is not None
-    assert after.card_message_id != old_message_id
-    assert last(sent).startswith("Проверка должника — проверено в ")
-    assert "Перепроверить" in buttons(sent)
+    assert after.card_message_id is None, "старое сообщение карточки не снято"
+    assert after.checked_at is not None
+    assert not last(sent).startswith("Проверка должника — проверено в ")
+    assert "Уточнить данные" in buttons(sent)
 
 
 # ---------------------------------------------------------------- честность

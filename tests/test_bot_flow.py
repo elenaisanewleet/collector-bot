@@ -454,14 +454,24 @@ async def test_a_field_added_after_the_report_keeps_the_same_person(
     assert subject.birth_date is not None
 
 
-async def test_the_card_is_reposted_under_the_report(
+async def test_the_report_is_the_last_word_not_the_card(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """Иначе карточка навсегда уезжает выше отчёта, и правят то, чего не видят."""
+    """Под отчётом больше не приезжает карточка сбора.
+
+    Она повторяла всё, что уже сказано в отчёте — ФИО, дату, госномер,
+    договор, адрес, — и добавляла тринадцать кнопок. На один введённый номер
+    приходило три сообщения, из которых последнее было самым длинным и самым
+    бесполезным; на него владелица и показала: «а че опять за херня».
+
+    Дописать поле по-прежнему можно — «Уточнить данные» открывает ту же
+    карточку. Разница в том, что теперь её показывают по просьбе.
+    """
     await collect_and_run(dispatcher, bot)
 
-    assert sent.texts[-1].startswith("Проверка должника — проверено в ")
-    assert "Перепроверить" in buttons(sent)
+    assert not sent.texts[-1].startswith("Проверка должника — проверено в ")
+    assert "Уточнить данные" in buttons(sent)
+    assert "Перепроверить" not in buttons(sent)
 
 
 # ---------------------------------------------------------------- other flows
@@ -680,13 +690,24 @@ async def test_a_ten_digit_inn_is_refused_as_a_company(
     assert not sent.contains("RECOVERY SCORE")
 
 
-async def test_the_region_is_an_offer_under_the_card_not_a_step(
+async def test_the_region_is_an_offer_never_a_step(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
+    """Регион не спрашивают по дороге, и кнопки под этим отчётом нет.
+
+    Кнопка «Сузить до одного региона» показывается только когда есть что
+    сужать: регион сужает поиск по ФССП, а здесь производств не нашлось.
+    Проверка того, когда она появляется, — в ``tests/test_report_actions.py``.
+
+    Сам обработчик остаётся живым и проверяется здесь же: кнопки ``padd:*``
+    висят в чате под старыми отчётами бесконечно, и молчащая кнопка хуже
+    отсутствующей.
+    """
     await collect_and_run(dispatcher, bot)
     assert not sent.contains("Выберите регион")
+    assert "Сузить до одного региона" not in buttons(sent)
 
-    token = _last_add_token(sent, "region")
+    token = _last_add_token(sent, "refine")
     await feed(dispatcher, bot, callback_query=make_callback(f"padd:region:{token}"))
     assert sent.contains("Сейчас ищу по всем регионам")
 

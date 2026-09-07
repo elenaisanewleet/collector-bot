@@ -133,21 +133,16 @@ async def run_and_send_report(
     # добыл мост. Иначе «Обновить» и предложения под карточкой рассуждали бы о
     # вопросе, а не об ответе.
     token = container.subject_store.put(report.subject)
-    # Клавиатура строится до раннего возврата без ссылки, а ``export_urls``
-    # принимает str — поэтому адреса выгрузки считаются под условием, как в
-    # ``handlers/batch.py``.
-    text_url: str | None = None
-    print_url: str | None = None
-    if url is not None:
-        text_url, print_url = container.share_service.export_urls(url, ShareKind.REPORT)
     keyboard = report_actions.report_keyboard(
         url=url,
         refresh_token=token,
         subject=report.subject,
         bridge=container.registry.inn_bridge,
-        text_url=text_url,
-        print_url=print_url,
         records=report.fact_count,
+        # Сузить до региона можно только то, что регион и сужает: поиск по
+        # ФССП. Если производств не нашлось или регион уже один, кнопка
+        # обещала бы результат, которого не будет.
+        narrowable=bool(report.enforcement_proceedings) and len(report.subject.regions) != 1,
     )
 
     if url is None:

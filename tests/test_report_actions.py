@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from aiogram.types import InlineKeyboardMarkup
 
 from app.bot.report_actions import passport_would_help, report_keyboard
 from app.config import Settings
@@ -108,10 +109,11 @@ def button_texts(markup: object) -> list[str]:
 def test_a_complete_subject_keeps_the_keyboard_as_short_as_before(
     bridge_settings: Settings, subject: SearchSubject
 ) -> None:
-    """ФИО, дата и ИНН — предлагать нечего, кроме региона, ссылки и повтора.
+    """ФИО, дата и ИНН — предлагать нечего, кроме ссылки, уточнения и повтора.
 
-    Добор полей переехал в карточку запроса, которая стоит сразу под отчётом.
-    Второй ряд кнопок про то же самое здесь был бы не помощью, а шумом.
+    Добор полей переехал в карточку запроса, а она теперь за кнопкой
+    «Уточнить данные»: под каждым отчётом она приезжала сама и повторяла
+    всё уже сказанное — двадцать строк и тринадцать кнопок.
     """
     complete = subject.model_copy(update={"inn": "770912345601"})
     markup = report_keyboard(
@@ -127,40 +129,40 @@ def test_a_complete_subject_keeps_the_keyboard_as_short_as_before(
     # выглядеть ненавязчиво.
     assert not any(text.startswith("Добавить") for text in texts)
     assert "Открыть отчёт" in texts
-    assert "Спросить источники заново" in texts
+    assert "Спросить заново" in texts
     # Тупиков нет: с карточки отчёта видно и следующего должника, и меню.
     assert "Новая проверка" in texts
     assert "В меню" in texts
 
 
-def test_the_export_row_rides_along_with_the_link(
+def test_печать_и_файлом_живут_на_странице_а_не_в_чате(
     bridge_settings: Settings, subject: SearchSubject
 ) -> None:
-    """Выгрузка живёт в той же клавиатуре, что ссылка и сужение по региону.
+    """Кнопок выгрузки под отчётом нет: обе ссылки уже стоят в шапке страницы.
 
-    Клавиатур под карточкой ровно одна: пока их было две, «Полный отчёт» и
-    предложения показывались взаимоисключающе, и оператор терял то одно, то
-    другое.
+    Они вели ровно туда же, куда «Открыть отчёт», — на тот же хост, тот же
+    токен, тот же документ. Три адреса до одного места, один под другим, это
+    не выбор, а шум, и именно на такие ряды показывали словами «одни кнопки».
+    Печать и выгрузка никуда не делись: их печатает
+    :func:`app.web.render._export_actions` в шапке самого отчёта.
     """
     markup = report_keyboard(
         url="https://reports.example.test/r/x",
         refresh_token="tok",
         subject=subject,
         bridge=PassportInnProvider(bridge_settings),
-        text_url="https://reports.example.test/r/x/report.txt",
-        print_url="https://reports.example.test/r/x/print",
     )
 
     texts = button_texts(markup)
-    assert "Печать" in texts
-    assert "Файлом" in texts
-    assert "Сузить до одного региона" in texts
+    assert "Печать" not in texts
+    assert "Файлом" not in texts
+    assert any(text.startswith("Открыть отчёт") for text in texts)
 
 
-def test_without_a_link_there_is_nothing_to_export(
+def test_without_a_link_the_report_still_offers_a_way_on(
     bridge_settings: Settings, subject: SearchSubject
 ) -> None:
-    """Деплой без веба: кнопок выгрузки нет, сужение по региону есть."""
+    """Деплой без веба: ссылки нет, но экран не тупик."""
     markup = report_keyboard(
         url=None,
         refresh_token="tok",
@@ -169,8 +171,33 @@ def test_without_a_link_there_is_nothing_to_export(
     )
 
     texts = button_texts(markup)
-    assert not any(text in texts for text in ("Печать", "Текстом", "Полный отчёт"))
-    assert "Сузить до одного региона" in texts
+    assert not any(text.startswith("Открыть отчёт") for text in texts)
+    assert "Уточнить данные" in texts
+    assert "Новая проверка" in texts
+
+
+def test_narrowing_by_region_is_offered_only_when_it_would_change_something(
+    bridge_settings: Settings, subject: SearchSubject
+) -> None:
+    """Регион сужает поиск по ФССП — и предлагается, только когда есть что сужать.
+
+    Раньше кнопка стояла под каждым отчётом по человеку, включая те, где
+    производств не нашлось вовсе: нажатие вело к выбору региона и повторному
+    поиску с тем же пустым результатом. Это то же правило, по которому здесь
+    не показывают «Узнать ИНН по паспорту», — кнопка не должна обещать того,
+    чего не будет.
+    """
+    def keyboard(*, narrowable: bool) -> InlineKeyboardMarkup:
+        return report_keyboard(
+            url="https://reports.example.test/r/x",
+            refresh_token="tok",
+            subject=subject,
+            bridge=PassportInnProvider(bridge_settings),
+            narrowable=narrowable,
+        )
+
+    assert "Сузить до одного региона" not in button_texts(keyboard(narrowable=False))
+    assert "Сузить до одного региона" in button_texts(keyboard(narrowable=True))
 
 
 def test_offers_never_appear_for_a_vehicle_search(bridge_settings: Settings) -> None:

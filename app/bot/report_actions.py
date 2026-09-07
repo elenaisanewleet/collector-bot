@@ -40,6 +40,8 @@ FIELD_BIRTH_DATE = "birth_date"
 FIELD_INN = "inn"
 FIELD_PASSPORT = "passport"
 FIELD_REGION = "region"
+#: «Уточнить данные» — открыть карточку сбора по тому же человеку.
+FIELD_REFINE = "refine"
 
 #: Паспорт-заглушка, которым проверяется «а если бы паспорт был?». Наружу не
 #: уходит никогда: :meth:`will_query` — чистая функция от полей субъекта.
@@ -52,9 +54,8 @@ def report_keyboard(
     refresh_token: str | None,
     subject: SearchSubject,
     bridge: InnBridgeProvider | None,
-    text_url: str | None = None,
-    print_url: str | None = None,
     records: int | None = None,
+    narrowable: bool = False,
 ) -> InlineKeyboardMarkup:
     """Клавиатура под карточкой: одно главное действие, под ним второстепенные.
 
@@ -63,9 +64,16 @@ def report_keyboard(
     прямо в подписи, потому что оно отвечает на вопрос «а есть ли там что
     смотреть» до нажатия, а не после загрузки страницы.
 
-    Дальше — выгрузка (отчёт чаще печатают и подшивают, чем дочитывают),
-    потом сужение региона, потом платное обновление, и последней строкой выход:
-    следующий должник и главное меню. Тупиков нет ни на одном экране.
+    Кнопок было семь, стало пять, и убирались не «лишние на глаз».
+
+    «Печать» и «Файлом» вели на ту же веб-страницу, у которой обе ссылки уже
+    стоят в шапке (:func:`app.web.render._export_actions`). Два адреса до
+    одного и того же места, один под другим, — это не выбор, а шум.
+
+    Сужение региона показывается, только когда оно что-то изменит: регион
+    сужает поиск по ФССП, и если производств не нашлось вовсе или регион уже
+    выбран, кнопка обещает результат, которого не будет. Это то же правило,
+    по которому здесь не показывают «Узнать ИНН по паспорту».
 
     ``records`` — сколько фактов в отчёте. ``None`` значит «не считали», и тогда
     подпись остаётся без числа: соврать нулём хуже, чем промолчать.
@@ -73,23 +81,25 @@ def report_keyboard(
     rows: list[list[InlineKeyboardButton]] = []
     if url:
         rows.append([InlineKeyboardButton(text=_report_label(records), url=url)])
-    export: list[InlineKeyboardButton] = []
-    if print_url:
-        export.append(InlineKeyboardButton(text="Печать", url=print_url))
-    if text_url:
-        export.append(InlineKeyboardButton(text="Файлом", url=text_url))
-    if export:
-        rows.append(export)
     if refresh_token:
-        rows.extend(_offers(subject, bridge, token=refresh_token))
         rows.append(
             [
+                # Карточка сбора больше не приезжает под каждый отчёт сама —
+                # она за этой кнопкой. Двадцать строк с уже сказанным и
+                # тринадцать кнопок под каждым ответом были главной жалобой на
+                # бота: «а че опять за херня, че за текста».
                 InlineKeyboardButton(
-                    text="Спросить источники заново",
+                    text="Уточнить данные",
+                    callback_data=f"{PERSON_ADD_PREFIX}:{FIELD_REFINE}:{refresh_token}",
+                ),
+                InlineKeyboardButton(
+                    text="Спросить заново",
                     callback_data=f"{REFRESH_PREFIX}:{refresh_token}",
-                )
+                ),
             ]
         )
+        if narrowable:
+            rows.extend(_offers(subject, bridge, token=refresh_token))
     rows.append(
         [
             InlineKeyboardButton(text="Новая проверка", callback_data=BACK_CALLBACK),
@@ -151,6 +161,7 @@ __all__ = [
     "FIELD_BIRTH_DATE",
     "FIELD_INN",
     "FIELD_PASSPORT",
+    "FIELD_REFINE",
     "FIELD_REGION",
     "PERSON_ADD_PREFIX",
     "passport_would_help",
