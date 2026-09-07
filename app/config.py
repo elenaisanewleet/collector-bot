@@ -235,6 +235,11 @@ class Settings(BaseSettings):
     # (scripts/telegram_login.py); в рантайме бота интерактивного входа не
     # происходит никогда.
     telegram_lookup_enabled: bool = False
+    # int, но пустая строка в .env его не роняет. Незаполненная настройка —
+    # нормальное состояние, а не ошибка: «TELEGRAM_LOOKUP_API_ID=» без значения
+    # человек пишет ровно тогда, когда собирается заполнить её позже. Падение
+    # на старте из-за такой строки уже случилось на проде и увело бота в цикл
+    # перезапуска — с пустой строкой поле обязано читаться как «не задано».
     telegram_lookup_api_id: int = 0
     telegram_lookup_api_hash: str = ""
     telegram_lookup_session: Path | None = None
@@ -472,6 +477,14 @@ class Settings(BaseSettings):
         скаляры. Разбор поэтому в коде, а гейтом служит настройка.
         """
         return self.newdb_configured and self.rosreestr_enabled
+
+    @field_validator("telegram_lookup_api_id", mode="before")
+    @classmethod
+    def _blank_api_id_is_zero(cls, value: object) -> object:
+        """Пустая строка — это «не задано», а не «не число»."""
+        if isinstance(value, str) and not value.strip():
+            return 0
+        return value
 
     @property
     def telegram_lookup_configured(self) -> bool:

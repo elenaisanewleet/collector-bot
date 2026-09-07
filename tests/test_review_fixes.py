@@ -1440,3 +1440,25 @@ async def test_words_in_the_passport_column_are_not_an_error(container: Containe
     warnings = " ".join(report.warnings)
     assert "Паспорт" in warnings, "испорченный паспорт промолчал"
     assert report.warning_count == 1, "слова в колонке подняли ложную тревогу"
+
+
+# ---- 27. пустая настройка в .env не роняет бота
+
+
+def test_a_blank_numeric_setting_does_not_crash_the_bot() -> None:
+    """«TELEGRAM_LOOKUP_API_ID=» без значения — это «не задано», а не ошибка.
+
+    Незаполненная строка в .env — нормальное состояние: её пишут ровно тогда,
+    когда собираются заполнить позже. На проде такая строка увела бота в цикл
+    перезапуска: pydantic не смог разобрать пустую строку как int, падение
+    случалось до логгера, и в логах был только ValidationError без имени поля.
+
+    Цена ошибки несоразмерна причине: бот молчал на все сообщения, а в .env
+    стояла заготовка под настройку, которую ещё не включили.
+    """
+    from app.config import Settings
+
+    settings = Settings(_env_file=None, TELEGRAM_LOOKUP_API_ID="")  # type: ignore[call-arg]
+
+    assert settings.telegram_lookup_api_id == 0
+    assert not settings.telegram_lookup_configured
