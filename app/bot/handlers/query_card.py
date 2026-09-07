@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import suppress
 
 from aiogram import F, Router
@@ -481,6 +482,12 @@ async def recognised(
 
     Флагом, а не проверкой ``card.guided``: ``leave_steps`` снимает признак
     ведомости строкой выше, и к моменту решения о деньгах он уже ложный у всех.
+
+    Когда проверка идёт СРАЗУ, карточка не рисуется вовсе. Раньше рисовалась —
+    и тут же удалялась ``run_card``: семнадцать строк и тринадцать кнопок
+    мелькали в чате между вводом номера и отчётом. Кого нашли, говорит
+    сообщение о ходе проверки, а сколько он должен — сам отчёт; карточка между
+    ними не добавляла ни строки нового.
     """
     filled = card_identify.absorb(card, record)
     container.query_cards.leave_steps(card)
@@ -488,14 +495,18 @@ async def recognised(
     found = card_view.FOUND_ONE.format(who=card_identify.describe(record))
     if filled:
         found = f"{found} {card_view.FOUND_ONE_FILLED.format(fields=', '.join(filled))}"
-    # Оговорка к разбору («„Клочкова“ записал в фамилию») не выбрасывается ради
-    # хорошей новости: угаданное поле надо показать даже тогда — особенно тогда,
-    # когда по нему сейчас пойдёт платный запрос.
-    await show(message, container, card, notice=f"{notice} {found}" if notice else found)
 
     runnable = card.runnable_with(phone_resolves=_phone_resolves(container))
     if autorun and runnable and card.last_run_hash != container.query_cards.run_hash(card):
-        await run_card(message, container, card, user_id)
+        # Оговорка к разбору («„Клочкова“ записал в фамилию») не теряется:
+        # она едет в отчёт, где по этому полю только что прошёл платный запрос.
+        # А «нашёл того-то» не едет — это и есть отчёт.
+        await run_card(message, container, card, user_id, extra_notes=[notice] if notice else [])
+        return
+
+    # Оговорка к разбору не выбрасывается ради хорошей новости: угаданное поле
+    # надо показать даже тогда.
+    await show(message, container, card, notice=f"{notice} {found}" if notice else found)
 
 
 # ---------------------------------------------------------------- прогон
@@ -523,8 +534,20 @@ def run_notes(subject: SearchSubject, container: Container) -> list[str]:
     return [f"Не спрашивали: {reasons}. {card_view.NOT_ASKED}"]
 
 
-async def run_card(message: Message, container: Container, card: Card, user_id: int) -> None:
-    """Проверить то, что собрано, и переотправить карточку под отчётом."""
+async def run_card(
+    message: Message,
+    container: Container,
+    card: Card,
+    user_id: int,
+    *,
+    extra_notes: Sequence[str] = (),
+) -> None:
+    """Проверить то, что собрано, и показать отчёт.
+
+    ``extra_notes`` — оговорки, которые иначе остались бы на карточке, а
+    карточка при автопрогоне не рисуется. Терять их нельзя: «„Клочкова“ записал
+    в фамилию» относится к полю, по которому сейчас пройдёт платный запрос.
+    """
     # Один телефон — законный субъект, когда мост умеет перевести его в ФИО:
     # имя добудется внутри поиска, до обращения к реестрам. Без моста номер
     # по-прежнему тупик, и субъекта из него не выйдет.
@@ -534,7 +557,11 @@ async def run_card(message: Message, container: Container, card: Card, user_id: 
 
     await _drop_card_message(message, container, card)
     report = await run_and_send_report(
-        message, container, subject, user_id=user_id, notes=run_notes(subject, container)
+        message,
+        container,
+        subject,
+        user_id=user_id,
+        notes=[*extra_notes, *run_notes(subject, container)],
     )
     if report is None:
         # Квота на сегодня выбрана. Карточка не помечается проверенной: ничего
