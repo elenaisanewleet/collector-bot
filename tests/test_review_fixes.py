@@ -1146,3 +1146,42 @@ async def test_the_operators_own_name_beats_the_bridge(container: Container) -> 
     assert bridge.is_needed(
         SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945")
     )
+
+
+# ------ 24. точный ключ свободной строкой поднимает должника из выгрузки
+
+
+async def test_an_exact_key_in_a_free_line_finds_the_debtor(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Написал номер машины — увидел должника. Без кнопок и без оплаты.
+
+    Ориентир интерфейса, который выбрала владелица, требует этого дословно:
+    «никакого экрана "введите телефон", оператор просто пишет номер в чат,
+    мгновенный ответ — одно сообщение-карточка». И это же рабочий сценарий
+    взыскателя-эвакуатора: машина у него на руках.
+
+    Выгрузка при этом спрашивалась только в ведомом сценарии по кнопкам:
+    свободная строка карточку не опознавала вовсе, и оператор, написавший
+    номер, получал пустую форму.
+
+    Ослабление точечное — только для точных ключей. По ФИО и дате выгрузка
+    по-прежнему не спрашивается: она отвечает похожими, а не теми же, и
+    подставленная дата рождения легла бы поверх намеренно пропущенной.
+    """
+    await feed(dispatcher, bot, message=make_message("А123ВС77"))
+
+    card = sent.joined
+    assert "Нашёл" in card, "точный ключ не поднял строку выгрузки"
+    # Платит одна кнопка: опознание показывает найденное, но проверку не
+    # запускает — «Проверить» оператор не нажимал.
+    assert "RECOVERY SCORE" not in card, "свободная строка запустила платный прогон"
+
+
+async def test_a_free_line_name_still_does_not_touch_the_export(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """ФИО свободной строкой выгрузку не спрашивает: она ответит похожими."""
+    await feed(dispatcher, bot, message=make_message("Демов Максим Игоревич"))
+
+    assert "Нашёл" not in sent.joined

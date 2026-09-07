@@ -262,17 +262,44 @@ async def settle(
     в карточке без спроса поверх той, которую он намеренно пропустил, а прогон
     случился бы без нажатия на единственную платящую кнопку.
     """
-    if not card.guided or card.pending_ten or card.pending_name:
+    if card.pending_ten or card.pending_name:
+        await show(message, container, card, notice=notice)
+        return
+
+    guided = card.guided
+    if not guided and not _has_exact_key(card):
+        # Свободная строка без точного ключа — это ФИО или дата, то есть
+        # догадка. По ней выгрузка не спрашивается: подставленная из неё дата
+        # рождения легла бы в карточку поверх той, которую оператор намеренно
+        # пропустил.
         await show(message, container, card, notice=notice)
         return
 
     found = await card_identify.identify(container.search_service, card)
     if found.only is not None:
-        await recognised(message, container, card, found.only, user_id, notice=notice)
+        await recognised(
+            message, container, card, found.only, user_id, notice=notice, autorun=guided
+        )
         return
 
-    container.query_cards.step_forward(card)
+    if guided:
+        container.query_cards.step_forward(card)
     await show(message, container, card, notice=_ambiguous(found, card) or notice)
+
+
+def _has_exact_key(card: Card) -> bool:
+    """Есть ли в карточке ключ, по которому строка находится точно.
+
+    Телефон, госномер, VIN и договор — не догадка: они либо совпали с записью
+    выгрузки, либо нет. Ради них правило и ослаблено. Заказчик формулирует
+    сценарий одной фразой — «написал номер и увидел должника», — и ориентир
+    интерфейса, который выбрала владелица, требует того же: «оператор просто
+    пишет номер в чат, мгновенный ответ — карточка».
+
+    ФИО и дата сюда не входят намеренно: по ним выгрузка отвечает похожими, а
+    не теми же, и подстановка из неё была бы догадкой поверх ввода.
+    """
+    return bool(card.phone or card.plate or card.vin or card.contract_number)
 
 
 def _ambiguous(found: card_identify.Identified, card: Card) -> str | None:
@@ -300,6 +327,7 @@ async def recognised(
     user_id: int,
     *,
     notice: str | None = None,
+    autorun: bool = True,
 ) -> None:
     """Человек опознан однозначно. Спрашивать больше нечего.
 
@@ -309,10 +337,14 @@ async def recognised(
     отвечают дольше, стоят денег и иногда молчат. Нашли своего — бот уже
     пригодился, и ждать ФССП, чтобы это увидеть, оператор не должен.
 
-    Автопрогон случается только в ведомом сценарии. Оператор, который пришёл
-    сюда свободной строкой, кнопку «Проверить» не нажимал и платного запроса не
-    просил; ему карточка просто покажет найденное. А в сценарии бот сам обещал
-    «готовлю отчёт» — там молчание было бы обманом.
+    Автопрогон случается только в ведомом сценарии, и за это отвечает
+    ``autorun``. Оператор, который пришёл сюда свободной строкой, кнопку
+    «Проверить» не нажимал и платного запроса не просил; ему карточка просто
+    покажет найденное — кого опознали и что подставили из выгрузки. А в
+    сценарии бот сам обещал «готовлю отчёт», там молчание было бы обманом.
+
+    Флагом, а не проверкой ``card.guided``: ``leave_steps`` снимает признак
+    ведомости строкой выше, и к моменту решения о деньгах он уже ложный у всех.
     """
     filled = card_identify.absorb(card, record)
     container.query_cards.leave_steps(card)
@@ -325,7 +357,7 @@ async def recognised(
     # когда по нему сейчас пойдёт платный запрос.
     await show(message, container, card, notice=f"{notice} {found}" if notice else found)
 
-    if card.runnable and card.last_run_hash != container.query_cards.run_hash(card):
+    if autorun and card.runnable and card.last_run_hash != container.query_cards.run_hash(card):
         await run_card(message, container, card, user_id)
 
 

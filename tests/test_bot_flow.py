@@ -1062,11 +1062,20 @@ async def test_other_flows_are_not_hijacked_by_the_catch_all(
 async def test_a_bare_plate_in_a_free_line_is_a_vehicle_not_a_person(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
-    """Голый госномер — это не человек без ФИО."""
-    await collect_and_run(dispatcher, bot, "А123ВС77")
+    """Голый госномер — это не человек без ФИО.
+
+    Номер, которого нет в выгрузке, так и остаётся проверкой машины: владельца
+    по нему взять неоткуда, ни один внешний реестр по номеру не ищет, и
+    придумывать человека не из чего.
+
+    А номер, который в выгрузке есть, поднимает своего владельца — это и есть
+    рабочий сценарий взыскателя-эвакуатора: машина у него на руках, и по ней он
+    выходит на должника. Этот случай проверяется отдельным тестом ниже.
+    """
+    await collect_and_run(dispatcher, bot, "Х999ХХ99")
 
     subject = next(iter(container.subject_store._items.values()))[0]
     assert subject.search_type == "vehicle_plate"
     assert subject.vehicle is not None
-    assert subject.vehicle.plate == "А123ВС77"
+    assert subject.vehicle.plate == "Х999ХХ99"
     assert sent.contains("Авто — не подключено")
