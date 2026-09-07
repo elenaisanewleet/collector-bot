@@ -34,6 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from decimal import Decimal
+from typing import NamedTuple
 
 from app.db.models import Debtor
 from app.domain.fees import claim_fee, court_order_fee
@@ -42,9 +43,9 @@ from app.utils.formatting import pluralize_ru
 from app.utils.money import format_amount
 from app.web.render import cell, document, e, navigation, print_footer, raw_cell, section, table
 
-__all__ = ["render_base_page", "render_person_page"]
+__all__ = ["FeeRules", "render_base_page", "render_person_page"]
 
-_HEADERS = ("Должник", "Дата рождения", "Машины", "Долг", "Адрес", "ИД записей")
+_HEADERS = ("Должник", "Долг", "Пошлина", "Как подавать", "Машины", "Адрес")
 
 SEARCH_NOTE = (
     "Поиск идёт по всей строке: фамилия, госномер, улица, номер записи — что помните, то и вводите."
@@ -53,23 +54,77 @@ ESTIMATED_NOTE = (
     "Долг со звёздочкой посчитан по тарифу из дат постановки и выдачи, а не взят "
     "из документа. В цену иска такая сумма идёт только после сверки."
 )
+FEE_NOTE = (
+    "Пошлина посчитана по ст. 333.19 НК РФ от суммы долга. Проценты по ст. 395 ГК "
+    "сюда не входят: их считает юрист на дату подачи, и от них зависит ступень."
+)
+
+
+class FeeRules(NamedTuple):
+    """Пороги, по которым выбирается способ подачи. Приходят из настроек.
+
+    Страница не решает, где проходят границы, — их знает
+    :mod:`app.services.verdict`, и переписывать их здесь значило бы завести
+    вторую копию, которая разъедется с первой на первой же правке тарифа.
+    """
+
+    court_order_max: Decimal
+    min_debt_to_fee_ratio: Decimal
+
+
+class _Kind(NamedTuple):
+    """Как подавать на этого должника — и каким цветом это показать."""
+
+    key: str
+    title: str
+    tab: str
+
+
+#: Четыре исхода, и каждый — про деньги заказчика, а не про свойства строки.
+#: Цвета живут в CSS по ключу: зелёный — приказ (дёшево и быстро), синий — иск
+#: (дороже, но столько же денег на кону), янтарь — процесс не окупается, серый
+#: — считать не из чего.
+_ORDER = _Kind("order", "Судебный приказ", "Судебный приказ")
+_CLAIM = _Kind("claim", "Иск", "Иск")
+_THIN = _Kind("thin", "Не окупается", "Не окупается")
+_NONE = _Kind("none", "Нет суммы", "Без суммы")
+_KINDS = (_ORDER, _CLAIM, _THIN, _NONE)
+
+
+def _classify(amount: Decimal | None, rules: FeeRules) -> tuple[_Kind, Decimal | None]:
+    """Способ подачи и пошлина по нему.
+
+    Тот же порядок веток, что и у вердикта: сначала «а есть ли из чего
+    считать», потом «окупится ли», и только потом «приказ или иск». Проверять
+    окупаемость последней значило бы советовать судебный приказ там, где он
+    стоит дороже долга.
+    """
+    if amount is None or amount <= 0:
+        return _NONE, None
+    fee = court_order_fee(amount) if amount <= rules.court_order_max else claim_fee(amount)
+    if fee and amount < fee * rules.min_debt_to_fee_ratio:
+        return _THIN, fee
+    return (_ORDER if amount <= rules.court_order_max else _CLAIM), fee
 
 
 def render_base_page(
     debtors: Sequence[Debtor],
     *,
     app_name: str,
+    rules: FeeRules,
     person_urls: dict[int, str] | None = None,
     demo_mode: bool = False,
     print_mode: bool = False,
 ) -> str:
     from app.web.render import demo_banner
 
+    rows = [(debtor, *_classify(_amount(debtor), rules)) for debtor in debtors]
+
     parts: list[str] = []
     if demo_mode:
         parts.append(demo_banner())
-    parts.append(_hero(debtors))
-    parts.append(_table(debtors, person_urls or {}))
+    parts.append(_hero(rows))
+    parts.append(_table(rows, person_urls or {}))
     parts.append(f"<footer>{e(_footer(debtors))}</footer>")
 
     nav = navigation(app_name, [("base", "Должники")])
@@ -81,49 +136,80 @@ def render_base_page(
     return document(title=f"{app_name} — база должников", nav=nav, body=body)
 
 
-def _hero(debtors: Sequence[Debtor]) -> str:
-    total = len(debtors)
-    known = [d for d in debtors if d.debt_amount is not None]
-    money = sum((Decimal(str(d.debt_amount)) for d in known), Decimal("0"))
+def _amount(debtor: Debtor) -> Decimal | None:
+    return Decimal(str(debtor.debt_amount)) if debtor.debt_amount is not None else None
+
+
+_Row = tuple[Debtor, _Kind, Decimal | None]
+
+
+def _hero(rows: Sequence[_Row]) -> str:
+    """Шапка: сводка деньгами, вкладки и поиск.
+
+    Сводка отвечает на вопрос, ради которого список и открывают: сколько всего
+    на кону и во что обойдётся это забрать. Раньше здесь стояли «с машиной» и
+    «с датой рождения» — свойства выгрузки, а не деньги; ни одно решение по ним
+    не принимают.
+    """
+    total = len(rows)
+    # Долг берётся у должника, а не третьим полем строки: третье — это пошлина.
+    debts = [amount for debtor, _, _ in rows if (amount := _amount(debtor)) is not None]
+    debt = sum(debts, Decimal(0))
+    # Пошлины считаются только там, где подавать стоит: сложить их со строками
+    # «не окупается» значило бы показать заказчику счёт за суды, которых он не
+    # начнёт.
+    fees = sum((fee for _, kind, fee in rows if fee is not None and kind is not _THIN), Decimal(0))
+    worth = sum(1 for _, kind, _ in rows if kind in (_ORDER, _CLAIM))
     noun = pluralize_ru(total, "должник", "должника", "должников")
     figures = "".join(
         (
             f'<div><span class="lbl">Всего требований</span>'
-            f"<b>{e(format_amount(money) if known else '—')}</b></div>",
-            f'<div><span class="lbl">С машиной</span>'
-            f"<b>{sum(1 for d in debtors if d.vehicle_plate)}</b></div>",
-            f'<div><span class="lbl">С датой рождения</span>'
-            f"<b>{sum(1 for d in debtors if d.birth_date)}</b></div>",
+            f"<b>{e(format_amount(debt) if debt else '—')}</b></div>",
+            f'<div><span class="lbl">Пошлины по ним</span>'
+            f"<b>{e(format_amount(fees) if fees else '—')}</b>"
+            f"<small>по {worth} из {total}, где подавать стоит</small></div>",
         )
+    )
+    counts = {kind.key: sum(1 for _, k, _ in rows if k is kind) for kind in _KINDS}
+    tabs = "".join(
+        f'<button type="button" class="tab k-{kind.key}" data-kind="{kind.key}">'
+        f"{e(kind.tab)} <span>{counts[kind.key]}</span></button>"
+        for kind in _KINDS
+        # Пустая вкладка не рисуется: «Иск (0)» — это приглашение нажать и
+        # увидеть пустой список.
+        if counts[kind.key]
     )
     return (
         '<header class="hero" id="base">'
         f"<h1>{total} {e(noun)}</h1>"
         f'<div class="nums">{figures}</div>'
+        f'<div class="tabs"><button type="button" class="tab on" data-kind="">'
+        f"Все <span>{total}</span></button>{tabs}</div>"
         '<div class="tools">'
         '<input id="b-find" type="search" placeholder="Поиск: фамилия, госномер, адрес…" '
         'autocomplete="off" spellcheck="false">'
         '<select id="b-sort" aria-label="Сортировка">'
         '<option value="name">По алфавиту</option>'
-        '<option value="debt">По сумме долга</option>'
+        '<option value="debt">Сначала крупные долги</option>'
+        '<option value="debt-asc">Сначала мелкие долги</option>'
         "</select>"
         "</div>"
         f'<p class="hint">{e(SEARCH_NOTE)}</p>'
-        f'<p class="hint" id="b-status"></p>'
+        '<p class="hint" id="b-status"></p>'
         "</header>"
     )
 
 
-def _table(debtors: Sequence[Debtor], person_urls: dict[int, str]) -> str:
-    rows: list[tuple[str, ...]] = []
+def _table(rows: Sequence[_Row], person_urls: dict[int, str]) -> str:
+    cells: list[tuple[str, ...]] = []
     attrs: list[str] = []
-    for debtor in debtors:
-        amount = Decimal(str(debtor.debt_amount)) if debtor.debt_amount is not None else None
+    for debtor, kind, fee in rows:
+        amount = _amount(debtor)
         shown = format_amount(amount) if amount is not None else "—"
         if amount is not None and debtor.debt_is_estimated:
             shown += "*"
         plates = debtor.vehicle_plates or debtor.vehicle_plate or ""
-        rows.append(
+        cells.append(
             (
                 raw_cell(
                     f'<a href="{e(person_urls[debtor.id])}"><b>{e(debtor.fio or "—")}</b></a>'
@@ -131,14 +217,17 @@ def _table(debtors: Sequence[Debtor], person_urls: dict[int, str]) -> str:
                     else f"<b>{e(debtor.fio or '—')}</b>",
                     label="Должник",
                 ),
-                cell(
-                    debtor.birth_date.strftime("%d.%m.%Y") if debtor.birth_date else "—",
-                    label="Дата рождения",
+                raw_cell(f'<span class="n">{e(shown)}</span>', label="Долг"),
+                raw_cell(
+                    f'<span class="n">{e(format_amount(fee) if fee is not None else "—")}</span>',
+                    label="Пошлина",
+                ),
+                raw_cell(
+                    f'<span class="pill k-{kind.key}">{e(kind.title)}</span>',
+                    label="Как подавать",
                 ),
                 cell(plates or "—", label="Машины"),
-                raw_cell(f'<span class="n">{e(shown)}</span>', label="Долг"),
                 cell(debtor.address or "—", label="Адрес"),
-                cell(debtor.source_record_ids or debtor.external_debtor_id or "—", label="ИД"),
             )
         )
         haystack = " ".join(
@@ -156,11 +245,12 @@ def _table(debtors: Sequence[Debtor], person_urls: dict[int, str]) -> str:
         ).lower()
         kopecks = int(amount * 100) if amount is not None else 0
         attrs.append(
-            f'data-find="{e(haystack)}" data-debt="{kopecks}" '
+            f'data-find="{e(haystack)}" data-debt="{kopecks}" data-kind="{kind.key}" '
             f'data-name="{e((debtor.fio_normalized or "").lower())}"'
         )
-    body = f'<div id="base-table">{table(_HEADERS, rows, row_attrs=attrs)}</div>'
-    return section("base", "Должники", body + f'<p class="hint">{e(ESTIMATED_NOTE)}</p>')
+    body = f'<div id="base-table">{table(_HEADERS, cells, row_attrs=attrs)}</div>'
+    notes = f'<p class="hint">{e(ESTIMATED_NOTE)}</p><p class="hint">{e(FEE_NOTE)}</p>'
+    return section("base", "Должники", body + notes)
 
 
 def _footer(debtors: Sequence[Debtor]) -> str:
@@ -171,8 +261,31 @@ _STYLE = """<style>
 .tools{display:flex;gap:.5rem;margin:.75rem 0}
 .tools input{flex:1;min-width:0}
 #base-table td .n{font-variant-numeric:tabular-nums;white-space:nowrap}
-#base-table td:nth-child(5){max-width:22rem}
+#base-table td:nth-child(6){max-width:20rem}
 #b-more{margin:.5rem auto;display:block}
+
+/* Вкладки. Живут в герое, поэтому и цвета берут геройские: на тёмной подложке
+   обычные --ink-* не читаются вовсе. */
+.tabs{display:flex;flex-wrap:wrap;gap:.4rem;margin:.9rem 0 .2rem}
+.tabs .tab{font:inherit;font-size:var(--t-xs);cursor:pointer;
+  padding:.3rem .7rem;border-radius:999px;
+  border:1px solid var(--hero-dim);background:transparent;color:var(--hero-soft)}
+.tabs .tab span{opacity:.65;margin-left:.25rem;font-variant-numeric:tabular-nums}
+.tabs .tab:hover{border-color:var(--hero-ink);color:var(--hero-ink)}
+.tabs .tab.on{background:var(--hero-ink);border-color:var(--hero-ink);color:var(--hero)}
+.tabs .tab.on span{opacity:.55}
+
+/* Один цвет на один исход, и тот же самый — на вкладке и в строке таблицы.
+   Разойдись они, и вкладка «Иск» вела бы к строкам другого цвета. */
+.pill{display:inline-block;white-space:nowrap;font-size:var(--t-2xs);
+  padding:.15rem .5rem;border-radius:999px;border:1px solid}
+.pill.k-order{color:var(--good);background:var(--good-bg);border-color:var(--good)}
+.pill.k-claim{color:var(--accent-ink);background:var(--accent-soft);border-color:var(--accent)}
+.pill.k-thin{color:var(--warn);background:var(--warn-bg);border-color:var(--warn)}
+.pill.k-none{color:var(--ink-3);background:var(--surface-2);border-color:var(--line)}
+/* Строка без суммы приглушена целиком: по ней всё равно нечего решать. */
+#base-table tr[data-kind="none"] td{color:var(--ink-3)}
+@media print{.tabs,.tools,#b-more{display:none}}
 </style>"""
 
 _SCRIPT = """<script>
@@ -183,6 +296,7 @@ _SCRIPT = """<script>
   var find = document.getElementById('b-find');
   var sorter = document.getElementById('b-sort');
   var status = document.getElementById('b-status');
+  var tabs = [].slice.call(document.querySelectorAll('.tabs .tab'));
   var more = document.createElement('button');
   more.id = 'b-more';
   more.type = 'button';
@@ -194,11 +308,13 @@ _SCRIPT = """<script>
   var limit = STEP;
   var query = '';
   var mode = 'name';
+  var kind = '';
 
   function num(row) { return parseInt(row.dataset.debt, 10) || 0; }
   var order = {
     name: function (a, b) { return a.dataset.name.localeCompare(b.dataset.name, 'ru'); },
-    debt: function (a, b) { return num(b) - num(a); }
+    debt: function (a, b) { return num(b) - num(a); },
+    'debt-asc': function (a, b) { return num(a) - num(b); }
   };
 
   function plural(n, one, few, many) {
@@ -210,6 +326,7 @@ _SCRIPT = """<script>
 
   function apply() {
     var matched = rows.filter(function (row) {
+      if (kind && row.dataset.kind !== kind) return false;
       return !query || row.dataset.find.indexOf(query) >= 0;
     });
     matched.sort(order[mode] || order.name);
@@ -219,8 +336,11 @@ _SCRIPT = """<script>
     shown.forEach(function (row) { row.hidden = false; if (parent) parent.appendChild(row); });
 
     var n = matched.length;
-    status.textContent = query
-      ? (n ? 'Найдено: ' + n + ' ' + plural(n, 'запись', 'записи', 'записей') : 'Ничего не найдено')
+    // Счётчик показывается и при выбранной вкладке: «Ничего не найдено» без
+    // напоминания о фильтре читается как «в базе никого нет».
+    var word = plural(n, 'запись', 'записи', 'записей');
+    status.textContent = (query || kind)
+      ? (n ? 'Показано: ' + n + ' ' + word : 'Ничего не найдено')
       : '';
     more.hidden = n <= limit;
     more.textContent = 'Показать ещё ' + Math.min(STEP, n - limit);
@@ -236,6 +356,15 @@ _SCRIPT = """<script>
     }, 120);
   });
   sorter.addEventListener('change', function () { mode = sorter.value; limit = STEP; apply(); });
+  tabs.forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      tabs.forEach(function (other) { other.classList.remove('on'); });
+      tab.classList.add('on');
+      kind = tab.dataset.kind;
+      limit = STEP;
+      apply();
+    });
+  });
   more.addEventListener('click', function () { limit += STEP; apply(); });
   apply();
 })();

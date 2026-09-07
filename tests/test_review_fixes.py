@@ -1512,7 +1512,7 @@ def test_the_base_page_finds_by_every_field() -> None:
     спрашивают каждый день — и лезут за этим в 1С.
     """
     from app.db.models import Debtor
-    from app.web.render_base import render_base_page
+    from app.web.render_base import FeeRules, render_base_page
 
     rows = [
         Debtor(
@@ -1528,7 +1528,10 @@ def test_the_base_page_finds_by_every_field() -> None:
             source_record_ids="793783, 830279",
         )
     ]
-    page = render_base_page(rows, app_name="Collector Bot")
+    # Пороги как на проде: судебный приказ до 500 000 ₽, подавать не стоит,
+    # если долг меньше пошлины втрое.
+    rules = FeeRules(court_order_max=Decimal("500000"), min_debt_to_fee_ratio=Decimal("3"))
+    page = render_base_page(rows, app_name="Collector Bot", rules=rules)
 
     # В поисковый индекс строки попадает всё, по чему её будут искать.
     for needle in ("клочкова", "х376са797", "петровско", "793783", "24.11.1994"):
@@ -1639,3 +1642,4 @@ def test_a_forgotten_secret_makes_the_card_stale() -> None:
         telegram_user_id=1, chat_id=1, phone_masked="+7 (999) ***-**-01", phone="+79991234501"
     )
     assert not alive.stale
+

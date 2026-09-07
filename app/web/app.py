@@ -22,6 +22,7 @@ loop, что и опрос Telegram.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from aiohttp import web
@@ -37,7 +38,7 @@ from app.services.reporting import render_report
 from app.services.share import ShareKind
 from app.utils.dates import utcnow
 from app.web.render import ExportLinks, render_message_page, render_report_page
-from app.web.render_base import render_base_page, render_person_page
+from app.web.render_base import FeeRules, render_base_page, render_person_page
 from app.web.render_queue import render_queue_page
 
 logger = get_logger(__name__)
@@ -111,6 +112,13 @@ async def handle_base(request: web.Request) -> web.Response:
     html = render_base_page(
         debtors,
         app_name=container.settings.app_name,
+        # Пороги приходят из настроек, а не переписаны на странице: где
+        # проходят границы «приказ / иск / не окупается», знает вердикт, и
+        # вторая копия разъехалась бы с первой на первой правке тарифа.
+        rules=FeeRules(
+            court_order_max=Decimal(str(container.settings.court_order_max_amount)),
+            min_debt_to_fee_ratio=Decimal(str(container.settings.min_debt_to_fee_ratio)),
+        ),
         person_urls={row.id: f"/p/{share.person_token(link, row.id)}" for row in debtors},
         demo_mode=container.settings.app_mode is AppMode.DEMO,
         print_mode="print" in request.query,
