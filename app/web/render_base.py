@@ -36,12 +36,13 @@ from collections.abc import Sequence
 from decimal import Decimal
 
 from app.db.models import Debtor
+from app.domain.fees import claim_fee, court_order_fee
 from app.utils.dates import format_datetime, utcnow
 from app.utils.formatting import pluralize_ru
 from app.utils.money import format_amount
 from app.web.render import cell, document, e, navigation, print_footer, raw_cell, section, table
 
-__all__ = ["render_base_page"]
+__all__ = ["render_base_page", "render_person_page"]
 
 _HEADERS = ("Должник", "Дата рождения", "Машины", "Долг", "Адрес", "ИД записей")
 
@@ -58,6 +59,7 @@ def render_base_page(
     debtors: Sequence[Debtor],
     *,
     app_name: str,
+    person_urls: dict[int, str] | None = None,
     demo_mode: bool = False,
     print_mode: bool = False,
 ) -> str:
@@ -67,7 +69,7 @@ def render_base_page(
     if demo_mode:
         parts.append(demo_banner())
     parts.append(_hero(debtors))
-    parts.append(_table(debtors))
+    parts.append(_table(debtors, person_urls or {}))
     parts.append(f"<footer>{e(_footer(debtors))}</footer>")
 
     nav = navigation(app_name, [("Должники", "#base")])
@@ -112,7 +114,7 @@ def _hero(debtors: Sequence[Debtor]) -> str:
     )
 
 
-def _table(debtors: Sequence[Debtor]) -> str:
+def _table(debtors: Sequence[Debtor], person_urls: dict[int, str]) -> str:
     rows: list[tuple[str, ...]] = []
     attrs: list[str] = []
     for debtor in debtors:
@@ -123,7 +125,12 @@ def _table(debtors: Sequence[Debtor]) -> str:
         plates = debtor.vehicle_plates or debtor.vehicle_plate or ""
         rows.append(
             (
-                raw_cell(f"<b>{e(debtor.fio or '—')}</b>", label="Должник"),
+                raw_cell(
+                    f'<a href="{e(person_urls[debtor.id])}"><b>{e(debtor.fio or "—")}</b></a>'
+                    if debtor.id in person_urls
+                    else f"<b>{e(debtor.fio or '—')}</b>",
+                    label="Должник",
+                ),
                 cell(
                     debtor.birth_date.strftime("%d.%m.%Y") if debtor.birth_date else "—",
                     label="Дата рождения",
@@ -233,3 +240,103 @@ _SCRIPT = """<script>
   apply();
 })();
 </script>"""
+
+
+# ---------------------------------------------------------------- один человек
+
+
+def render_person_page(
+    debtor: Debtor,
+    *,
+    app_name: str,
+    back_url: str = "",
+    demo_mode: bool = False,
+    print_mode: bool = False,
+) -> str:
+    """Сводка по одному должнику: всё, что о нём знает наша база.
+
+    Открывается кликом из списка. Это ещё не отчёт по реестрам — отчёт стоит
+    денег и живёт своей ссылкой. Здесь то, что известно бесплатно и сразу:
+    кто он, сколько машин, из чего сложился долг и во что обойдётся суд.
+
+    Разделять эти два экрана обязательно. Смешать их значило бы показать
+    рядом проверенное и непроверенное одинаковым шрифтом — а весь продукт
+    держится на том, что «не спрашивали» и «не нашли» выглядят по-разному.
+    """
+    from app.web.render import demo_banner
+
+    parts: list[str] = []
+    if demo_mode:
+        parts.append(demo_banner())
+    parts.append(_person_hero(debtor, back_url))
+    parts.append(_person_facts(debtor))
+    parts.append(_person_money(debtor))
+
+    nav = navigation(app_name, [("К списку", back_url or "#")])
+    body = _STYLE + "".join(parts)
+    if print_mode:
+        body += print_footer(app_name, utcnow())
+    return document(title=f"{app_name} — должник", nav=nav, body=body)
+
+
+def _person_hero(debtor: Debtor, back_url: str) -> str:
+    back = f'<p class="hint"><a href="{e(back_url)}">← ко всему списку</a></p>' if back_url else ""
+    born = debtor.birth_date.strftime("%d.%m.%Y") if debtor.birth_date else "—"
+    return (
+        '<header class="card hero">'
+        f"<h1>{e(debtor.fio or 'Без имени')}</h1>"
+        f'<p class="hint">Дата рождения: {e(born)}</p>'
+        f"{back}"
+        "</header>"
+    )
+
+
+def _person_facts(debtor: Debtor) -> str:
+    plates = debtor.vehicle_plates or debtor.vehicle_plate or "—"
+    episodes = debtor.source_record_ids or debtor.external_debtor_id or "—"
+    count = len([item for item in episodes.split(",") if item.strip()]) if episodes != "—" else 0
+    rows = [
+        ("Машины", plates),
+        ("Задержаний", str(count) if count else "—"),
+        ("ИД записей в учёте", episodes),
+        ("Адрес", debtor.address or "—"),
+        # Паспорт только маской: сам номер нужен мосту к ИНН, а не читателю.
+        ("Паспорт", debtor.passport_masked or "—"),
+        ("ИНН", debtor.inn or "—"),
+        ("Договор", debtor.contract_number or "—"),
+    ]
+    body = table(
+        ("Поле", "Значение"),
+        [(cell(name, label="Поле"), cell(value, label="Значение")) for name, value in rows],
+    )
+    return section("facts", "Что известно", body)
+
+
+def _person_money(debtor: Debtor) -> str:
+    if debtor.debt_amount is None:
+        return section(
+            "money",
+            "Деньги",
+            '<p class="hint">Суммы долга нет: считать цену иска и пошлину не из чего.</p>',
+        )
+    amount = Decimal(str(debtor.debt_amount))
+    order = court_order_fee(amount)
+    claim = claim_fee(amount)
+    note = (
+        '<p class="hint">Сумма посчитана по тарифу из дат постановки и выдачи, '
+        "а не взята из документа.</p>"
+        if debtor.debt_is_estimated
+        else ""
+    )
+    body = table(
+        ("Что", "Сколько"),
+        [
+            (cell("Долг", label="Что"), cell(format_amount(amount), label="Сколько")),
+            (
+                cell("Пошлина: судебный приказ", label="Что"),
+                cell(format_amount(order), label="Сколько"),
+            ),
+            (cell("Пошлина: иск", label="Что"), cell(format_amount(claim), label="Сколько")),
+        ],
+    )
+    return section("money", "Деньги", body + note)

@@ -32,6 +32,7 @@ from decimal import Decimal
 
 import pytest
 from aiogram import Bot, Dispatcher
+from sqlalchemy import select
 
 from app.bot.handlers.import_csv import render_import_report
 from app.config import Settings
@@ -1548,3 +1549,37 @@ async def test_the_base_link_is_owner_only(
     await feed(dispatcher, bot, message=make_message("/base", user_id=OPERATOR_ID + 555))
 
     assert not sent.contains("Открыть список")
+
+
+async def test_a_person_link_does_not_open_the_whole_base(container: Container) -> None:
+    """Ссылка на одного должника не отдаёт остальные две тысячи.
+
+    Если бы строка списка вела на «/список/человек/12», переслать коллеге
+    одного должника было бы нельзя: получатель отрезал бы хвост и получил всю
+    выгрузку. Поэтому у человека свой токен, подписанный серверным секретом.
+
+    Подделать нельзя, подставить чужой номер нельзя — номер входит в подпись.
+    И гаснет он вместе с общей ссылкой: её идентификатор тоже подписан, а
+    живость проверяется при каждом открытии.
+    """
+    from app.db.models import ShareLink
+    from app.services.share import ShareKind, ShareTarget
+
+    container.settings.web_public_url = "https://example.test"
+    share = container.share_service
+    url = await share.issue(ShareTarget(ShareKind.BASE, 0), telegram_user_id=OPERATOR_ID)
+    assert url is not None
+    async with container.database.session() as session:
+        link = await session.scalar(select(ShareLink).where(ShareLink.kind == "base"))
+    assert link is not None
+
+    token = share.person_token(link, 12)
+    assert share.read_person_token(token) == (link.id, 12)
+
+    # Токен всей базы в ссылку на человека не попадает — иначе её отрезали бы.
+    assert link.token not in token
+
+    # Подделка не проходит: ни подпись, ни чужой номер.
+    assert share.read_person_token(token[:-1] + "x") is None
+    head, _person, signature = token.split(".")
+    assert share.read_person_token(f"{head}.999.{signature}") is None

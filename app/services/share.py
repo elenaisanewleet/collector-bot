@@ -12,6 +12,9 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import secrets
 from dataclasses import dataclass
 from enum import StrEnum
@@ -140,6 +143,59 @@ class ShareLinkService:
         if kind in (ShareKind.QUEUE, ShareKind.BASE):
             return self._settings.share_queue_ttl_hours
         return self._settings.share_link_ttl_hours
+
+    def person_token(self, link: ShareLink, debtor_id: int) -> str:
+        """Токен на ОДНОГО должника, производный от ссылки на весь список.
+
+        Зачем он вообще. Список — это вся база, и ссылка на него открывает всё.
+        Если строка списка вела бы на «/список/человек/12», то переслать
+        коллеге одного должника было бы нельзя: получатель отрезал бы хвост и
+        получил остальные две тысячи. Токен на человека обязан быть отдельным.
+
+        Почему производный, а не своя строка в базе. Строк понадобилось бы
+        столько же, сколько должников, и заводились бы они при каждом открытии
+        списка — две тысячи записей на один просмотр. Подпись даёт то же самое
+        без единой записи.
+
+        Что он гарантирует. Подделать нельзя: подпись на серверном секрете.
+        Подставить чужой номер нельзя: номер входит в подпись. И, главное, он
+        умирает вместе с общей ссылкой — её идентификатор тоже подписан, а при
+        открытии проверяется, что она ещё жива. Отозвали список — погасли и все
+        ссылки на людей из него.
+        """
+        payload = f"{link.id}.{debtor_id}"
+        return f"{payload}.{self._sign(payload)}"
+
+    def read_person_token(self, token: str) -> tuple[int, int] | None:
+        """Разобрать токен человека в ``(id ссылки, id должника)``.
+
+        ``None`` — подпись не сошлась или форма не та. Ошибка одна на все
+        случаи намеренно: подробности здесь помогают только подбирающему.
+        """
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        link_id, debtor_id, signature = parts
+        if not secrets.compare_digest(signature, self._sign(f"{link_id}.{debtor_id}")):
+            return None
+        try:
+            return int(link_id), int(debtor_id)
+        except ValueError:
+            return None
+
+    def _sign(self, payload: str) -> str:
+        """Подпись на секрете развёртывания.
+
+        Секрет — токен бота: он есть всегда, уникален для установки и уже
+        хранится как секрет. Заводить второй ключ ради подписи значило бы
+        завести второе место, где его забудут поменять.
+        """
+        digest = hmac.new(
+            self._settings.telegram_bot_token.encode(),
+            payload.encode(),
+            hashlib.sha256,
+        ).digest()
+        return base64.urlsafe_b64encode(digest).decode().rstrip("=")[:32]
 
     def url_for(self, token: str, kind: ShareKind) -> str:
         prefix = {ShareKind.REPORT: "r", ShareKind.QUEUE: "q", ShareKind.BASE: "b"}[kind]

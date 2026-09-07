@@ -28,8 +28,8 @@ from aiohttp import web
 
 from app.config import AppMode
 from app.container import Container
-from app.db.models import ShareLink
-from app.db.repository import DebtorRepository
+from app.db.models import Debtor, ShareLink
+from app.db.repository import DebtorRepository, ShareLinkRepository
 from app.domain.verdict import VERDICT_TITLES
 from app.logging_setup import get_logger
 from app.services.export import queue_to_csv
@@ -37,7 +37,7 @@ from app.services.reporting import render_report
 from app.services.share import ShareKind
 from app.utils.dates import utcnow
 from app.web.render import ExportLinks, render_message_page, render_report_page
-from app.web.render_base import render_base_page
+from app.web.render_base import render_base_page, render_person_page
 from app.web.render_queue import render_queue_page
 
 logger = get_logger(__name__)
@@ -78,6 +78,7 @@ def build_app(container: Container) -> web.Application:
             web.get("/q/{token}/print", handle_queue_print),
             web.get("/q/{token}/queue.csv", handle_queue_csv),
             web.get("/b/{token}", handle_base),
+            web.get("/p/{token}", handle_person),
         ]
     )
     return app
@@ -106,9 +107,40 @@ async def handle_base(request: web.Request) -> web.Response:
         debtors = await DebtorRepository(session).all_by_name(
             limit=container.settings.batch_max_debtors
         )
+    share = container.share_service
     html = render_base_page(
         debtors,
         app_name=container.settings.app_name,
+        person_urls={row.id: f"/p/{share.person_token(link, row.id)}" for row in debtors},
+        demo_mode=container.settings.app_mode is AppMode.DEMO,
+        print_mode="print" in request.query,
+    )
+    return web.Response(text=html, content_type="text/html", headers=PRIVATE_HEADERS)
+
+
+async def handle_person(request: web.Request) -> web.Response:
+    """Сводка по одному должнику из списка.
+
+    Токен свой, производный от ссылки на список: переслать одного человека
+    можно, а получить из этой ссылки остальные две тысячи — нельзя. И гаснет
+    он вместе с общей ссылкой: её идентификатор подписан и проверяется живым.
+    """
+    container = request.app[CONTAINER_KEY]
+    parsed = container.share_service.read_person_token(request.match_info["token"])
+    if parsed is None:
+        return _not_found(container)
+    link_id, debtor_id = parsed
+    async with container.database.session() as session:
+        link = await ShareLinkRepository(session).get_active(link_id)
+        if link is None or link.kind != ShareKind.BASE.value:
+            return _not_found(container)
+        debtor = await session.get(Debtor, debtor_id)
+    if debtor is None:
+        return _not_found(container)
+    html = render_person_page(
+        debtor,
+        app_name=container.settings.app_name,
+        back_url=container.share_service.url_for(link.token, ShareKind.BASE),
         demo_mode=container.settings.app_mode is AppMode.DEMO,
         print_mode="print" in request.query,
     )

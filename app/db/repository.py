@@ -563,6 +563,22 @@ class ShareLinkRepository:
         found: ShareLink | None = await self._session.scalar(stmt)
         return found
 
+    async def get_active(self, link_id: int) -> ShareLink | None:
+        """Живая ссылка по её идентификатору.
+
+        Нужна производным ссылкам на одного человека: в них подписан номер
+        ссылки-родителя, а не её токен, — иначе токен всей базы уехал бы в
+        адрес каждой отдельной страницы, и переслать одного должника значило
+        бы отдать всю выгрузку.
+        """
+        stmt = select(ShareLink).where(
+            ShareLink.id == link_id,
+            ShareLink.expires_at > utcnow(),
+            ShareLink.revoked_at.is_(None),
+        )
+        found: ShareLink | None = await self._session.scalar(stmt)
+        return found
+
     async def find_for_target(
         self, kind: str, target_id: int, *, telegram_user_id: int | None = None
     ) -> ShareLink | None:
