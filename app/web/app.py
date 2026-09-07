@@ -92,6 +92,20 @@ async def handle_health(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------- база
 
 
+def _fee_rules(container: Container) -> FeeRules:
+    """Пороги подачи из настроек.
+
+    Страницы не решают, где проходят границы «приказ / иск / не окупается», —
+    их знает вердикт, и вторая копия разъехалась бы с первой на первой правке
+    тарифа. Обе страницы берут их отсюда, а не каждая у себя: две копии внутри
+    одного модуля расходятся так же охотно, как две копии в разных.
+    """
+    return FeeRules(
+        court_order_max=Decimal(str(container.settings.court_order_max_amount)),
+        min_debt_to_fee_ratio=Decimal(str(container.settings.min_debt_to_fee_ratio)),
+    )
+
+
 async def handle_base(request: web.Request) -> web.Response:
     """Справочник должников целиком: кто заведён и что про него известно.
 
@@ -112,13 +126,7 @@ async def handle_base(request: web.Request) -> web.Response:
     html = render_base_page(
         debtors,
         app_name=container.settings.app_name,
-        # Пороги приходят из настроек, а не переписаны на странице: где
-        # проходят границы «приказ / иск / не окупается», знает вердикт, и
-        # вторая копия разъехалась бы с первой на первой правке тарифа.
-        rules=FeeRules(
-            court_order_max=Decimal(str(container.settings.court_order_max_amount)),
-            min_debt_to_fee_ratio=Decimal(str(container.settings.min_debt_to_fee_ratio)),
-        ),
+        rules=_fee_rules(container),
         person_urls={row.id: f"/p/{share.person_token(link, row.id)}" for row in debtors},
         demo_mode=container.settings.app_mode is AppMode.DEMO,
         print_mode="print" in request.query,
@@ -148,6 +156,7 @@ async def handle_person(request: web.Request) -> web.Response:
     html = render_person_page(
         debtor,
         app_name=container.settings.app_name,
+        rules=_fee_rules(container),
         back_url=container.share_service.url_for(link.token, ShareKind.BASE),
         demo_mode=container.settings.app_mode is AppMode.DEMO,
         print_mode="print" in request.query,

@@ -37,7 +37,7 @@ from decimal import Decimal
 from typing import NamedTuple
 
 from app.db.models import Debtor
-from app.domain.fees import claim_fee, court_order_fee
+from app.domain.fees import FEE_BRACKETS, claim_fee, court_order_fee
 from app.utils.dates import format_datetime, utcnow
 from app.utils.formatting import pluralize_ru
 from app.utils.money import format_amount
@@ -286,6 +286,17 @@ _STYLE = """<style>
 /* Строка без суммы приглушена целиком: по ней всё равно нечего решать. */
 #base-table tr[data-kind="none"] td{color:var(--ink-3)}
 @media print{.tabs,.tools,#b-more{display:none}}
+
+/* Ответ в шапке страницы человека: плашка стоит одна, между именем и цифрами. */
+.hero .lead{margin:.6rem 0 .2rem}
+
+/* Расчёт пошлины. Свёрнут по умолчанию — «под капотом, но можно посмотреть». */
+.math{margin-top:var(--s-4);border-top:1px solid var(--line-soft);padding-top:var(--s-3)}
+.math summary{cursor:pointer;color:var(--accent);font-size:var(--t-sm)}
+.math ol{margin:.6rem 0 0;padding-left:1.4rem;color:var(--ink-2);
+  font-size:var(--t-sm);line-height:1.6}
+.math li{margin:.25rem 0}
+.math li::marker{color:var(--ink-3)}
 </style>"""
 
 _SCRIPT = """<script>
@@ -378,6 +389,7 @@ def render_person_page(
     debtor: Debtor,
     *,
     app_name: str,
+    rules: FeeRules,
     back_url: str = "",
     demo_mode: bool = False,
     print_mode: bool = False,
@@ -391,72 +403,81 @@ def render_person_page(
     Разделять эти два экрана обязательно. Смешать их значило бы показать
     рядом проверенное и непроверенное одинаковым шрифтом — а весь продукт
     держится на том, что «не спрашивали» и «не нашли» выглядят по-разному.
+
+    Порядок разделов — ответом вперёд. Раньше страница начиналась с ФИО и
+    даты рождения, то есть с того, что читатель уже знал: он сюда за этим
+    именем и кликнул. Решение и его цена стояли внизу, за таблицей полей.
     """
     from app.web.render import demo_banner
+
+    amount = _amount(debtor)
+    kind, fee = _classify(amount, rules)
 
     parts: list[str] = []
     if demo_mode:
         parts.append(demo_banner())
-    parts.append(_person_hero(debtor, back_url))
+    parts.append(_person_hero(debtor, kind, fee, back_url))
+    parts.append(_person_money(debtor, kind, fee, rules))
     parts.append(_person_facts(debtor))
-    parts.append(_person_money(debtor))
 
     # Ссылку «ко всему списку» даёт шапка, а не навигация: navigation печатает
     # подпись текстом, и полный адрес встал бы на страницу вместе с токеном
     # доступа — тем самым, который открывает всю базу.
-    nav = navigation(app_name, [("facts", "Что известно"), ("money", "Деньги")])
+    nav = navigation(app_name, [("money", "Деньги"), ("facts", "Что известно")])
     body = _STYLE + "".join(parts)
     if print_mode:
         body += print_footer(app_name, utcnow())
     return document(title=f"{app_name} — должник", nav=nav, body=body)
 
 
-def _person_hero(debtor: Debtor, back_url: str) -> str:
+def _person_hero(debtor: Debtor, kind: _Kind, fee: Decimal | None, back_url: str) -> str:
+    """Шапка: имя и сразу ответ — как подавать и во что это обойдётся."""
     back = f'<p class="hint"><a href="{e(back_url)}">← ко всему списку</a></p>' if back_url else ""
     born = debtor.birth_date.strftime("%d.%m.%Y") if debtor.birth_date else "—"
+    amount = _amount(debtor)
+    shown = format_amount(amount) if amount is not None else "—"
+    if amount is not None and debtor.debt_is_estimated:
+        shown += "*"
+    figures = "".join(
+        (
+            f'<div><span class="lbl">Долг</span><b>{e(shown)}</b></div>',
+            f'<div><span class="lbl">Пошлина</span>'
+            f"<b>{e(format_amount(fee) if fee is not None else '—')}</b></div>",
+        )
+    )
     return (
-        '<header class="hero">'
+        '<header class="hero" id="who">'
         f"<h1>{e(debtor.fio or 'Без имени')}</h1>"
+        f'<p class="lead"><span class="pill k-{kind.key}">{e(kind.title)}</span></p>'
+        f'<div class="nums">{figures}</div>'
         f'<p class="hint">Дата рождения: {e(born)}</p>'
         f"{back}"
         "</header>"
     )
 
 
-def _person_facts(debtor: Debtor) -> str:
-    plates = debtor.vehicle_plates or debtor.vehicle_plate or "—"
-    episodes = debtor.source_record_ids or debtor.external_debtor_id or "—"
-    count = len([item for item in episodes.split(",") if item.strip()]) if episodes != "—" else 0
-    rows = [
-        ("Машины", plates),
-        ("Задержаний", str(count) if count else "—"),
-        ("ИД записей в учёте", episodes),
-        ("Адрес", debtor.address or "—"),
-        # Паспорт только маской: сам номер нужен мосту к ИНН, а не читателю.
-        ("Паспорт", debtor.passport_masked or "—"),
-        ("ИНН", debtor.inn or "—"),
-        ("Договор", debtor.contract_number or "—"),
-    ]
-    body = table(
-        ("Поле", "Значение"),
-        [(cell(name, label="Поле"), cell(value, label="Значение")) for name, value in rows],
-    )
-    return section("facts", "Что известно", body)
+def _person_money(
+    debtor: Debtor, kind: _Kind, fee: Decimal | None, rules: FeeRules
+) -> str:
+    """Деньги и — раскрывающимся блоком — как они посчитаны.
 
-
-def _person_money(debtor: Debtor) -> str:
-    if debtor.debt_amount is None:
+    Расчёт свёрнут намеренно. Владелица просила ровно так: «алгоритм подсчёта
+    под капотом, но с возможностью посмотреть заказчику». Развёрнутый он
+    занимает больше места, чем ответ, ради которого страницу открыли, а
+    спрятанный совсем — превращает пошлину в число, которое неоткуда проверить.
+    """
+    amount = _amount(debtor)
+    if amount is None:
         return section(
             "money",
             "Деньги",
             '<p class="hint">Суммы долга нет: считать цену иска и пошлину не из чего.</p>',
         )
-    amount = Decimal(str(debtor.debt_amount))
     order = court_order_fee(amount)
     claim = claim_fee(amount)
     note = (
         '<p class="hint">Сумма посчитана по тарифу из дат постановки и выдачи, '
-        "а не взята из документа.</p>"
+        "а не взята из документа. В цену иска она идёт только после сверки.</p>"
         if debtor.debt_is_estimated
         else ""
     )
@@ -471,4 +492,143 @@ def _person_money(debtor: Debtor) -> str:
             (cell("Пошлина: иск", label="Что"), cell(format_amount(claim), label="Сколько")),
         ],
     )
-    return section("money", "Деньги", body + note)
+    return section("money", "Деньги", body + note + _fee_math(amount, kind, fee, rules))
+
+
+def _fee_math(
+    amount: Decimal, kind: _Kind, fee: Decimal | None, rules: FeeRules
+) -> str:
+    """Откуда взялось это число — ступень, ставка, множитель, порог.
+
+    Числа считаются теми же ``claim_fee``/``court_order_fee``, что и всё
+    остальное, а ступень ищется в той же ``FEE_BRACKETS``. Расчёт, набранный
+    руками, разъезжается с кодом на первой правке и начинает врать убедительно
+    — он же выглядит как документация.
+    """
+    upper, base, rate, over = next(
+        bracket for bracket in FEE_BRACKETS if bracket[0] is None or amount <= bracket[0]
+    )
+    edge = f"до {format_amount(upper)}" if upper is not None else f"свыше {format_amount(over)}"
+    steps = [f"Цена иска {format_amount(amount)} — ступень «{edge}» (ст. 333.19 НК РФ)."]
+    if rate:
+        steps.append(
+            f"{format_amount(base)} + {_percent(rate)} от суммы свыше {format_amount(over)} "
+            f"= {format_amount(claim_fee(amount))} по иску."
+        )
+    else:
+        steps.append(f"Пошлина по иску — {format_amount(base)}, без процентной части.")
+    if kind is _CLAIM:
+        steps.append(
+            f"Долг больше {format_amount(rules.court_order_max)}, значит иск: "
+            f"{format_amount(claim_fee(amount))}."
+        )
+    else:
+        steps.append(
+            f"Долг не больше {format_amount(rules.court_order_max)}, значит судебный приказ — "
+            f"половина пошлины по иску: {format_amount(court_order_fee(amount))}."
+        )
+    if fee:
+        steps.append(_worth_it(amount, fee, kind, rules))
+    steps.append(
+        "Проценты по ст. 395 ГК сюда не входят: их считает юрист на дату подачи, "
+        "и от них зависит ступень."
+    )
+    items = "".join(f"<li>{e(step)}</li>" for step in steps)
+    return (
+        '<details class="math"><summary>Как посчитана пошлина</summary>'
+        f"<ol>{items}</ol></details>"
+    )
+
+
+def _worth_it(amount: Decimal, fee: Decimal, kind: _Kind, rules: FeeRules) -> str:
+    """Окупается ли процесс — словами, которые не переворачивают смысл.
+
+    Отдельная функция, потому что случая три, а не два, и один из них уже был
+    напечатан наизнанку: при долге меньше пошлины отношение выходит меньше
+    единицы, и общая формулировка объявляла «долг больше пошлины в 0,6 раза».
+    """
+    if amount < fee:
+        return (
+            f"Пошлина {format_amount(fee)} больше самого долга {format_amount(amount)} — "
+            "процесс не окупается."
+        )
+    times = _times(amount / fee)
+    if kind is _THIN:
+        return (
+            f"Долг больше пошлины лишь в {times} при пороге "
+            f"{_number(rules.min_debt_to_fee_ratio)} — процесс не окупается."
+        )
+    return f"Долг больше пошлины в {times} — подавать окупается."
+
+
+def _times(value: Decimal) -> str:
+    """«19,2 раза», «5 раз», «21 раз».
+
+    Дробное всегда «раза»; целое склоняется как обычное число. Без этого экран
+    предлагал подавать «в 5 раза».
+    """
+    rounded = value.quantize(Decimal("0.1"))
+    if rounded == rounded.to_integral_value():
+        whole = int(rounded)
+        return f"{whole} {pluralize_ru(whole, 'раз', 'раза', 'раз')}"
+    return f"{_number(rounded)} раза"
+
+
+def _percent(rate: Decimal) -> str:
+    """Ставка по-русски: «3%», «2,5%», «0,35%»."""
+    text = format((rate * 100).normalize(), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text.replace(".", ",") + "%"
+
+
+def _number(value: Decimal) -> str:
+    """Число с запятой вместо точки и без хвоста нулей: «19,2», «3»."""
+    text = format(value.normalize(), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text.replace(".", ",")
+
+
+def _person_facts(debtor: Debtor) -> str:
+    plates = debtor.vehicle_plates or debtor.vehicle_plate or "—"
+    episodes = debtor.source_record_ids or debtor.external_debtor_id or "—"
+    count = len([item for item in episodes.split(",") if item.strip()]) if episodes != "—" else 0
+    rows = [
+        ("Машины", plates),
+        ("Задержаний", str(count) if count else "—"),
+        # В базе лежит одна пара дат, а не список эпизодов: выгрузка отдаёт их
+        # строками, а строки склеиваются в одного должника. Поэтому здесь
+        # сказано «последнее», а не «единственное» — иначе страница обещала бы
+        # полный перечень задержаний, которого у неё нет.
+        ("Последнее хранение", _storage_period(debtor)),
+        ("ИД записей в учёте", episodes),
+        ("Адрес", debtor.address or "—"),
+        # Паспорт только маской: сам номер нужен мосту к ИНН, а не читателю.
+        ("Паспорт", debtor.passport_masked or "—"),
+        ("ИНН", debtor.inn or "—"),
+        ("Договор", debtor.contract_number or "—"),
+    ]
+    body = table(
+        ("Поле", "Значение"),
+        [(cell(name, label="Поле"), cell(value, label="Значение")) for name, value in rows],
+    )
+    return section("facts", "Что известно", body)
+
+
+def _storage_period(debtor: Debtor) -> str:
+    """С какого по какое машина стояла — и сколько это полных суток.
+
+    Полных: неполные не тарифицируются, почасовую оплату отменили. Показывать
+    «1,4 суток» значило бы объяснять сумму, которой не будет.
+    """
+    if debtor.impounded_at is None or debtor.released_at is None:
+        return "—"
+    hours = (debtor.released_at - debtor.impounded_at).total_seconds() / 3600
+    if hours < 0:
+        return "—"
+    days = int(hours // 24)
+    since = format_datetime(debtor.impounded_at)
+    until = format_datetime(debtor.released_at)
+    tail = f", {days} {pluralize_ru(days, 'сутки', 'суток', 'суток')}" if days else ", меньше суток"
+    return f"{since} — {until}{tail}"

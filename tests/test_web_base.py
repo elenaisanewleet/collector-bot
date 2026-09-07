@@ -96,3 +96,82 @@ def test_tabs_and_rows_agree_on_colour() -> None:
         assert f'class="pill k-{key}"' in html, f"нет строки {key}"
     for key in ("order", "claim", "thin", "none"):
         assert f'class="tab k-{key}"' in html, f"нет вкладки {key}"
+
+
+# ------------------------------------------------------------ один должник
+
+
+def person(amount: str | None, *, estimated: bool = False) -> str:
+    from app.web.render_base import render_person_page
+
+    row = debtor(1, amount)
+    row.debt_is_estimated = estimated
+    row.contract_number = "EV-20481"
+    row.source_record_ids = "793783, 830279"
+    return render_person_page(row, app_name="Collector Bot", rules=RULES, back_url="/b/tok")
+
+
+def test_the_person_page_answers_before_it_describes() -> None:
+    """Первым идёт решение и его цена, а не паспортные поля.
+
+    Страница открывается кликом по имени: имя читатель уже знает, он по нему и
+    кликнул. Раньше она начиналась с ФИО и даты рождения, а «как подавать» и
+    «сколько это стоит» лежали под таблицей полей.
+    """
+    # Сравнивается порядок в теле страницы, а не во всём документе: оглавление
+    # в шапке перечисляет те же разделы и стоит раньше любого из них.
+    body = person("38400").split("<main>", 1)[1]
+
+    assert body.index('class="pill k-order"') < body.index('id="money"')
+    assert body.index('id="money"') < body.index('id="facts"')
+
+
+def test_the_fee_can_be_checked_step_by_step() -> None:
+    """Расчёт свёрнут, но раскрывается: «под капотом, но можно посмотреть».
+
+    Дословная просьба владелицы. Развёрнутый расчёт занимает больше места, чем
+    ответ, ради которого страницу открыли; спрятанный совсем — превращает
+    пошлину в число, которое неоткуда проверить.
+    """
+    html = person("2500000")
+
+    assert "<details" in html and "Как посчитана пошлина" in html
+    assert "ст. 333.19 НК РФ" in html
+    # Ступень, ставка и итог — числами, а не общими словами.
+    assert "25 000 ₽ + 1% от суммы свыше 1 000 000 ₽" in html
+    assert "40 000 ₽" in html
+
+
+def test_a_fee_larger_than_the_debt_is_not_called_a_multiple() -> None:
+    """При долге меньше пошлины отношение меньше единицы, и его нельзя звать «больше».
+
+    Общая формулировка печатала «долг больше пошлины в 0,6 раза» — фразу,
+    которая переворачивает смысл ровно там, где ответ «не подавать».
+    """
+    html = person("1200")
+
+    assert "Пошлина 2 000 ₽ больше самого долга 1 200 ₽" in html
+    assert "больше пошлины в 0,6" not in html
+
+
+def test_the_multiplier_is_declined_like_a_russian_number() -> None:
+    """«в 5 раз», а не «в 5 раза»: экран читает человек."""
+    from app.web.render_base import _times
+
+    assert _times(Decimal("19.2")) == "19,2 раза"
+    assert _times(Decimal("5")) == "5 раз"
+    assert _times(Decimal("21")) == "21 раз"
+    assert _times(Decimal("22")) == "22 раза"
+
+
+def test_storage_says_last_not_only() -> None:
+    """В базе лежит одна пара дат, а не список задержаний.
+
+    Выгрузка отдаёт задержания строками, строки склеиваются в одного должника,
+    и до столбца сохраняется только последний период. Назвать его «периодом
+    хранения» значило бы обещать полный перечень, которого у страницы нет.
+    """
+    html = person("38400")
+
+    assert "Последнее хранение" in html
+    assert "Задержаний" in html
