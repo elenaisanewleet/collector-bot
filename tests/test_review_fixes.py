@@ -36,10 +36,12 @@ from aiogram import Bot, Dispatcher
 from app.bot.handlers.import_csv import render_import_report
 from app.container import Container
 from app.db.repository import DebtorRepository
-from app.domain.enums import ProviderStatus, SearchType
+from app.db.session import Database
+from app.domain.enums import ProviderName, ProviderStatus, SearchType
 from app.domain.identity import NameParseError, PersonName, SearchSubject
-from app.domain.models import DebtorReport
+from app.domain.models import DebtorReport, ProviderResult
 from app.domain.verdict import Verdict
+from app.providers.phone_bridge import PhoneNameProvider, PhoneNameResult
 from app.services.batch import BatchAlreadyRunningError, BatchService
 from app.services.scoring import RecoveryScoreEngine
 from tests.conftest import make_proceeding
@@ -1042,3 +1044,105 @@ async def test_a_debtor_is_found_by_any_of_their_plates(container: Container) ->
                 search_type=SearchType.VEHICLE.value, vehicle=VehicleDescriptor(plate=stranger)
             )
         ), f"нашёлся посторонний номер {stranger}"
+
+
+# ------- 23. цепочка «ввёл номер — увидел должника» через мост «телефон → ФИО»
+
+
+class _PhoneBridgeStub(PhoneNameProvider):
+    """Сервис заказчика, отдающий ФИО по номеру. Без сети."""
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        return PhoneNameResult(
+            provider=self.name,
+            status=ProviderStatus.SUCCESS,
+            records=(),
+            name=PersonName(last_name="Тестов", first_name="Андрей", middle_name="Сергеевич"),
+            note="ФИО определено по номеру",
+        )
+
+
+async def test_a_phone_reaches_the_debtor_through_the_name_bridge(
+    container: Container, database: Database
+) -> None:
+    """Оператор вводит номер и получает должника, хотя телефона в выгрузке нет.
+
+    Это сценарий из ТЗ дословно: «ввёл ФИО+номер телефона — увидел инфу и понял
+    перспективу взыскания». В выгрузке заказчика телефона нет ни одной колонкой
+    — там ИД, две даты, стоянка, подразделение, ФИО, дата рождения, место
+    рождения, паспорт, адрес, права, марка и госномер, — и ни один внешний
+    реестр по номеру тоже не ищет. Без моста самый естественный для оператора
+    ввод не находил никого.
+
+    Мост переводит номер в ФИО, и уже им поднимается строка выгрузки, из
+    которой считается долг и пошлина.
+
+    Порядок обязателен: мост идёт РАНЬШЕ внутренней базы. Иначе искать строку
+    нечем, а без строки нечем обогатить запрос к реестрам.
+
+    И имя из моста — ключ поиска, а не факт: записей он не приносит, в покрытие
+    отчёта не входит. В отчёт едут данные взыскателя и ответы реестров.
+    """
+    from app.providers.registry import (
+        ProviderRegistry,
+        build_external_providers,
+        build_inn_bridge,
+        build_internal_provider,
+    )
+    from app.services.search import SearchService
+
+    container.settings.tow_fee = Decimal("5000")
+    container.settings.storage_fee_per_day = Decimal("1394")
+    await container.import_service.import_text(
+        "ИД,ФИО,Дата рождения,Дата постановки,Дата выдачи,Госномер\n"
+        "440466,Тестов Андрей Сергеевич,15.03.1980,01.04.2023 10:00,06.04.2023 12:00,А123ВС777"
+    )
+
+    registry = ProviderRegistry(
+        internal=build_internal_provider(container.settings, database),
+        external=build_external_providers(container.settings),
+        inn_bridge=build_inn_bridge(container.settings),
+        phone_bridge=_PhoneBridgeStub(container.settings),
+    )
+    service = SearchService(settings=container.settings, database=database, registry=registry)
+
+    outcome = await service.search_detailed(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945"),
+        telegram_user_id=OPERATOR_ID,
+    )
+    report = outcome.report
+    decision = container.verdict_engine.decide(report)
+
+    assert report.subject.name is not None
+    assert report.subject.name.full == "Тестов Андрей Сергеевич"
+
+    found = report.internal_records
+    assert found, "строка выгрузки не поднялась по имени из моста"
+    # Пять полных суток хранения плюс эвакуация.
+    assert found[0].debt_amount == Decimal("5000") + Decimal("1394") * 5
+    assert decision.state_fee == Decimal("2000")
+
+    bridge_rows = [
+        row for row in report.provider_results if row.provider is ProviderName.PHONE_BRIDGE
+    ]
+    assert bridge_rows, "мост не оставил строки в блоке ИСТОЧНИКИ"
+    assert not bridge_rows[0].records, "мост принёс записи в отчёт — он не источник фактов"
+    assert ProviderName.PHONE_BRIDGE not in registry.configured_names
+
+
+async def test_the_operators_own_name_beats_the_bridge(container: Container) -> None:
+    """Названное оператором ФИО сильнее: он смотрит в документ, мост — в чужую базу."""
+    bridge = _PhoneBridgeStub(container.settings)
+    named = SearchSubject(
+        search_type=SearchType.PERSON.value,
+        phone="+79851982945",
+        name=PersonName(last_name="Сидорова", first_name="Анна"),
+    )
+    assert not bridge.is_needed(named)
+    assert bridge.is_needed(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945")
+    )

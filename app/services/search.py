@@ -149,11 +149,20 @@ class SearchService:
                 )
                 return SearchOutcome(cached.report, cached.request_id)
 
-        # Внутренняя база — первой, и это не косметика. Оператор вводит номер
-        # телефона: заказчик ведёт должников в 1С, выгрузка приходит оттуда, и
-        # ФИО с датой рождения лежат в ней рядом с номером. Без переноса их в
-        # запрос ФССП и залоги отвечают «недостаточно данных» на человека,
-        # которого мы только что нашли у себя.
+        # Мост «телефон → ФИО» — раньше всех, и это не выбор порядка, а
+        # единственный возможный порядок. Оператор вводит номер, а в выгрузке
+        # из 1С телефона нет ни одной колонкой: без имени не найти строку у
+        # себя и нечего спрашивать у реестров. Мост отдаёт имя, и уже им
+        # ищется должник.
+        #
+        # Найденное имя — ключ поиска, а не факт отчёта: в отчёт попадут данные
+        # взыскателя и ответы официальных реестров, а не утверждение стороннего
+        # сервиса о том, кому принадлежит номер.
+        subject, phone_result = await self._resolve_name_by_phone(subject)
+
+        # Внутренняя база — следом, и это не косметика. ФИО с датой рождения
+        # лежат в выгрузке, и без переноса их в запрос ФССП и залоги отвечают
+        # «недостаточно данных» на человека, которого мы только что нашли у себя.
         internal_records, internal_result, internal_exact = await self.lookup_internal_result(
             subject
         )
@@ -164,8 +173,9 @@ class SearchService:
         # вызов) и строго до внешней волны: три источника ищут только по ИНН.
         subject, bridge_result = await self._resolve_inn(subject)
         provider_results = await self._run_external(subject, context)
-        if bridge_result is not None:
-            provider_results = [bridge_result, *provider_results]
+        for extra in (bridge_result, phone_result):
+            if extra is not None:
+                provider_results = [extra, *provider_results]
 
         report = self._aggregator.build(
             subject, [internal_result, *provider_results], internal_records=internal_records
@@ -246,6 +256,32 @@ class SearchService:
         )
 
     # ------------------------------------------------------------- internals
+
+    async def _resolve_name_by_phone(
+        self, subject: SearchSubject
+    ) -> tuple[SearchSubject, ProviderResult | None]:
+        """Достать ФИО по номеру, когда искать больше нечем.
+
+        Зовётся строго до внутренней базы: имя нужно, чтобы поднять строку из
+        выгрузки, а без строки нечем обогатить запрос к реестрам. Ключ кэша
+        считается ещё раньше — по вопросу оператора, — поэтому повторный ввод
+        того же номера мост не переспрашивает.
+
+        Имя проставляется только в пустое поле. Названное оператором ФИО
+        сильнее: он смотрит в документ, а мост — в чужую базу.
+        """
+        bridge = self._registry.phone_bridge
+        if bridge is None or not bridge.is_needed(subject):
+            return subject, None
+        result = await bridge.fetch(subject)
+        found = getattr(result, "name", None)
+        if found is None:
+            return subject, result
+        update: dict[str, object] = {"name": found}
+        birth = getattr(result, "birth_date", None)
+        if birth is not None and subject.birth_date is None:
+            update["birth_date"] = birth
+        return subject.model_copy(update=update), result
 
     async def _resolve_inn(
         self, subject: SearchSubject

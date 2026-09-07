@@ -29,6 +29,7 @@ from app.providers.internal.csv_provider import CSVInternalDebtorProvider
 from app.providers.internal.db_provider import DatabaseInternalDebtorProvider
 from app.providers.mock import DemoInnBridgeProvider, build_demo_providers
 from app.providers.newdb import NewDBFieldMaps
+from app.providers.phone_bridge import PhoneNameProvider, build_phone_bridge
 from app.providers.pledge import NewDBPledgeProvider
 from app.providers.property import NewDBPropertyProvider
 from app.providers.vehicle import UnconfiguredVehicleProvider
@@ -63,11 +64,19 @@ class ProviderRegistry:
         internal: InternalDebtorProvider,
         external: Sequence[BaseProvider],
         inn_bridge: InnBridgeProvider | None = None,
+        phone_bridge: PhoneNameProvider | None = None,
     ) -> None:
         self._internal = internal
         self._external = list(external)
         self._inn_bridge = inn_bridge
-        _reject_duplicates([*self._external, *([inn_bridge] if inn_bridge else [])])
+        self._phone_bridge = phone_bridge
+        _reject_duplicates(
+            [
+                *self._external,
+                *([inn_bridge] if inn_bridge else []),
+                *([phone_bridge] if phone_bridge else []),
+            ]
+        )
 
     @property
     def internal(self) -> InternalDebtorProvider:
@@ -76,6 +85,18 @@ class ProviderRegistry:
     @property
     def external(self) -> list[BaseProvider]:
         return list(self._external)
+
+    @property
+    def phone_bridge(self) -> PhoneNameProvider | None:
+        """Мост «телефон → ФИО».
+
+        Отдельный слот по тем же двум причинам, что и мост к ИНН: он обязан
+        отработать РАНЬШЕ всех — без имени не найти строку в выгрузке и нечего
+        спрашивать у реестров, — и обязан остаться вне ``configured_names``,
+        иначе покрытие отчёта и смета прогона посчитают его источником фактов.
+        Фактов он не приносит: его ответ — ключ поиска.
+        """
+        return self._phone_bridge
 
     @property
     def inn_bridge(self) -> InnBridgeProvider | None:
@@ -197,6 +218,7 @@ def build_registry(settings: Settings, database: Database) -> ProviderRegistry:
         internal=build_internal_provider(settings, database),
         external=build_external_providers(settings, database),
         inn_bridge=build_inn_bridge(settings),
+        phone_bridge=build_phone_bridge(settings),
     )
     bridge = registry.inn_bridge
     logger.info(

@@ -207,6 +207,24 @@ class Settings(BaseSettings):
     # вызовов сверх сметы.
     inn_bridge_enabled: bool = False
 
+    # ------------------------------------------------- мост «телефон → ФИО»
+    # Заказчик формулирует сценарий одной фразой: «ввёл номер — увидел
+    # должника». В выгрузке из 1С телефона нет ни одной колонкой, и ни один
+    # внешний реестр по номеру не ищет, поэтому без моста этот ввод не находит
+    # никого. Мост переводит номер в ФИО, которым уже ищется строка в нашей же
+    # таблице; в отчёт его ответ не попадает — это ключ поиска, а не факт.
+    #
+    # Поставщик не зашит: адрес, авторизация и карта полей задаются настройками,
+    # как у остальных внешних адаптеров. Решение, какому сервису доверять и на
+    # каком основании, принимает владелец, а не код.
+    phone_bridge_enabled: bool = False
+    phone_bridge_base_url: str = ""
+    phone_bridge_path: str = ""
+    phone_bridge_api_key: str = ""
+    phone_bridge_auth_style: AuthStyle = AuthStyle.BEARER
+    phone_bridge_auth_name: str = "X-Api-Key"
+    phone_bridge_field_map: Path | None = None
+
     # ---------------------------------------------------------------- import
     max_import_file_bytes: Annotated[int, Field(ge=1024)] = 5 * 1024 * 1024
     max_import_rows: Annotated[int, Field(ge=1)] = 50_000
@@ -298,6 +316,7 @@ class Settings(BaseSettings):
         "web_public_url",
         "fedresurs_base_url",
         "fns_base_url",
+        "phone_bridge_base_url",
         "inheritance_base_url",
     )
     @classmethod
@@ -434,6 +453,21 @@ class Settings(BaseSettings):
         скаляры. Разбор поэтому в коде, а гейтом служит настройка.
         """
         return self.newdb_configured and self.rosreestr_enabled
+
+    @property
+    def phone_bridge_configured(self) -> bool:
+        """Мост настроен, только когда есть куда идти и чем читать ответ.
+
+        Карта полей обязательна наравне с адресом: без неё ответ поставщика —
+        произвольный JSON, из которого имя пришлось бы угадывать, а угаданное
+        имя поднимет из выгрузки не того человека.
+        """
+        return bool(
+            self.phone_bridge_enabled
+            and self.phone_bridge_base_url
+            and self.phone_bridge_path
+            and self.phone_bridge_field_map is not None
+        )
 
     @property
     def inheritance_configured(self) -> bool:

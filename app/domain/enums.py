@@ -68,6 +68,11 @@ class ProviderName(StrEnum):
     # источника, ищущие только по ИНН, вообще могли быть опрошены. Записей не
     # приносит и покрытие отчёта не увеличивает.
     INN_BRIDGE = "inn_bridge"
+    # Второй мост. Оператор вводит телефон — в выгрузке 1С телефона нет вовсе,
+    # и найти по нему строку нечем. Мост переводит номер в ФИО, которым уже
+    # ищется должник в нашей же таблице. Записей в отчёт не приносит: найденное
+    # им имя — ключ поиска, а не установленный факт.
+    PHONE_BRIDGE = "phone_bridge"
 
 
 PROVIDER_TITLES: dict[ProviderName, str] = {
@@ -85,6 +90,7 @@ PROVIDER_TITLES: dict[ProviderName, str] = {
     ProviderName.PLEDGE: "Залоги",
     ProviderName.INHERITANCE: "Наследственные дела",
     ProviderName.INN_BRIDGE: "ИНН по паспорту (ФНС)",
+    ProviderName.PHONE_BRIDGE: "ФИО по телефону",
 }
 
 
@@ -103,6 +109,7 @@ class MissingInput(StrEnum):
     BIRTH_DATE = "birth_date"
     INN = "inn"
     PASSPORT = "passport"
+    PHONE = "phone"
     VIN = "vin"
 
 
@@ -111,6 +118,7 @@ MISSING_INPUT_TITLES: dict[MissingInput, str] = {
     MissingInput.BIRTH_DATE: "нужна дата рождения",
     MissingInput.INN: "нужен ИНН физлица (12 цифр)",
     MissingInput.PASSPORT: "нужны серия и номер паспорта",
+    MissingInput.PHONE: "нужен номер телефона",
     MissingInput.VIN: "нужен VIN",
 }
 
