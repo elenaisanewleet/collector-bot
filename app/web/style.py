@@ -33,6 +33,11 @@ CSS = """
   --line:#CDD4DE; --line-soft:#E1E6ED;
   --good:#155C46; --good-bg:#E1EFE9;
   --warn:#7A5809; --warn-bg:#F6EDD8;
+  /* Штриховка «не проверено». Отдельным токеном, потому что она рисуется
+     поверх поверхности, а не поверх --warn-bg: тёмно-янтарный на 13% читается
+     на белом и полностью исчезает на #161C25. Это уже стояло на проде —
+     единственный признак «источник молчал» в тёмной теме был невидим. */
+  --hatch:rgba(122,88,9,.13);
   --crit:#95302A; --crit-bg:#F7E3E0;
   --hero:#141922; --hero-ink:#F4F6FA; --hero-dim:#9AA6B6; --hero-soft:#CFD7E2;
   --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono","Roboto Mono",Menlo,Consolas,monospace;
@@ -51,6 +56,7 @@ CSS = """
     --line:#37414F; --line-soft:#2C3644;
     --good:#5CBA98; --good-bg:#15271F;
     --warn:#D6A73C; --warn-bg:#2A2114;
+    --hatch:rgba(214,167,60,.20);
     --crit:#E38375; --crit-bg:#2C1917;
     /* Герой в тёмной теме светлее фона: иначе единственный блок, ради которого
        открывают страницу, растворяется в подложке. */
@@ -100,7 +106,7 @@ main{min-width:0;display:flex;flex-direction:column;gap:var(--s-4)}
   border-radius:var(--r);padding:var(--s-3) var(--s-4);font-weight:600;
   font-size:var(--t-sm);
   background-image:repeating-linear-gradient(135deg,transparent 0 10px,
-    rgba(122,88,9,.10) 10px 20px)}
+    var(--hatch) 10px 20px)}
 
 /* ---------------- герой ----------------
    Один сильный блок вместо ровного поля одинаковых карточек: страницу
@@ -251,7 +257,7 @@ button.copy[data-done="1"]{border-color:var(--good);color:var(--good)}
 .tag.unchecked{background:transparent;color:var(--warn);border-color:var(--warn);
   border-style:dashed;
   background-image:repeating-linear-gradient(135deg,transparent 0 5px,
-    rgba(122,88,9,.13) 5px 10px)}
+    var(--hatch) 5px 10px)}
 
 .empty{color:var(--ink-2)}
 .empty.unchecked{color:var(--warn);font-weight:600;
