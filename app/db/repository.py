@@ -149,7 +149,29 @@ class DebtorRepository:
         )
 
     async def find_by_plate(self, plate: str) -> list[Debtor]:
-        return await self._all(select(Debtor).where(Debtor.vehicle_plate == plate))
+        """Должник по госномеру — по любой его машине, а не только по последней.
+
+        У взыскателя-эвакуатора один человек приезжает в выгрузке несколько раз
+        на разных машинах, и все его номера хранятся в ``vehicle_plates``. Пока
+        искали только по ``vehicle_plate``, находилась одна машина из
+        нескольких: на живой выгрузке 88 должников, чьи прежние номера не
+        находились вовсе. А госномер здесь — главный ключ поиска: телефона в
+        выгрузке нет, машина у оператора на руках, и именно её он и вводит.
+
+        Совпадение по списку — по границам элемента, а не подстрокой: «А123ВС77»
+        не должен находиться внутри «А123ВС777».
+        """
+        return await self._all(
+            select(Debtor).where(
+                or_(
+                    Debtor.vehicle_plate == plate,
+                    Debtor.vehicle_plates == plate,
+                    Debtor.vehicle_plates.startswith(f"{plate}, "),
+                    Debtor.vehicle_plates.endswith(f", {plate}"),
+                    Debtor.vehicle_plates.contains(f", {plate}, "),
+                )
+            )
+        )
 
     async def find_by_vin(self, vin: str) -> list[Debtor]:
         return await self._all(select(Debtor).where(Debtor.vin == vin))

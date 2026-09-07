@@ -999,3 +999,46 @@ async def test_a_debt_from_the_export_beats_the_tariff(container: Container) -> 
 
     assert row.debt_amount == Decimal("73500")
     assert not row.debt_is_estimated, "сумма из выгрузки помечена расчётной"
+
+
+# ---------------- 22. должник находится по любой своей машине
+
+
+async def test_a_debtor_is_found_by_any_of_their_plates(container: Container) -> None:
+    """Госномер — главный ключ поиска в этой выгрузке, и он обязан находить все машины.
+
+    Телефона в выгрузке взыскателя-эвакуатора нет вовсе, ФИО есть не у всех, а
+    госномер есть у каждой строки — и машина у оператора буквально на руках,
+    именно её он и вводит. При этом один должник приезжает в выгрузке
+    несколько раз на разных машинах: на живой выгрузке таких 88.
+
+    Пока искали только по последнему номеру, прежние машины не находились
+    вовсе: оператор вводил номер из своего же документа и получал «не найден».
+    """
+    from app.domain.enums import SearchType
+    from app.domain.identity import VehicleDescriptor
+
+    await container.import_service.import_text(
+        "ФИО,Дата рождения,Госномер\n"
+        "Тестов Андрей Сергеевич,15.03.1980,А123ВС777\n"
+        "Тестов Андрей Сергеевич,15.03.1980,В456ЕК750\n"
+        "Тестов Андрей Сергеевич,15.03.1980,Е789МН197"
+    )
+
+    for plate in ("А123ВС777", "В456ЕК750", "Е789МН197"):
+        found = await container.search_service.lookup_internal(
+            SearchSubject(
+                search_type=SearchType.VEHICLE.value, vehicle=VehicleDescriptor(plate=plate)
+            )
+        )
+        assert found, f"должник не найден по своей же машине {plate}"
+
+    # Чужой номер не должен находиться, и совпадение идёт по границам элемента:
+    # обрезанный «Е789МН19» не живёт внутри «Е789МН197». Номера подобраны так,
+    # чтобы не совпасть с демо-выгрузкой, которую тот же провайдер читает рядом.
+    for stranger in ("А001АА99", "Е789МН19", "789МН197"):
+        assert not await container.search_service.lookup_internal(
+            SearchSubject(
+                search_type=SearchType.VEHICLE.value, vehicle=VehicleDescriptor(plate=stranger)
+            )
+        ), f"нашёлся посторонний номер {stranger}"
