@@ -287,9 +287,16 @@ async def settle(
 
     found = await card_identify.identify(container.search_service, card)
     if found.only is not None:
-        await recognised(
-            message, container, card, found.only, user_id, notice=notice, autorun=guided
-        )
+        # Опознали ОДНОЗНАЧНО — проверка идёт сразу, и это дословное требование
+        # владелицы: «ввёл номер — сразу отчёт». Ждать нажатия «Проверить»
+        # незачем: человек прислал точный ключ, бот нашёл по нему ровно одного,
+        # и следующий вопрос был бы вопросом ни о чём.
+        #
+        # Правило «платит одна кнопка» этим не нарушено, а уточнено: платящим
+        # действием становится сам ввод точного ключа. Догадка по-прежнему не
+        # платит — свободное ФИО до выгрузки не доходит вовсе, а неоднозначное
+        # совпадение уходит в вопрос, а не в прогон.
+        await recognised(message, container, card, found.only, user_id, notice=notice)
         return
 
     if guided:
