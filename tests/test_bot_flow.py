@@ -41,14 +41,10 @@ async def test_start_shows_the_main_menu(
 
     # Название приложения убрано: латиница над русским текстом на первом экране.
     assert not sent.contains(container.settings.app_name)
-    # Приветствие говорит, что делать, а не описывает себя, и укладывается в
-    # одно действие: нажать кнопку и прислать телефон.
-    # Ни одного экрана между кнопкой и вводом: номер пишут прямо в чат.
-    assert sent.contains("Напишите номер телефона")
+    # Приветствие — одна фраза про то, на какой вопрос бот отвечает. Что делать,
+    # говорят две кнопки под полем ввода и подсказка в самом поле.
     assert sent.contains("стоит ли подавать и платить пошлину")
-    # И не даёт прочитать молчание источника как чистую биографию.
-    assert sent.contains("это не то же самое, что «чисто»")
-    assert sent.markups[0] is not None  # the inline menu
+    assert sent.markups[0] is not None  # нижняя клавиатура
 
 
 async def test_outsider_is_refused_and_reaches_no_handler(

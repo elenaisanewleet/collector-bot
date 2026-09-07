@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from aiogram import Bot, Dispatcher
 
 from app.bot import banner
 from app.bot.commands import BOT_COMMANDS, commands_help, telegram_commands
-from app.bot.handlers.start import welcome_text
+from app.bot.handlers.start import WELCOME_STEPS, welcome_text
 from app.bot.sources import sources_screen
 from app.container import Container
 from app.utils.formatting import split_message
@@ -138,32 +139,45 @@ def test_welcome_promises_only_what_the_bot_does(container: Container) -> None:
     text = welcome_text(container).lower()
     for overclaim in ("узнай всё", "по номеру телефона", "счета", "имущество", "пробив"):
         assert overclaim not in text
-    assert "не проверено" in text
 
 
-def test_welcome_says_what_to_do_and_stays_short(container: Container) -> None:
-    """Первый экран говорит, что нажать, а не описывает себя.
+def test_the_welcome_is_one_phrase(container: Container) -> None:
+    """Первый экран — одна фраза, и это требование владелицы, повторённое много раз.
 
-    Были три пронумерованных шага с эмодзи — экран, который читают по диагонали.
-    Осталось одно действие: нажать кнопку и прислать телефон. Оговорка про «не
-    проверено» остаётся при любом сокращении: разницу между «не смотрели» и
-    «чисто» надо узнать до первого отчёта.
+    Что делать, экран не объясняет намеренно: под полем ввода стоят две кнопки, а
+    в самом поле — подсказка «Напишите номер телефона должника». Инструкция
+    словами поверх этого была третьим объяснением одного и того же.
+
+    Оговорка «не проверено ≠ чисто» отсюда ушла, но из продукта не делась: она
+    стоит на карточке под каждым прочерком, в отчёте и в справке — там, где
+    человек читает её по делу, а не до первого своего действия.
+
+    Из чего собран ответ, первый экран не рекламирует: ни «реестров», ни базы по
+    имени. Это показывает экран «Откуда данные» — тому, кто спросил.
+    """
+    from app.config import AppMode
+
+    live = container.settings.model_copy(update={"app_mode": AppMode.LIVE})
+    text = welcome_text(replace(container, settings=live))
+
+    assert text.count(".") == 1, f"фраз больше одной: {text}"
+    assert "\n" not in text
+    assert "реестр" not in text.lower()
+    assert "1С" not in text and "1с" not in text
+    # Ненавязчиво — значит без пиктограмм в тексте.
+    assert not any(mark in text for mark in ("1️⃣", "2️⃣", "3️⃣", "⚠️"))
+
+
+def test_the_demo_note_is_the_only_thing_allowed_to_join_it(container: Container) -> None:
+    """В демо-режиме к фразе добавляется предупреждение, и только оно.
+
+    Демо-стенд показывают заказчику, и «данные вымышленные» он обязан прочитать
+    до того, как поверит первому же отчёту.
     """
     text = welcome_text(container)
 
-    assert "номер телефона" in text
-    # Первый экран не рекламирует, из чего собран ответ. Первая версия начиналась
-    # словами «проверяю должника по официальным реестрам» — неправда дважды:
-    # основа проверки это база самого заказчика, реестры добирают недостающее. Но
-    # и базу называть своим именем здесь незачем: «не надо про это рассказывать
-    # всем». Из чего собран ответ, показывает экран «Откуда данные» — тому, кто
-    # спросил.
-    assert "реестр" not in text.lower()
-    assert "1С" not in text and "1с" not in text
-    assert "не проверено" in text
-    # Ненавязчиво — значит без пиктограмм в тексте.
-    assert not any(mark in text for mark in ("1️⃣", "2️⃣", "3️⃣", "⚠️"))
-    assert len(text.splitlines()) <= 10
+    assert text.startswith(WELCOME_STEPS)
+    assert "Демо-режим" in text
 
 
 # ---------------------------------------------------------------- откуда данные
