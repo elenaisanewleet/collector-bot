@@ -44,11 +44,20 @@ async def send_welcome(
     text: str,
     *,
     reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
+    parse_mode: str | None = None,
 ) -> None:
-    """Приветствие с баннером, а без баннера — то же приветствие текстом."""
+    """Приветствие с баннером, а без баннера — то же приветствие текстом.
+
+    ``parse_mode`` передаётся явно, потому что глобально он выключен
+    (``app/main.py``): весь остальной бот пишет простым текстом, и это
+    защищает от того, что чужая фамилия с «<» уронит отправку сообщения.
+    Приветствие — единственное исключение, и только ради ссылки на базу:
+    у сообщения с нижней клавиатурой инлайн-кнопки быть не может, а
+    голый адрес с токеном на первом экране читать нечем.
+    """
     photo = _photo()
     if photo is None:
-        await message.answer(text, reply_markup=reply_markup)
+        await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
         return
 
     caption = text if len(text) <= CAPTION_LIMIT else None
@@ -57,16 +66,17 @@ async def send_welcome(
             photo,
             caption=caption,
             reply_markup=reply_markup if caption is not None else None,
+            parse_mode=parse_mode if caption is not None else None,
         )
     except Exception:
         # Что бы ни ответил Telegram — приветствие человек получить обязан.
         logger.warning("welcome.photo_failed", path=str(BANNER_PATH))
-        await message.answer(text, reply_markup=reply_markup)
+        await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
         return
 
     _remember(sent)
     if caption is None:
-        await message.answer(text, reply_markup=reply_markup)
+        await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
 
 
 def _photo() -> str | FSInputFile | None:

@@ -22,7 +22,14 @@ from app.bot.sources import sources_screen
 from app.container import Container
 from app.utils.formatting import split_message
 
-from .bot_harness import BANNER_FILE_ID, SentMessages, feed, make_callback, make_message
+from .bot_harness import (
+    BANNER_FILE_ID,
+    SentMessages,
+    dispatcher_for,
+    feed,
+    make_callback,
+    make_message,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -537,3 +544,116 @@ async def test_publish_commands_survives_a_refusal(
     monkeypatch.setattr(Bot, "__call__", refuse, raising=True)
 
     await publish_commands(bot)  # не бросает — бот обязан запуститься
+
+
+# ------------------------------------------------- ссылка на базу в приветствии
+
+
+def _with_web(container: Container, *, owner: bool) -> Container:
+    """Тот же бот, но с включёнными веб-ссылками — и с владельцем или без.
+
+    Без публичного адреса ``share_service`` молчит, и проверка «незнакомцу
+    ссылку не дали» прошла бы сама собой, ничего не проверив: ссылки не было
+    бы ни у кого. Здесь она есть, и отказ незнакомцу — настоящий.
+    """
+    from app.config import NO_OWNERS
+    from app.services.access import AccessService
+    from app.services.share import ShareLinkService
+
+    update: dict[str, object] = {"web_public_url": "https://example.test"}
+    if not owner:
+        update["owner_telegram_user_ids"] = NO_OWNERS
+    settings = container.settings.model_copy(update=update)
+    return replace(
+        container,
+        settings=settings,
+        share_service=ShareLinkService(settings, container.database),
+        access_service=AccessService(settings, container.database),
+    )
+
+
+async def _seed_debtors(container: Container, amounts: list[str]) -> None:
+    from decimal import Decimal
+
+    from app.db.models import Debtor
+    from app.db.repository import DebtorRepository
+
+    async with container.database.session() as session:
+        repo = DebtorRepository(session)
+        for index, amount in enumerate(amounts):
+            await repo.upsert(
+                Debtor(
+                    dedup_key=f"seed-{index}",
+                    fio=f"Иванов Иван Иванович {index}",
+                    debt_amount=Decimal(amount) if amount else None,
+                )
+            )
+
+
+def _welcome_of(sent: SentMessages) -> str:
+    """Текст приветствия — из подписи к баннеру или из обычного сообщения."""
+    return " ".join(sent.texts + [caption or "" for _, caption in sent.photos])
+
+
+async def test_the_welcome_carries_the_link_to_the_whole_base(
+    bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Первая строка после фразы — ссылка на весь список с числом и суммой.
+
+    Требование владелицы дословно: «заказчику ссылку на базу сразу». Половина
+    её вопросов к боту — не «проверь этого», а «кто у меня вообще есть», и
+    сегодня за этим лезут в 1С.
+
+    Ссылка живёт текстом, а не кнопкой, потому что у сообщения бывает либо
+    инлайн-клавиатура, либо нижняя, а приветствие несёт нижнюю — те самые две
+    кнопки. Отдельным сообщением её уже пробовали слать: кнопок тогда не
+    увидел никто.
+    """
+    owned = _with_web(container, owner=True)
+    await _seed_debtors(owned, ["5000000", "8679650", ""])
+
+    await feed(dispatcher_for(owned), bot, message=make_message("/start"))
+
+    text = _welcome_of(sent)
+    assert "Вся база" in text
+    assert "3 должника" in text
+    # Сумма — коротко и без вранья: третий должник без суммы в неё не входит.
+    assert "13,7 млн ₽" in text
+    assert 'href="' in text, "ссылка обязана быть кликабельной, а не голым адресом"
+
+
+async def test_a_stranger_does_not_get_the_link_to_the_base(
+    bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Не владелец получает одну фразу — и ни одной ссылки на чужие данные.
+
+    За ссылкой имена, адреса и суммы всей базы, а ``ALLOWED_TELEGRAM_USER_IDS``
+    на проде стоит в ``*``: в бота может написать кто угодно. Ссылка на первом
+    экране для всех — это отдача базы первому нажавшему «Start».
+    """
+    stranger = _with_web(container, owner=False)
+    await _seed_debtors(stranger, ["5000000"])
+
+    await feed(dispatcher_for(stranger), bot, message=make_message("/start"))
+
+    text = _welcome_of(sent)
+    assert "стоит ли подавать" in text
+    assert "Вся база" not in text
+    assert "http" not in text
+
+
+async def test_an_empty_base_does_not_offer_a_link_to_itself(
+    bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Пока выгрузку не загрузили, ссылки нет: открывать нечего.
+
+    «Вся база — 0 должников» — это приглашение на пустую страницу и повод
+    решить, что бот сломан.
+    """
+    empty = _with_web(container, owner=True)
+
+    await feed(dispatcher_for(empty), bot, message=make_message("/start"))
+
+    text = _welcome_of(sent)
+    assert "Вся база" not in text
+    assert "стоит ли подавать" in text

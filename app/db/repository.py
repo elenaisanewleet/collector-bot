@@ -120,6 +120,19 @@ class DebtorRepository:
     async def count(self) -> int:
         return await self._session.scalar(select(func.count()).select_from(Debtor)) or 0
 
+    async def total_debt(self) -> Decimal:
+        """Сколько всего должны — одной цифрой.
+
+        Считает база, а не Python: приветствие показывает эту сумму каждому
+        ``/start``, и поднимать ради неё две тысячи строк со всеми полями
+        значит платить за первый экран дороже, чем за сам отчёт.
+
+        Суммы нет у части должников — там, где выгрузка не дала ни денег, ни
+        двух дат для расчёта. ``SUM`` их пропускает, и это верно: приписать им
+        ноль означало бы сказать «должны 0 ₽» вместо «неизвестно».
+        """
+        return await self._session.scalar(select(func.sum(Debtor.debt_amount))) or Decimal(0)
+
     async def find_by_fio(self, fio: str, birth_date: datetime | None = None) -> list[Debtor]:
         stmt = select(Debtor).where(Debtor.fio_normalized == normalize_token(fio))
         return await self._all(stmt)

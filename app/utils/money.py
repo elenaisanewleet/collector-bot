@@ -61,6 +61,35 @@ def format_amount(value: Decimal | None, *, currency: str = "₽") -> str:
     return f"{body} {currency}".strip()
 
 
+#: Порог, с которого сумму стоит округлять до миллионов. Ниже него точная
+#: запись ещё читается с одного взгляда: «980 400 ₽» — это семь знаков.
+_MILLION = Decimal("1000000")
+_BILLION = Decimal("1000000000")
+
+
+def format_compact_amount(value: Decimal | None, *, currency: str = "₽") -> str:
+    """Крупная сумма коротко: ``13,7 млн ₽``.
+
+    Для итогов, а не для расчётов. «13 679 650 ₽» на первом экране — это
+    восемь цифр, которые человек всё равно прочитает как «около четырнадцати
+    миллионов»; короткая запись говорит то же самое и не спорит с соседними
+    строками за ширину. Везде, где сумма участвует в решении — цена иска,
+    пошлина, долг конкретного человека, — остаётся :func:`format_amount`:
+    округлять деньги, по которым подают в суд, нельзя.
+    """
+    if value is None:
+        return "—"
+    magnitude = abs(value)
+    if magnitude < _MILLION:
+        return format_amount(value, currency=currency)
+    unit, scale = ("млрд", _BILLION) if magnitude >= _BILLION else ("млн", _MILLION)
+    scaled = (value / scale).quantize(Decimal("0.1"))
+    # Целое печатается без хвоста: «14 млн», а не «14,0 млн».
+    whole = scaled == scaled.to_integral_value()
+    text = format(scaled.to_integral_value() if whole else scaled, "f")
+    return f"{text.replace('.', ',')} {unit} {currency}".strip()
+
+
 def _chunks(digits: str) -> list[str]:
     reversed_chunks = [digits[max(i - 3, 0) : i] for i in range(len(digits), 0, -3)]
     return list(reversed(reversed_chunks))

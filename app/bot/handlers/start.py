@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from html import escape
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -20,6 +22,10 @@ from app.bot.keyboards import (
     more_menu,
 )
 from app.container import Container
+from app.db.repository import DebtorRepository
+from app.services.share import ShareKind, ShareTarget
+from app.utils.formatting import pluralize_ru
+from app.utils.money import format_compact_amount
 
 CANCELLED = "Отменено. Вы в главном меню."
 CHOOSE_TYPE = "Вы в главном меню. С чего начнём?"
@@ -43,18 +49,63 @@ WELCOME_STEPS = "Проверяю ваших должников и говорю,
 DEMO_NOTE = "Демо-режим: внешние источники не опрашиваются, данные вымышленные."
 
 
-def welcome_text(container: Container) -> str:
+def welcome_text(container: Container, *, base: str | None = None) -> str:
     """Приветствие без служебного заголовка.
 
     Первой строкой стояло название приложения из настроек — «Collector Bot»
     латиницей над русским текстом. Оно ничего не сообщает: имя бота Telegram и
     так печатает в шапке чата, а вот английская строка над первым экраном
     заказчика бросается в глаза сразу.
+
+    ``base`` — готовая строка со ссылкой на всю базу, размеченная под HTML.
+    Собирает её обработчик: чтобы её составить, нужны запрос к базе и выпуск
+    ссылки, а функция, печатающая текст, ходить в базу не должна.
     """
     lines = [WELCOME_STEPS]
+    if base:
+        lines.extend(("", base))
     if container.settings.is_demo:
         lines.extend(("", DEMO_NOTE))
     return "\n".join(lines)
+
+
+async def base_line(container: Container, user_id: int) -> str | None:
+    """Строка «Вся база — 2052 должника, 13,7 млн ₽» со ссылкой на список.
+
+    Зачем на приветствии. Заказчик открывает бота не только чтобы проверить
+    кого-то одного: половина вопросов — «кто у меня вообще есть». Сегодня за
+    этим лезут в 1С. Ссылка на первом экране убирает этот поход, и владелица
+    просила её именно здесь: «заказчику ссылку на базу сразу».
+
+    Почему строкой текста, а не кнопкой. У сообщения Telegram бывает либо
+    инлайн-клавиатура, либо нижняя. Приветствие несёт нижнюю — те самые две
+    кнопки, — значит места для инлайн-кнопки на нём нет, и ссылка живёт в
+    тексте. Это уже проверено дорого: прошлая попытка отправить клавиатуру
+    отдельным сообщением кончилась тем, что кнопок не видел никто.
+
+    Только владельцу. За ссылкой имена, адреса и суммы двух тысяч человек, а
+    ``ALLOWED_TELEGRAM_USER_IDS=*`` пускает в бота кого угодно. Показать её на
+    приветствии всем — это отдать базу первому, кто нажал «Start».
+
+    ``None`` — если веб-отчёты выключены, база пуста или спрашивает не
+    владелец. Приветствие тогда состоит из одной фразы, как и раньше.
+    """
+    if not container.access_service.is_owner(user_id):
+        return None
+    async with container.database.session() as session:
+        repo = DebtorRepository(session)
+        total = await repo.count()
+        amount = await repo.total_debt()
+    if not total:
+        return None
+    url = await container.share_service.issue(
+        ShareTarget(ShareKind.BASE, 0), telegram_user_id=user_id
+    )
+    if url is None:
+        return None
+    noun = pluralize_ru(total, "должник", "должника", "должников")
+    money = f", {format_compact_amount(amount)}" if amount else ""
+    return f'<a href="{escape(url, quote=True)}">Вся база</a> — {total} {noun}{money}'
 
 
 async def show_menu(message: Message, container: Container, user_id: int) -> None:
@@ -137,8 +188,14 @@ def build_router() -> Router:
         # Инлайн-меню на приветствии больше нет: оно открывается кнопкой
         # «Главное меню», как в боте-образце. Первый экран говорит ровно две
         # вещи — на какой вопрос бот отвечает и что написать.
+        base = await base_line(container, user_id)
         await send_welcome(
-            message, welcome_text(container), reply_markup=main_reply_keyboard(owner=owner)
+            message,
+            welcome_text(container, base=base),
+            reply_markup=main_reply_keyboard(owner=owner),
+            # Разметка включается ТОЛЬКО когда в тексте есть ссылка. Без неё
+            # приветствие остаётся простым текстом, как весь остальной бот.
+            parse_mode="HTML" if base else None,
         )
 
     @router.message(Command("search"))

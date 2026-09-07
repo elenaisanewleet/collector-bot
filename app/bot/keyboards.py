@@ -146,7 +146,10 @@ def main_reply_keyboard(*, owner: bool) -> ReplyKeyboardMarkup:
         keyboard=[[KeyboardButton(text=BUTTON_MENU), KeyboardButton(text=BUTTON_SEARCH)]],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Напишите номер телефона должника",
+        # Не «телефона»: телефона нет ни у одного из должников в выгрузке, а
+        # госномер есть почти у всех. Подсказка, зовущая ввести то, чего в базе
+        # не бывает, — самый дорогой вид лишнего текста: она уводит в тупик.
+        input_field_placeholder="Напишите номер: госномер, телефон, ИНН",
     )
 
 
