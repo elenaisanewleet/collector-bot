@@ -47,6 +47,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from app.bot import view
 from app.bot.common import answer_callback, callback_message
+from app.bot.handlers.start import menu_markup
 from app.bot.keyboards import (
     BATCH_PREFIX,
     batch_confirm_keyboard,
@@ -418,6 +419,10 @@ async def offer_batch(
         await state.clear()
         # Роутер прогона закрыт по владельцу целиком, поэтому меню здесь всегда
         # владельческое: до этой строки не доходит никто другой.
+        #
+        # Ссылки на базу в этом меню нет, и тянуть сюда user_id ради неё
+        # незачем: экран показывается ровно тогда, когда база пуста, — открывать
+        # по ссылке нечего.
         await message.answer(EMPTY_BASE, reply_markup=main_menu(owner=True))
         return
     await state.set_state(BatchCheck.waiting_confirm)
@@ -525,7 +530,7 @@ def build_router() -> Router:
             # только то, что сломалось вокруг него. Молчать нельзя: оператор
             # смотрит на замерший прогресс и не знает, идёт ли ещё что-то.
             logger.exception("batch.run_crashed")
-            await message.answer(RUN_CRASHED, reply_markup=main_menu(owner=True))
+            await message.answer(RUN_CRASHED, reply_markup=await menu_markup(container, user_id))
             return
 
         await _deliver(message, notice, summary, container, user_id)

@@ -16,7 +16,8 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.commands import commands_help
 from app.bot.common import answer_callback, callback_message
-from app.bot.keyboards import MENU_PREFIX, main_menu
+from app.bot.handlers.start import menu_markup
+from app.bot.keyboards import MENU_PREFIX
 from app.bot.sources import LIMITS, LIMITS_HEADER
 from app.container import Container
 from app.utils.formatting import split_message
@@ -137,13 +138,21 @@ def help_text(container: Container, *, owner: bool) -> str:
     return "\n\n".join(blocks)
 
 
-async def send_help(message: Message, container: Container, *, owner: bool) -> None:
+async def send_help(message: Message, container: Container, user_id: int) -> None:
+    """Справка и под ней меню.
+
+    Принимает ``user_id``, а не готовый флаг владельца: меню собирается тем же
+    ``menu_markup``, что и везде, а ему нужна ещё и ссылка на базу. Три
+    вызывающих всё равно считали флаг из ``user_id`` прямо в аргументе.
+    """
+    owner = container.access_service.is_owner(user_id)
     chunks = split_message(help_text(container, owner=owner))
+    markup = await menu_markup(container, user_id)
     for index, chunk in enumerate(chunks):
         # Меню — только под последним куском: клавиатура посреди справки
         # читается как её конец.
         last = index == len(chunks) - 1
-        await message.answer(chunk, reply_markup=main_menu(owner=owner) if last else None)
+        await message.answer(chunk, reply_markup=markup if last else None)
 
 
 def build_router() -> Router:
@@ -157,7 +166,7 @@ def build_router() -> Router:
 
     @router.message(Command("help"))
     async def handle_help(message: Message, container: Container, user_id: int) -> None:
-        await send_help(message, container, owner=container.access_service.is_owner(user_id))
+        await send_help(message, container, user_id)
 
     @router.callback_query(F.data == HELP_CALLBACK)
     async def handle_help_callback(
@@ -166,6 +175,6 @@ def build_router() -> Router:
         await answer_callback(callback)
         message = callback_message(callback)
         if message:
-            await send_help(message, container, owner=container.access_service.is_owner(user_id))
+            await send_help(message, container, user_id)
 
     return router

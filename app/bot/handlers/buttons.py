@@ -137,11 +137,11 @@ def build_router() -> Router:
         await send_history(message, container, user_id)
 
     @router.message(F.text.in_({BUTTON_SOURCES, LEGACY_BUTTON_SOURCES}))
-    async def press_sources(message: Message, container: Container) -> None:
-        await send_sources(message, container)
+    async def press_sources(message: Message, container: Container, user_id: int) -> None:
+        await send_sources(message, container, user_id)
 
     @router.message(F.text.in_({BUTTON_HELP, LEGACY_BUTTON_HELP}))
     async def press_help(message: Message, container: Container, user_id: int) -> None:
-        await send_help(message, container, owner=container.access_service.is_owner(user_id))
+        await send_help(message, container, user_id)
 
     return router

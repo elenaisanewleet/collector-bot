@@ -73,8 +73,25 @@ def test_build_carries_the_assets_directory() -> None:
 
 
 def test_welcome_fits_into_a_photo_caption(container: Container) -> None:
-    """Подпись длиннее лимита Telegram отвергает всё сообщение целиком."""
+    """Подпись длиннее лимита Telegram отвергает всё сообщение целиком.
+
+    Считается вместе со строкой базы: она приезжает в ту же подпись и несёт
+    полный адрес с токеном в тридцать два байта. Перебрать лимит — значит не
+    показать заказчику приветствие вовсе.
+    """
+    from decimal import Decimal
+
+    from app.bot.handlers.start import base_html
+    from app.bot.keyboards import BaseListing
+
     assert len(welcome_text(container)) <= banner.CAPTION_LIMIT
+
+    base = BaseListing(
+        url="https://proverka-dolga.shop/b/" + "T" * 43,
+        total=2052,
+        amount=Decimal("13679650"),
+    )
+    assert len(welcome_text(container, base=base_html(base))) <= banner.CAPTION_LIMIT
 
 
 async def test_start_sends_the_banner_with_the_menu(
@@ -687,3 +704,34 @@ async def test_an_empty_base_does_not_offer_a_link_to_itself(
     text = _welcome_of(sent)
     assert "Вся база" not in text
     assert "стоит ли подавать" in text
+
+
+async def test_every_main_menu_carries_the_same_link(
+    bot: Bot, sent: SentMessages, container: Container
+) -> None:
+    """Меню собирается в одном месте, а не по-разному в каждом обработчике.
+
+    Ссылка на базу появлялась только на /start и по кнопке «Главное меню», а
+    после справки, после импорта и после отмены — нет. Заказчик видел её то
+    там, то нет и решал, что она пропала.
+
+    Единственное исключение — меню под «в базе никого нет»: там открывать по
+    ссылке нечего, и это сказано в коде прямо.
+    """
+    owned = _with_web(container, owner=True)
+    await _seed_debtors(owned, ["5000000"])
+    dispatcher = dispatcher_for(owned)
+
+    for opening in ("Главное меню", "Как это работает", "Откуда данные"):
+        sent.markups.clear()
+        await feed(dispatcher, bot, message=make_message(opening))
+
+        urls = [
+            button.url
+            for markup in sent.markups
+            if markup is not None and getattr(markup, "inline_keyboard", None)
+            for row in markup.inline_keyboard
+            for button in row
+            if button.url
+        ]
+        assert urls, f"после «{opening}» меню приехало без ссылки на базу"

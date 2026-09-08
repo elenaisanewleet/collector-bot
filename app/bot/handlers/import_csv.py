@@ -12,7 +12,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Document, Message
 
 from app.bot.common import answer_callback, callback_message
-from app.bot.keyboards import MENU_PREFIX, cancel_keyboard, main_menu
+from app.bot.handlers.start import menu_markup
+from app.bot.keyboards import MENU_PREFIX, cancel_keyboard
 from app.bot.states import CsvImport
 from app.container import Container
 from app.logging_setup import get_logger
@@ -192,11 +193,16 @@ def build_router() -> Router:
             # Роутер импорта закрыт по владельцу целиком, поэтому меню здесь
             # всегда владельческое: до этой строки не доходит никто другой.
             await message.answer(
-                f"Импорт не выполнен.\n\n{exc}", reply_markup=main_menu(owner=True)
+                f"Импорт не выполнен.\n\n{exc}", reply_markup=await menu_markup(container, user_id)
             )
             return
 
-        await message.answer(render_import_report(report), reply_markup=main_menu(owner=True))
+        await message.answer(
+            render_import_report(report),
+            # Ссылка на базу приезжает прямо под отчётом об импорте: только что
+            # загруженное логично тут же и открыть.
+            reply_markup=await menu_markup(container, user_id),
+        )
 
     @router.message(CsvImport.waiting_document)
     async def reject_non_document(message: Message) -> None:
