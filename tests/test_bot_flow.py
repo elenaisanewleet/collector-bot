@@ -168,7 +168,7 @@ async def test_menu_person_opens_the_card_not_a_question(
     """
     await feed(dispatcher, bot, callback_query=make_callback("menu:person"))
 
-    assert sent.contains("✎ Номер")
+    assert sent.contains("✎ Телефон")
     assert "Дальше" in buttons(sent)
     # Ни сводки полей, ни прочерков тех, которых не спрашивали.
     assert not sent.contains("Проверка должника")
@@ -196,12 +196,17 @@ async def test_the_phone_has_its_own_button_and_opens_nothing_external(
 
     И он честно говорит о себе: во внешние реестры телефон не уходит, он ищет
     запись в своей базе. Обещать по нему источники значило бы врать формой.
+
+    Заголовок здесь тот же, что на первом шаге, и это проверяется нарочно:
+    экран один на две двери. Пока он звался «Номер» и перечислял под собой
+    четыре вида номера, эта дверь принимала только телефон — то есть отвергала
+    собственный пример-госномер. Подпись обязана значить одно и то же.
     """
     await feed(dispatcher, bot, message=make_message(FULL_LINE))
     assert "Телефон" in buttons(sent)
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:phone"))
-    assert sent.contains("✎ Номер")
+    assert sent.contains("✎ Телефон")
 
     await feed(dispatcher, bot, message=make_message("+7 916 123 45 67"))
     # В карточку едет маска, полный номер — только в память процесса.

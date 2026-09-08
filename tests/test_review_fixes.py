@@ -1629,7 +1629,10 @@ async def test_a_cold_card_starts_a_new_person(
     screen = sent.joined
     assert "пропустили" not in screen, "показаны чужие пропуски"
     assert "пришлите заново" not in screen, "показан забытый номер"
-    assert "Номер" in screen, "не спросил номер заново"
+    # Со значком вопроса: «Телефон» без него стоит и на кнопке поля, и в
+    # строке «Принял — Телефон: …», то есть нашёлся бы и в остатке чужой
+    # карточки — ровно в том экране, от которого этот тест и сторожит.
+    assert "✎ Телефон" in screen, "не спросил номер заново"
 
 
 def test_a_forgotten_secret_makes_the_card_stale() -> None:

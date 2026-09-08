@@ -20,6 +20,8 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import ReplyKeyboardMarkup
 
+from app.bot.card_view import ASK_TITLES
+from app.bot.identifiers import Field
 from app.bot.keyboards import (
     BUTTON_BATCH,
     BUTTON_HELP,
@@ -95,6 +97,27 @@ def test_every_label_is_a_phrase_nobody_enters_as_data(label: str) -> None:
 
     assert len(words) >= 2, f"{label}: одно слово — его наберут как данные"
     assert all(word for word in words)
+
+
+def test_the_placeholder_asks_for_the_same_thing_as_the_first_step() -> None:
+    """Поле ввода зовёт то же, что и первый вопрос, — телефон.
+
+    Подсказка перечисляла «госномер, телефон, ИНН», пока первый шаг звался
+    «Номер». Владелица поменяла шаг на телефон, и подсказка со старым
+    перечислением заставляла бы выбирать, кому верить: полю ввода или экрану.
+    Что код при этом принимает любой номер, текстом больше не обещается — за
+    это отвечает :meth:`QueryCardService.apply`, а не строка под пальцем.
+
+    Сверяется с самим заголовком шага, а не с написанным здесь словом: иначе
+    следующее переименование разведёт их молча, а это уже было.
+    """
+    placeholder = main_reply_keyboard(owner=True).input_field_placeholder
+    title = ASK_TITLES[Field.PHONE.value].lower()
+
+    assert placeholder is not None
+    assert title in placeholder.lower(), f"поле ввода и вопрос зовут разное: {placeholder}"
+    for gone in ("госномер", "инн", "договор"):
+        assert gone not in placeholder.lower(), f"перечисление вернулось: {placeholder}"
 
 
 def test_nothing_in_the_bot_takes_the_keyboard_away() -> None:
@@ -178,7 +201,9 @@ async def test_the_keyboard_is_sent_once_per_start(
         # Пустая база — это и есть ответ массовой проверки на пустую базу,
         # то есть кнопка дошла до /batch.
         (BUTTON_BATCH, "Внутренняя база пуста"),
-        (BUTTON_SEARCH, "Номер"),
+        # Со значком: «Телефон» без него есть и на кнопке поля, и в строке
+        # карточки, и проверка прошла бы, не дойдя до вопроса.
+        (BUTTON_SEARCH, "✎ Телефон"),
         (BUTTON_HISTORY, "История пуста"),
         (BUTTON_SOURCES, "ОТКУДА ДАННЫЕ"),
         (BUTTON_HELP, "как это работает"),
@@ -216,7 +241,7 @@ async def test_the_search_button_keeps_the_rarer_searches_reachable(
     должна: она за «Другие способы поиска».
     """
     await feed(dispatcher, bot, message=make_message(BUTTON_SEARCH))
-    assert sent.contains("✎ Номер")
+    assert sent.contains("✎ Телефон")
 
     await feed(dispatcher, bot, callback_query=make_callback(MENU_MORE))
 
