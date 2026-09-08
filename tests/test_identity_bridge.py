@@ -176,15 +176,46 @@ async def test_inn_is_read_from_the_company_section(
 
 
 @respx.mock
-async def test_the_method_named_section_is_not_read(
+@pytest.mark.parametrize("section", ["passport_fns", "company"])
+async def test_both_shapes_of_the_answer_are_read(
+    bridge_settings: Settings, passport_subject: SearchSubject, section: str
+) -> None:
+    """T-2. Секция ответа выбирается по факту, а не по документации.
+
+    Этот тест раньше требовал ОБРАТНОГО: что ``results.passport_fns`` читаться
+    не должен. Он был написан по документации вендора, где сказано, что метод
+    отвечает в ``results.company``, и честно сторожил бы это — если бы
+    документация была верна.
+
+    Живое API отвечает по имени метода, как все остальные. Проверено прогоном
+    на проде 08.09.2026: в конверте лежит
+    ``results.passport_fns.result.data[0].innfiz``, а ``results.company`` нет
+    вовсе. Пока код верил документации, он поднимал ``unexpected_schema`` на
+    каждом успешном ответе — вместе с уже полученным ИНН.
+
+    Дефект был тихим и дорогим: без ИНН молчат банкротство, статус ИП и
+    арбитраж, и в отчёте они писали «нужен ИНН физлица». То есть своя поломка
+    выглядела как нехватка данных у заказчика.
+    """
+    route(envelope(section=section, data=[{"innfiz": INN}]))
+
+    result = await PassportInnProvider(bridge_settings).fetch(passport_subject)
+
+    assert result.status is ProviderStatus.SUCCESS, f"секция {section} не прочиталась"
+    assert isinstance(result, InnBridgeResult)
+    assert result.inn == INN
+
+
+@respx.mock
+async def test_an_answer_in_no_known_section_is_still_a_schema_error(
     bridge_settings: Settings, passport_subject: SearchSubject
 ) -> None:
-    """T-2. Регресс на ``results.<method>``.
+    """Терпимость к двум формам не должна превратиться в терпимость к любой.
 
-    Если однажды кто-то «поправит» секцию на имя метода, ответ перестанет
-    читаться — и это должно быть ``unexpected_schema``, а не молчаливый успех.
+    Конверт, в котором нет ни одной известной секции, — это по-прежнему
+    ``unexpected_schema``, а не молчаливый успех и не «ИНН не найден».
     """
-    route(envelope(section="passport_fns", data=[{"innfiz": INN}]))
+    route(envelope(section="something_else", data=[{"innfiz": INN}]))
 
     result = await PassportInnProvider(bridge_settings).fetch(passport_subject)
 

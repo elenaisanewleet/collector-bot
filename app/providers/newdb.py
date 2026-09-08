@@ -180,7 +180,7 @@ class NewDBClient:
             for params in param_sets:
                 envelope, raw = await self._run(client, method, params, retry)
                 raw_bodies.append(raw)
-                rows.extend(_extract_rows(envelope, result_section or method))
+                rows.extend(_extract_rows(envelope, _section_of(envelope, method, result_section)))
 
         return NewDBResponse(rows=rows, raw="\n".join(raw_bodies))
 
@@ -355,6 +355,34 @@ def _failure_code(errors: list[Mapping[str, Any]], message: str) -> str:
     if ERROR_CODE_BAD_REQUEST in codes:
         return "bad_request"
     return "request_failed"
+
+
+def _section_of(envelope: Any, method: str, preferred: str | None) -> str:
+    """В какой секции ``results`` на самом деле лежит ответ.
+
+    Секцию приходится ВЫБИРАТЬ, а не знать, потому что документация вендора и
+    его живое API разошлись, и разошлись дорого. Про ``passport_fns`` в
+    документации сказано, что он отвечает в ``results.company``; на проде он
+    отвечает в ``results.passport_fns``, то есть по имени метода, как все
+    остальные. Код читал ``company``, не находил ничего и поднимал
+    ``unexpected_schema`` на КАЖДОМ успешном ответе — вместе с уже полученным
+    ИНН, который лежал в ответе рядом.
+
+    Стоило это дороже, чем выглядит: без ИНН молчат три источника сразу —
+    банкротство, статус ИП и арбитраж, — и в отчёте они честно писали «нужен
+    ИНН физлица». То есть дефект выглядел как нехватка данных у заказчика, а не
+    как своя поломка, и прожил бы до первой ручной сверки.
+
+    Берётся та секция, которая в ответе ЕСТЬ: сперва названная вызывающим,
+    потом одноимённая методу. Обе формы остаются рабочими, и смена вендорского
+    поведения обратно ничего не сломает. Если нет ни одной — возвращается
+    названная вызывающим, чтобы ``_extract_rows`` пожаловался на неё, а не на
+    подобранную втихую.
+    """
+    for candidate in (preferred, method):
+        if candidate and dig(envelope, f"results.{candidate}") is not None:
+            return candidate
+    return preferred or method
 
 
 def _extract_rows(envelope: Any, section: str) -> list[Any]:
