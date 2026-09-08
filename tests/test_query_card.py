@@ -1,7 +1,8 @@
 """Накопительная карточка запроса: память между сообщениями.
 
 Первый тест здесь — дословная жалоба владелицы, и он же главный: «написала
-клочкова елена николаевна а потом 24 11 1994 и мне пишут а это к чему вообще».
+иванова мария сергеевна а потом 05 07 1985 и мне пишут а это к чему вообще».
+(ФИО и дата в цитате заменены вымышленными: они были настоящими.)
 Остальные сторожат то, чем за эту память заплачено: приватность (паспорт и
 телефон в базу не едут), деньги (платит одна кнопка, и дважды за одно и то же
 она не платит) и честность (карточка не создаёт впечатления полноты).
@@ -70,19 +71,19 @@ async def card_of(container: Container) -> QueryCard | None:
 async def test_the_owners_complaint_word_for_word(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
-    """«Клочкова Елена Николаевна», потом «24 11 1994» — один человек с датой.
+    """«Иванова Мария Сергеевна», потом «05 07 1985» — один человек с датой.
 
     Ни одного «а это к чему», ни одного прогона до кнопки, ровно один прогон
     после неё.
     """
-    await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
-    assert "Фамилия: Клочкова" in last(sent)
-    assert "Имя: Елена" in last(sent)
-    assert "Отчество: Николаевна" in last(sent)
+    await feed(dispatcher, bot, message=make_message("Иванова Мария Сергеевна"))
+    assert "Фамилия: Иванова" in last(sent)
+    assert "Имя: Мария" in last(sent)
+    assert "Отчество: Сергеевна" in last(sent)
 
-    await feed(dispatcher, bot, message=make_message("24 11 1994"))
-    assert "Дата рождения: 24.11.1994" in last(sent)
-    assert "Фамилия: Клочкова" in last(sent)
+    await feed(dispatcher, bot, message=make_message("05 07 1985"))
+    assert "Дата рождения: 05.07.1985" in last(sent)
+    assert "Фамилия: Иванова" in last(sent)
     assert not sent.contains("Не нашёл в строке")
     assert not sent.contains("RECOVERY SCORE")
 
@@ -111,30 +112,30 @@ async def test_the_name_can_arrive_one_word_at_a_time(
 async def test_a_surname_then_the_rest_is_one_person(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """«Клочкова», затем «Елена Николаевна» — имя и отчество, а не новое ФИО.
+    """«Иванова», затем «Мария Сергеевна» — имя и отчество, а не новое ФИО.
 
-    Сам :func:`parse_fio` так не умеет и уметь не должен: «Елена Николаевна» он
+    Сам :func:`parse_fio` так не умеет и уметь не должен: «Мария Сергеевна» он
     законно читает фамилией с именем, потому что не знает, что фамилия уже
     есть. Знает карточка — она и решает.
     """
-    await feed(dispatcher, bot, message=make_message("Клочкова"))
-    await feed(dispatcher, bot, message=make_message("Елена Николаевна"))
+    await feed(dispatcher, bot, message=make_message("Иванова"))
+    await feed(dispatcher, bot, message=make_message("Мария Сергеевна"))
 
-    assert "Фамилия: Клочкова" in last(sent)
-    assert "Имя: Елена" in last(sent)
-    assert "Отчество: Николаевна" in last(sent)
+    assert "Фамилия: Иванова" in last(sent)
+    assert "Имя: Мария" in last(sent)
+    assert "Отчество: Сергеевна" in last(sent)
     assert "другой человек или исправление" not in last(sent)
 
 
 async def test_two_words_without_a_patronymic_are_a_different_person(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """«Иванов Иван» поверх «Клочкова» — это другой должник, а не имя Иванов.
+    """«Иванов Иван» поверх «Иванова» — это другой должник, а не имя Иванов.
 
-    Граница проходит по форме второго слова, и она названа вслух: «Николаевна»
+    Граница проходит по форме второго слова, и она названа вслух: «Сергеевна»
     дописывает начатое имя, «Иван» начинает новое.
     """
-    await feed(dispatcher, bot, message=make_message("Клочкова"))
+    await feed(dispatcher, bot, message=make_message("Иванова"))
     await feed(dispatcher, bot, message=make_message("Иванов Иван"))
 
     assert "другой человек или исправление" in last(sent)
@@ -145,7 +146,7 @@ async def test_the_conflict_question_does_not_lock_the_card(
 ) -> None:
     """Модальный экран здесь был бы ловушкой: думать можно, работать нельзя."""
     await feed(dispatcher, bot, message=make_message("Петров Пётр Петрович"))
-    await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
+    await feed(dispatcher, bot, message=make_message("Иванова Мария Сергеевна"))
 
     assert "другой человек или исправление" in last(sent)
     assert "Проверить" in buttons(sent)
@@ -156,7 +157,7 @@ async def test_a_guess_is_shown_not_hidden(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
     """Спрятанная догадка и есть тот молчаливый разбор, от которого лечим."""
-    await feed(dispatcher, bot, message=make_message("Клочкова"))
+    await feed(dispatcher, bot, message=make_message("Иванова"))
     assert "записал в фамилию" in last(sent)
 
 
@@ -165,7 +166,7 @@ async def test_a_named_field_is_never_guessed_into_another_one(
 ) -> None:
     """Нажали «+ ИНН» — значит присланное читается ИНН и только ИНН."""
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:inn"))
-    await feed(dispatcher, bot, message=make_message("Клочкова"))
+    await feed(dispatcher, bot, message=make_message("Иванова"))
 
     assert "на ИНН физлица не похоже" in last(sent)
     row = await card_of(container)
@@ -502,7 +503,7 @@ async def test_a_different_surname_is_never_merged_silently(
 ) -> None:
     """Молчаливое слияние двух должников — самая дорогая ошибка карточки."""
     await feed(dispatcher, bot, message=make_message("Петров Пётр Петрович"))
-    await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
+    await feed(dispatcher, bot, message=make_message("Иванова Мария Сергеевна"))
 
     assert "другой человек или исправление?" in last(sent)
     assert "Петров Пётр Петрович" in last(sent)
@@ -511,19 +512,19 @@ async def test_a_different_surname_is_never_merged_silently(
     await feed(dispatcher, bot, callback_query=make_callback("qc:keep"))
     row = await card_of(container)
     assert row is not None
-    assert row.last_name == "Клочкова"
+    assert row.last_name == "Иванова"
 
 
 async def test_a_new_person_starts_from_a_clean_card(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
     await feed(dispatcher, bot, message=make_message("Петров Пётр Петрович 01.02.1979"))
-    await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
+    await feed(dispatcher, bot, message=make_message("Иванова Мария Сергеевна"))
     await feed(dispatcher, bot, callback_query=make_callback("qc:new"))
 
     row = await card_of(container)
     assert row is not None
-    assert row.last_name == "Клочкова"
+    assert row.last_name == "Иванова"
     # Дата прежнего должника не осталась висеть на новом.
     assert row.birth_date is None
 

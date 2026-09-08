@@ -199,13 +199,13 @@ def test_the_echo_repeats_what_was_understood() -> None:
 
 def test_the_echo_masks_the_passport_and_the_phone() -> None:
     """В истории чата серии паспорта и номеру телефона делать нечего."""
-    subject = person(passport="4509123456", phone="+79161234567")
+    subject = person(passport="4509123456", phone="+79990001122")
 
     line = view.accepted_line(subject)
 
     assert line is not None
     assert "4509123456" not in line
-    assert "+79161234567" not in line
+    assert "+79990001122" not in line
     assert "45** ******" in line
 
 

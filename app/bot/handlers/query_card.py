@@ -4,7 +4,7 @@
 
 **Присланное дописывается, а не запускает проверку.** Любой текст вне чужого
 сценария попадает в :meth:`QueryCardService.apply` и ложится в поле карточки.
-«Клочкова Елена Николаевна», потом «24 11 1994» — это один человек с датой, а не
+«Иванова Мария Сергеевна», потом «24 11 1994» — это один человек с датой, а не
 два запроса, из которых второй ни о ком. Платит ровно одна кнопка — «Проверить».
 
 **Ни одного состояния FSM.** Карточка помнит всё в своей строке БД, а свободный
@@ -48,7 +48,7 @@ from app.bot.report_actions import (
 )
 from app.bot.view import missing_reason
 from app.container import Container
-from app.domain.enums import PROVIDER_TITLES, Region, SearchType
+from app.domain.enums import PROVIDER_TITLES, ProviderStatus, Region, SearchType
 from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport, InternalDebtorRecord
 from app.logging_setup import get_logger
@@ -395,9 +395,18 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
     result = await bridge.fetch(subject)
     name = getattr(result, "name", None)
     if name is None:
-        # Ручка молчит или никого не знает. Разница для оператора одна: дальше
-        # он вводит фамилию. Одной строкой, без объяснений про источники.
-        return card_view.NAME_NOT_RESOLVED
+        # Почему не вышло — говорится словами, разными для разных причин.
+        # Оператору это меняет следующее действие (повторить или набирать
+        # фамилию), а нам даёт единственный способ увидеть с прода, что
+        # сломалось: до этого «не определилось» значило и «источник упал», и
+        # «мост не настроен», и «честно никого нет».
+        logger.info(
+            "phone_bridge.no_name",
+            user_id=card.telegram_user_id,
+            status=result.status.value,
+            error_code=result.error_code,
+        )
+        return _why_no_name(result.status)
 
     passport = getattr(result, "passport", None)
     snils = getattr(result, "snils", None)
@@ -438,6 +447,22 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
     except SQLAlchemyError:
         logger.exception("phone_lookup.record_failed", user_id=card.telegram_user_id)
     return None
+
+
+def _why_no_name(status: ProviderStatus) -> str:
+    """Что сказать оператору, когда имя по номеру не определилось.
+
+    Три исхода и три разных следующих действия. ``NO_RESULTS`` — источник
+    спросили, и он никого не знает: набирать фамилию. ``UNAVAILABLE``/``ERROR``
+    — источник не ответил: повтор через минуту может сработать, и отправлять
+    человека печатать руками рано. ``NOT_CONFIGURED`` — мост не настроен, и это
+    не про должника вовсе, а про развёртывание.
+    """
+    if status is ProviderStatus.NO_RESULTS:
+        return card_view.NAME_NOT_FOUND
+    if status is ProviderStatus.NOT_CONFIGURED:
+        return card_view.NAME_LOOKUP_OFF
+    return card_view.NAME_SOURCE_SILENT
 
 
 def _missed(found: card_identify.Identified, card: Card) -> str | None:
@@ -574,7 +599,7 @@ async def recognised(
 
     runnable = card.runnable_with(phone_resolves=_phone_resolves(container))
     if autorun and runnable and card.last_run_hash != container.query_cards.run_hash(card):
-        # Оговорка к разбору («„Клочкова“ записал в фамилию») не теряется:
+        # Оговорка к разбору («„Иванова“ записал в фамилию») не теряется:
         # она едет в отчёт, где по этому полю только что прошёл платный запрос.
         # А «нашёл того-то» не едет — это и есть отчёт.
         await run_card(message, container, card, user_id, extra_notes=[notice] if notice else [])
@@ -621,7 +646,7 @@ async def run_card(
     """Проверить то, что собрано, и показать отчёт.
 
     ``extra_notes`` — оговорки, которые иначе остались бы на карточке, а
-    карточка при автопрогоне не рисуется. Терять их нельзя: «„Клочкова“ записал
+    карточка при автопрогоне не рисуется. Терять их нельзя: «„Иванова“ записал
     в фамилию» относится к полю, по которому сейчас пройдёт платный запрос.
     """
     # Один телефон — законный субъект, когда мост умеет перевести его в ФИО:

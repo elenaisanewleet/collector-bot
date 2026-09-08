@@ -49,11 +49,11 @@ def test_name_birth_date_and_inn() -> None:
 
 
 def test_name_birth_date_and_phone() -> None:
-    parsed = parse_query("Иванов Иван Иванович 01.01.1985 +79161234567")
+    parsed = parse_query("Иванов Иван Иванович 01.01.1985 +79990001122")
 
     assert parsed.name is not None
     assert parsed.birth_date == date(1985, 1, 1)
-    assert parsed.phone == "+79161234567"
+    assert parsed.phone == "+79990001122"
 
 
 def test_two_word_name_with_inn() -> None:
@@ -304,16 +304,17 @@ def test_the_parser_does_not_import_the_provider_layer() -> None:
 
 @pytest.mark.parametrize(
     "token",
-    ["24.11.1994", "24111994", "24-11-1994", "1994-11-24", "24 11 1994"],
+    ["05.07.1985", "05071985", "05-07-1985", "1985-07-05", "05 07 1985"],
 )
 def test_every_accepted_date_form_gives_the_same_day(token: str) -> None:
-    """«24 11 1994» — дословный пример владелицы, и он читался тремя оговорками.
+    """«05 07 1985» — форма из дословного примера владелицы (дата в нём была её
+    собственная и заменена вымышленной), и она читалась тремя оговорками.
 
     Пробел :data:`_DATE_SHAPE` не ловит: три числа приезжают тремя токенами и до
     разбора дат не доходят вовсе. Остальные четыре формы работали и раньше и
     стоят здесь, чтобы починка не развела их между собой.
     """
-    assert parse_query(token).birth_date == date(1994, 11, 24)
+    assert parse_query(token).birth_date == date(1985, 7, 5)
 
 
 def test_a_two_digit_year_is_not_a_date_and_the_century_is_not_guessed() -> None:
@@ -340,8 +341,8 @@ def test_the_spaced_date_branch_does_not_eat_other_numbers(line: str) -> None:
 @pytest.mark.parametrize(
     ("text", "kind"),
     [
-        ("Клочкова Елена Николаевна", identifiers.FragmentKind.FIO),
-        ("Клочкова", identifiers.FragmentKind.NAME_WORD),
+        ("Иванова Мария Сергеевна", identifiers.FragmentKind.FIO),
+        ("Иванова", identifiers.FragmentKind.NAME_WORD),
         ("asdf", identifiers.FragmentKind.UNKNOWN),
         ("770912345601", identifiers.FragmentKind.INN12),
         ("инн 7709123456", identifiers.FragmentKind.INN10),
@@ -370,12 +371,12 @@ def test_a_latin_word_is_garbage_while_a_russian_one_is_a_name() -> None:
 
 
 def test_a_named_field_refuses_a_wrong_shape_instead_of_moving_it() -> None:
-    fragment = identifiers.classify_fragment("Клочкова", expect=identifiers.Field.INN)
+    fragment = identifiers.classify_fragment("Иванова", expect=identifiers.Field.INN)
     assert fragment.kind is identifiers.FragmentKind.UNKNOWN
     assert "12 цифр" in fragment.reason
 
 
 def test_a_phone_alone_is_not_something_to_run_a_check_on() -> None:
     """Ни один внешний реестр по телефону не ищет — платить за него нечем."""
-    assert not parse_query("+79161234567").runnable
+    assert not parse_query("+79990001122").runnable
     assert parse_query("Иванов Иван 01.01.1985").runnable

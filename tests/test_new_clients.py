@@ -23,6 +23,7 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiohttp.test_utils import TestClient, TestServer
 
+from app.bot import card_view
 from app.config import Settings
 from app.container import Container
 from app.db.repository import DebtorRepository, PhoneLookupRepository
@@ -53,7 +54,7 @@ def last(sent: SentMessages) -> str:
 PUBLIC_URL = "https://reports.example.test"
 PHONE = "+79990001122"
 
-FOUND = PersonName(last_name="Клочкова", first_name="Елена", middle_name="Николаевна")
+FOUND = PersonName(last_name="Иванова", first_name="Мария", middle_name="Сергеевна")
 #: Контрольная сумма сходится — иначе :func:`normalize_snils` его отвергнет, и
 #: тест проверял бы отказ вместо переноса.
 SNILS = "16011086811"
@@ -78,7 +79,7 @@ class _BridgeStub(PhoneNameProvider):
             status=ProviderStatus.SUCCESS,
             records=(),
             name=FOUND,
-            birth_date=date(1994, 11, 24),
+            birth_date=date(1985, 7, 5),
             inn=INN,
             passport=PASSPORT,
             snils=SNILS,
@@ -138,8 +139,8 @@ async def test_the_documents_the_lookup_paid_for_reach_the_card(
     await feed(bridged_dispatcher, bot, message=make_message(PHONE))
 
     screen = last(sent)
-    assert "Фамилия: Клочкова" in screen
-    assert "Дата рождения: 24.11.1994" in screen
+    assert "Фамилия: Иванова" in screen
+    assert "Дата рождения: 05.07.1985" in screen
     assert f"Паспорт: {PASSPORT}" in screen, "паспорт из ответа не доехал до карточки"
     assert "Паспорт выдан: 20.02.2015" in screen, "дата выдачи не доехала до карточки"
     assert f"СНИЛС: {SNILS}" in screen, "СНИЛС из ответа не доехал до карточки"
@@ -207,7 +208,7 @@ def test_the_operator_beats_the_bridge() -> None:
     fill_from_bridge(
         card,
         name=FOUND,
-        birth_date=date(1994, 11, 24),
+        birth_date=date(1985, 7, 5),
         inn=INN,
         passport=PASSPORT,
         snils=SNILS,
@@ -236,8 +237,8 @@ async def test_the_lookup_is_written_down_and_marked_a_new_client(
 
     assert len(rows) == 1
     row = rows[0]
-    assert row.last_name == "Клочкова"
-    assert row.birth_date == date(1994, 11, 24)
+    assert row.last_name == "Иванова"
+    assert row.birth_date == date(1985, 7, 5)
     assert row.passport == PASSPORT, "при поднятом флаге документ пишется целиком"
     assert row.snils == SNILS
     assert row.passport_issued == ISSUED
@@ -256,7 +257,7 @@ async def test_a_surname_already_in_the_base_is_not_a_new_client(bridged: Contai
     точным совпадением значило бы объявлять новым каждого второго.
     """
     await bridged.import_service.import_text(
-        "ИД,ФИО,Дата рождения\n440466,Клочкова Мария Ивановна,01.01.1970"
+        "ИД,ФИО,Дата рождения\n440466,Иванова Ольга Ивановна,01.01.1970"
     )
 
     lookup = await bridged.phone_lookups.record(
@@ -273,7 +274,7 @@ async def test_the_mark_is_not_recomputed_later(bridged: Container) -> None:
         telegram_user_id=OPERATOR_ID, phone=PHONE, name=FOUND
     )
     await bridged.import_service.import_text(
-        "ИД,ФИО,Дата рождения\n440466,Клочкова Елена Николаевна,24.11.1994"
+        "ИД,ФИО,Дата рождения\n440466,Иванова Мария Сергеевна,05.07.1985"
     )
 
     async with bridged.database.session() as session:
@@ -288,11 +289,11 @@ async def test_a_lookup_does_not_count_a_debtor_with_another_surname(
 ) -> None:
     """Совпадение по фамилии, а не по любой строке с этими буквами."""
     await bridged.import_service.import_text(
-        "ИД,ФИО,Дата рождения\n440466,Клочковский Пётр Ильич,01.01.1970"
+        "ИД,ФИО,Дата рождения\n440466,Ивановский Пётр Ильич,01.01.1970"
     )
 
     async with bridged.database.session() as session:
-        found = await DebtorRepository(session).count_by_surname("Клочкова")
+        found = await DebtorRepository(session).count_by_surname("Иванова")
 
     assert found == 0
 
@@ -319,7 +320,7 @@ async def test_the_new_clients_page_shows_the_documents_and_the_mark(
         telegram_user_id=OPERATOR_ID,
         phone=PHONE,
         name=FOUND,
-        birth_date=date(1994, 11, 24),
+        birth_date=date(1985, 7, 5),
         inn=INN,
         passport=PASSPORT,
         snils=SNILS,
@@ -335,7 +336,7 @@ async def test_the_new_clients_page_shows_the_documents_and_the_mark(
         body = await response.text()
 
     assert response.status == 200
-    assert "Клочкова Елена Николаевна" in body
+    assert "Иванова Мария Сергеевна" in body
     assert PASSPORT in body, "паспорт на странице обязан быть читаемым"
     assert "20.02.2015" in body, "без даты выдачи паспорт в заявлении неполон"
     assert SNILS in body
@@ -377,3 +378,67 @@ async def test_an_empty_journal_says_what_will_appear_there(bridged: Container) 
         body = await (await client.get(_path(url))).text()
 
     assert "Отправьте боту номер" in body
+
+
+# ------------------------------------------------------------ 4. почему не вышло
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (ProviderStatus.NO_RESULTS, card_view.NAME_NOT_FOUND),
+        (ProviderStatus.UNAVAILABLE, card_view.NAME_SOURCE_SILENT),
+        (ProviderStatus.ERROR, card_view.NAME_SOURCE_SILENT),
+        (ProviderStatus.NOT_CONFIGURED, card_view.NAME_LOOKUP_OFF),
+    ],
+    ids=["никого нет", "источник молчит", "источник ошибся", "мост не настроен"],
+)
+async def test_three_reasons_for_no_name_are_three_different_answers(
+    bridged: Container, bot: Bot, sent: SentMessages, status: ProviderStatus, expected: str
+) -> None:
+    """Почему имя не определилось — говорится словами, и слова разные.
+
+    Раньше на все три случая была одна фраза «По номеру не определилось», с
+    прямо записанным доводом: молчание источника и его незнание для оператора
+    одно и то же действие. Довод верен, пока поиск по номеру — удобство. Он
+    перестал быть верным, когда номер стал главным входом продукта:
+
+    * упавший источник и честное «никого нет» неразличимы, и владелец идёт
+      набирать фамилию руками там, где помог бы повтор через минуту;
+    * ненастроенный мост выглядит как пустой ответ — и на живом боте это не
+      диагностируется вовсе.
+    """
+
+    class _Silent(PhoneNameProvider):
+        @property
+        def is_configured(self) -> bool:
+            return True
+
+        async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+            return PhoneNameResult(
+                provider=ProviderName.PHONE_BRIDGE, status=status, records=(), name=None
+            )
+
+    bridged.registry = ProviderRegistry(
+        internal=bridged.registry.internal,
+        external=bridged.registry.external,
+        inn_bridge=bridged.registry.inn_bridge,
+        phone_bridge=_Silent(bridged.settings),
+    )
+    await feed(dispatcher_for(bridged), bot, message=make_message(PHONE))
+
+    assert sent.contains(expected)
+
+
+def test_the_interface_examples_name_nobody_real() -> None:
+    """Примеры на экране — вымышленные, и это проверяется, а не подразумевается.
+
+    До 09.09.2026 в подсказках стояли настоящие ФИО и дата рождения владелицы,
+    снятые с её же проверки: их видел каждый, кто открывал бота, и лежали они в
+    публичном репозитории. Тест сторожит именно возврат — подставить в пример
+    живого человека проще всего как раз тогда, когда его данные под рукой.
+    """
+    shown = " ".join(card_view.ASK_EXAMPLES.values())
+
+    for real in ("Клочков", "24.11.1994", "9851982945"):
+        assert real not in shown, f"в примерах интерфейса снова настоящие данные: {real}"

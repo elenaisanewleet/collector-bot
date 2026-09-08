@@ -1530,9 +1530,9 @@ def test_the_base_page_finds_by_every_field() -> None:
         Debtor(
             id=1,
             dedup_key="a",
-            fio="Клочкова Елена Николаевна",
-            fio_normalized="клочкова елена николаевна",
-            birth_date=date(1994, 11, 24),
+            fio="Иванова Мария Сергеевна",
+            fio_normalized="иванова мария сергеевна",
+            birth_date=date(1985, 7, 5),
             vehicle_plates="Х376СА797, К245МЕ977",
             address="Москва, Петровско-Разумовский проезд",
             debt_amount=Decimal("11970"),
@@ -1546,7 +1546,7 @@ def test_the_base_page_finds_by_every_field() -> None:
     page = render_base_page(rows, app_name="Collector Bot", rules=rules)
 
     # В поисковый индекс строки попадает всё, по чему её будут искать.
-    for needle in ("клочкова", "х376са797", "петровско", "793783", "24.11.1994"):
+    for needle in ("иванова", "х376са797", "петровско", "793783", "05.07.1985"):
         assert needle in page.lower(), f"по «{needle}» строка не найдётся"
 
     # Расчётная сумма помечена: документ и оценка не должны выглядеть одинаково.
