@@ -793,3 +793,25 @@ async def test_filling_a_field_edits_the_card_instead_of_sending_a_new_one(
 
     assert len(sent.sends) == sends, "карточка уехала новым сообщением вместо правки"
     assert len(sent.edits) > edits, "карточка не обновилась"
+
+
+async def test_starting_a_new_person_removes_the_previous_card(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """В чате остаётся ровно одна карточка, а не стопка одинаковых.
+
+    Прежняя карточка забывалась, но не удалялась, и висела в переписке. С
+    каждым нажатием «Проверить человека» их становилось больше — заказчик
+    прислал скриншот со словами «несколько раз пришло одно сообщение».
+
+    Новое сообщение при этом нужно: карточка обязана оказаться ВНИЗУ, под тем,
+    что человек только что написал, иначе правка на месте происходит выше по
+    чату и её не видно.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    await feed(dispatcher, bot, message=make_message("Тестов"))
+    deleted = len(sent.deleted)
+
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+
+    assert len(sent.deleted) > deleted, "прежняя карточка осталась висеть в чате"

@@ -89,11 +89,15 @@ async def start_person_card(message: Message, container: Container, user_id: int
     #
     # Вернуться к недособранному по-прежнему можно, и проще прежнего: просто
     # дописать поле сообщением, не трогая кнопку.
+    previous = await container.query_cards.load(user_id, message.chat.id)
     card = await container.query_cards.wipe(user_id, message.chat.id)
-    # Новая карточка — новое сообщение внизу чата: это начало разговора, а не
-    # правка прежнего.
-    container.query_cards.forget_screen(card)
-    card.card_message_id = None
+    # Прежняя карточка УДАЛЯЕТСЯ, а не просто забывается. Забывали — и она
+    # оставалась висеть в чате: заказчик видел несколько одинаковых карточек
+    # подряд и жаловался, что бот «шлёт одно и то же». Карточка в чате должна
+    # быть ровно одна, а новое сообщение нужно затем, чтобы она оказалась внизу,
+    # под тем, что человек только что написал.
+    card.card_message_id = previous.card_message_id
+    await _drop_card_message(message, container, card)
     container.query_cards.begin_steps(card)
     await show(message, container, card)
 
