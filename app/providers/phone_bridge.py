@@ -64,6 +64,7 @@ from app.domain.identity import (
     SearchSubject,
     normalize_inn,
     normalize_passport,
+    normalize_snils,
     parse_fio,
 )
 from app.domain.models import ProviderResult
@@ -96,6 +97,11 @@ class PhoneNameResult(ProviderResult):
     #: пишутся, на кэш-хите берутся из сохранённого субъекта.
     inn: str | None = None
     passport: str | None = None
+    #: СНИЛС. В отличие от ИНН и паспорта он ничего не экономит: по нему не
+    #: ищет ни один источник и ни один мост его не спрашивает. Он здесь потому,
+    #: что нужен владельцу в заявлении, а приходит тем же ответом — не взять
+    #: его значит заставить искать документ отдельно и вручную.
+    snils: str | None = None
 
 
 class PhoneNameProvider(BaseProvider):
@@ -226,6 +232,7 @@ def _read_rows(
         birth_date=_pick(rows, home, _read_birth, "birth_date", "dob"),
         inn=_pick(rows, home, _individual_inn, "inn", "innfiz"),
         passport=_pick(rows, home, _read_passport, "passport", "passport_number"),
+        snils=_pick(rows, home, _read_snils, "snils"),
         note=f"ФИО определено по номеру {mask_phone(phone)}",
     )
 
@@ -309,6 +316,16 @@ def _read_passport(raw: object) -> str | None:
     у иностранного семь, и мост ФНС на них ответит пустотой за наши деньги.
     """
     return normalize_passport(str(raw))
+
+
+def _read_snils(raw: object) -> str | None:
+    """СНИЛС из строки поставщика — с проверкой контрольной суммы.
+
+    Проверка здесь не педантизм: в ответе одиннадцатизначные числа лежат в
+    нескольких полях, и взять не то — значит вписать в заявление чужой
+    идентификатор. Разбор живёт в :func:`normalize_snils`.
+    """
+    return normalize_snils(str(raw))
 
 
 def build_phone_bridge(settings: Settings) -> PhoneNameProvider | None:

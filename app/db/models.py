@@ -338,6 +338,7 @@ class QueryCard(Base):
     inn: Mapped[str | None] = mapped_column(String(12))
     phone_masked: Mapped[str | None] = mapped_column(String(32))
     passport_masked: Mapped[str | None] = mapped_column(String(32))
+    snils_masked: Mapped[str | None] = mapped_column(String(32))
     plate: Mapped[str | None] = mapped_column(String(16))
     vin: Mapped[str | None] = mapped_column(String(17))
     # Договор и адрес ищутся только в нашей выгрузке: ни один внешний реестр по
@@ -372,6 +373,61 @@ class QueryCard(Base):
     __table_args__ = (
         UniqueConstraint("telegram_user_id", "chat_id", name="uq_query_cards_user_chat"),
     )
+
+
+class PhoneLookup(Base):
+    """Кого владелец пробил по номеру телефона — строка на каждую находку.
+
+    Зачем таблица, если есть карточка. Карточка — черновик одного должника: она
+    перезаписывается следующим и стирается кнопкой «Очистить». А вопрос, ради
+    которого эта таблица заведена, задаётся не про одного человека, а про всех
+    сразу: «кого я пробил, и кого из них в базе нет». Ответить на него
+    перепиской нельзя — это список, и место списка в вебе.
+
+    ``base_matches`` — сколько строк выгрузки нашлось ПО ФАМИЛИИ в момент
+    проверки. Число, а не готовый флаг «новый клиент»: флаг протухнет на первом
+    же импорте и будет врать молча, а число остаётся честным замером своего дня.
+    Ноль и значит «новый клиент» — так его и считает страница.
+
+    По фамилии, а не по ФИО целиком: у женщин фамилия в выгрузке заказчика
+    бывает девичьей, отчество — пропущенным, а имя — сокращённым. Совпадение по
+    одной фамилии слишком широко для отчёта, но ровно настолько широко, насколько
+    нужно вопросу «этого человека мы вообще знаем?». Ошибка в эту сторону
+    дешевле: лишний раз посмотреть глазами дешевле, чем завести второй раз того,
+    кто уже есть.
+
+    Хранение — по правилу ``debtors``: маска всегда, сам документ только при
+    поднятом ``STORE_SENSITIVE_IDENTIFIERS``. Телефон здесь только маской и без
+    хэша: искать по нему в этой таблице некому, а хэш российского мобильного
+    перебирается за минуты.
+    """
+
+    __tablename__ = "phone_lookups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    phone_masked: Mapped[str | None] = mapped_column(String(32))
+    last_name: Mapped[str | None] = mapped_column(String(64))
+    first_name: Mapped[str | None] = mapped_column(String(64))
+    middle_name: Mapped[str | None] = mapped_column(String(64))
+    birth_date: Mapped[date | None] = mapped_column(Date)
+    inn: Mapped[str | None] = mapped_column(String(12))
+    passport: Mapped[str | None] = mapped_column(String(16))
+    passport_masked: Mapped[str | None] = mapped_column(String(32))
+    snils: Mapped[str | None] = mapped_column(String(16))
+    snils_masked: Mapped[str | None] = mapped_column(String(32))
+    base_matches: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+
+    @property
+    def fio(self) -> str:
+        parts = (self.last_name, self.first_name, self.middle_name)
+        return " ".join(part for part in parts if part)
+
+    @property
+    def is_new_client(self) -> bool:
+        """Никого с такой фамилией в выгрузке не нашлось — на момент проверки."""
+        return self.base_matches == 0
 
 
 class VendorCacheEntry(Base):

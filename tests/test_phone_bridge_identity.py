@@ -161,12 +161,14 @@ def dump_settings(settings: Settings, tmp_path: Path) -> Settings:
     """Настройки под поставщика, который отвечает свалкой находок по номеру.
 
     Карта названа его ключами — ``full_name``, ``birth_date``, ``inn``,
-    ``passport``: именно их владелец подтвердил как верные на своём номере.
+    ``passport``, ``snils``: именно их владелец подтвердил как верные на своём
+    номере.
     """
     path = tmp_path / "dump.json"
     path.write_text(
         '{"records_path": "results", "fields": {"fio": "full_name",'
-        ' "birth_date": "birth_date", "inn": "inn", "passport": "passport"}}',
+        ' "birth_date": "birth_date", "inn": "inn", "passport": "passport",'
+        ' "snils": "snils"}}',
         encoding="utf-8",
     )
     return settings.model_copy(update={"phone_bridge_field_map": path})
@@ -284,3 +286,66 @@ async def test_a_passport_that_is_not_a_russian_one_is_dropped(
 
     assert isinstance(result, PhoneNameResult)
     assert result.passport == "4510123456"
+
+
+@respx.mock
+async def test_a_snils_is_taken_only_when_its_checksum_agrees(
+    dump_settings: Settings,
+) -> None:
+    """Одиннадцать цифр — ещё не СНИЛС, и разницу видит только контрольная сумма.
+
+    В ответе поставщика одиннадцатизначные числа лежат в нескольких полях
+    сразу: ИНН физлица — двенадцать знаков, юрлица — десять, а одиннадцать
+    бывает и у внутреннего идентификатора чужой системы. Владелица уже приняла
+    за свой ИНН одиннадцатизначное число из такого ответа — им оказался её же
+    СНИЛС. Взять не то здесь значит вписать в заявление чужой идентификатор.
+    """
+    respx.get(url__startswith=BASE).mock(
+        return_value=Response(
+            200,
+            json={
+                "results": [
+                    {"full_name": "Иванова Елена Петровна", "snils": "16011086812"},
+                    {"snils": "160-110-868 11"},
+                ]
+            },
+        )
+    )
+    bridge = build_phone_bridge(dump_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    # Первое поле отвергнуто по контрольной сумме, взято второе — и оно
+    # нормализовано до цифр, как паспорт.
+    assert result.snils == "16011086811"
+
+
+@respx.mock
+async def test_a_snils_that_is_not_one_is_dropped(dump_settings: Settings) -> None:
+    """Ни одного годного СНИЛСа — поле пустое, а не «почти правильное»."""
+    respx.get(url__startswith=BASE).mock(
+        return_value=Response(
+            200,
+            json={
+                "results": [
+                    {"full_name": "Иванова Елена Петровна"},
+                    {"snils": "не указан"},
+                    {"snils": "7604039395"},
+                ]
+            },
+        )
+    )
+    bridge = build_phone_bridge(dump_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.status is ProviderStatus.SUCCESS, "имя всё равно должно доехать"
+    assert result.snils is None

@@ -57,6 +57,12 @@ INN_INDIVIDUAL_LENGTH = 12
 INN_ENTITY_LENGTH = 10
 #: Серия и номер российского паспорта, слитно.
 PASSPORT_LENGTH = 10
+#: СНИЛС: девять значащих цифр плюс двузначная контрольная сумма.
+SNILS_LENGTH = 11
+SNILS_PAYLOAD_LENGTH = 9
+#: Остаток, с которого контрольное число СНИЛС становится нулём. Не «модуль
+#: 101 и всё»: у 100 и 101 результат один и тот же — ноль.
+SNILS_MODULO = 101
 #: Российский номер в национальном формате: 8/7 плюс десять цифр.
 PHONE_LENGTH = 11
 VIN_LENGTH = 17
@@ -488,6 +494,38 @@ def normalize_passport(raw: str | None) -> str | None:
     return digits if len(digits) == PASSPORT_LENGTH else None
 
 
+def normalize_snils(raw: str | None) -> str | None:
+    """СНИЛС из строки поставщика — одиннадцать цифр с сошедшейся контрольной.
+
+    Контрольная сумма проверяется, а не игнорируется, и причина не в
+    аккуратности. Поставщик отдаёт одиннадцатизначные числа в нескольких полях
+    сразу, и одиннадцать цифр сами по себе не значат ничего: ИНН физлица — это
+    двенадцать, ИНН юрлица — десять, а одиннадцать бывает и у внутреннего
+    идентификатора чужой системы. Владелица уже приняла за свой ИНН
+    одиннадцатизначное число из ответа — им оказался её же СНИЛС, и различила
+    их ровно эта проверка. Записать в карточку чужой идентификатор под видом
+    СНИЛС — это подать иск с ним.
+
+    Алгоритм — тот, что в пенсионном законодательстве: девять значащих цифр
+    взвешиваются позициями с девятой по первую, остаток от деления на 101
+    сравнивается с двумя последними; 100 и 101 дают ноль. Номера до 001-001-998
+    контрольного числа не имеют вовсе, но в жизни их не выдают, и принимать
+    такие ради полноты значит открыть дверь всему подряд.
+    """
+    if not raw:
+        return None
+    digits = re.sub(r"\D", "", str(raw))
+    if len(digits) != SNILS_LENGTH:
+        return None
+    payload, checksum = digits[:SNILS_PAYLOAD_LENGTH], int(digits[SNILS_PAYLOAD_LENGTH:])
+    total = sum(
+        int(digit) * (SNILS_PAYLOAD_LENGTH - position) for position, digit in enumerate(payload)
+    )
+    remainder = total % SNILS_MODULO
+    expected = 0 if remainder in (100, SNILS_MODULO) else remainder
+    return digits if expected == checksum else None
+
+
 def normalize_address(raw: str | None) -> str | None:
     if not raw:
         return None
@@ -549,6 +587,12 @@ class SearchSubject(BaseModel):
     phone: str | None = None
     inn: str | None = None
     passport: str | None = None
+    #: СНИЛС. Ни один поставщик по нему не ищет и ни один не спрашивает его на
+    #: входе — он едет в субъекте только затем, чтобы попасть в карточку и в
+    #: отчёт: владельцу он нужен в заявлении, а добывается вместе с паспортом
+    #: одним и тем же обращением. В ``redact_subject`` он вычеркнут наравне с
+    #: паспортом.
+    snils: str | None = None
     address: str | None = None
     regions: tuple[str, ...] = Field(default_factory=tuple)
     vehicle: VehicleDescriptor | None = None

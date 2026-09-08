@@ -18,6 +18,7 @@ from app.bot.keyboards import (
     MENU_HOME,
     MENU_MORE,
     BaseListing,
+    ClientsListing,
     main_menu,
     main_reply_keyboard,
     more_menu,
@@ -117,11 +118,39 @@ def base_html(base: BaseListing) -> str:
     return f'<a href="{escape(base.url, quote=True)}">Вся база</a> — {base.total} {noun}{money}'
 
 
+async def clients_listing(container: Container, user_id: int) -> ClientsListing | None:
+    """Ссылка на страницу проверок по номеру — или ``None``.
+
+    Только владельцу и по той же причине, что и база: за ссылкой ФИО, даты
+    рождения и документы живых людей, а ``ALLOWED_TELEGRAM_USER_IDS=*`` пускает
+    в бота кого угодно.
+
+    ``None``, пока не проверен ни один номер: пустая страница в меню — это
+    кнопка, которая ничего не показывает, и нажавший решит, что бот сломан.
+    """
+    if not container.access_service.is_owner(user_id):
+        return None
+    lookups = await container.phone_lookups.recent(limit=container.settings.batch_max_debtors)
+    if not lookups:
+        return None
+    url = await container.share_service.issue(
+        ShareTarget(ShareKind.LOOKUPS, 0), telegram_user_id=user_id
+    )
+    if url is None:
+        return None
+    return ClientsListing(
+        url=url,
+        total=len(lookups),
+        fresh=sum(1 for lookup in lookups if lookup.is_new_client),
+    )
+
+
 async def menu_markup(container: Container, user_id: int) -> InlineKeyboardMarkup:
     """Главное меню под этого человека, со ссылкой на базу, если она положена."""
     return main_menu(
         owner=container.access_service.is_owner(user_id),
         base=await base_listing(container, user_id),
+        clients=await clients_listing(container, user_id),
     )
 
 

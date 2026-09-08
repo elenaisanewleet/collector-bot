@@ -4,6 +4,7 @@
     "fio": "full_name",
     "birth_date": "birth_date",
     "inn": "inn",
-    "passport": "passport"
+    "passport": "passport",
+    "snils": "snils"
   }
 }

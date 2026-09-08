@@ -22,6 +22,7 @@ from app.db.models import (
     BatchRun,
     Debtor,
     DebtorReportRow,
+    PhoneLookup,
     QueryCard,
     SearchRequest,
     SearchResult,
@@ -140,6 +141,33 @@ class DebtorRepository:
     async def find_by_fio_prefix(self, surname_and_name: str) -> list[Debtor]:
         needle = f"{normalize_token(surname_and_name)}%"
         return await self._all(select(Debtor).where(Debtor.fio_normalized.like(needle)))
+
+    async def count_by_surname(self, surname: str) -> int:
+        """Сколько должников с такой фамилией. Ноль — это «новый клиент».
+
+        Фамилия, а не ФИО целиком, и не префикс «фамилия имя»: у женщин в
+        выгрузке заказчика фамилия бывает девичьей, отчество пропущенным, а имя
+        сокращённым до буквы. Вопрос здесь другой, чем при поиске должника, —
+        не «этот ли человек», а «людей с такой фамилией мы вообще знаем».
+        Считать по нему точным совпадением ФИО значит объявлять новым каждого
+        второго.
+
+        ``fio_normalized`` собран из тех же слов через пробел (``normalize_token``),
+        поэтому фамилия — это префикс до первого пробела.
+        """
+        needle = normalize_token(surname)
+        if not needle:
+            return 0
+        stmt = select(func.count()).select_from(Debtor)
+        pattern = f"{needle} %"
+        return (
+            await self._session.scalar(
+                stmt.where(
+                    or_(Debtor.fio_normalized == needle, Debtor.fio_normalized.like(pattern))
+                )
+            )
+            or 0
+        )
 
     async def all_by_name(self, *, limit: int) -> list[Debtor]:
         """Все должники по алфавиту — для выгрузки списка и для глаз.
@@ -850,6 +878,36 @@ class QueryCardRepository:
             await self._session.execute(delete(QueryCard).where(QueryCard.updated_at < cutoff)),
         )
         return result.rowcount or 0
+
+
+class PhoneLookupRepository:
+    """Находки по номеру телефона — писать и читать списком."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record(self, lookup: PhoneLookup) -> PhoneLookup:
+        self._session.add(lookup)
+        await self._session.flush()
+        return lookup
+
+    async def recent(self, *, limit: int) -> list[PhoneLookup]:
+        """Последние находки — новыми вверх.
+
+        Новыми вверх, а не по алфавиту, как справочник должников: там список
+        читают поиском по фамилии, здесь — глазами сверху, «кого я пробил
+        сегодня». Порядок вторым ключом по идентификатору: две находки в одну
+        секунду иначе меняются местами между обновлениями страницы.
+        """
+        stmt = (
+            select(PhoneLookup)
+            .order_by(PhoneLookup.created_at.desc(), PhoneLookup.id.desc())
+            .limit(limit)
+        )
+        return list((await self._session.scalars(stmt)).all())
+
+    async def count(self) -> int:
+        return await self._session.scalar(select(func.count()).select_from(PhoneLookup)) or 0
 
 
 class AuditRepository:

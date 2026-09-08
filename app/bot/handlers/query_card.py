@@ -32,6 +32,7 @@ from contextlib import suppress
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.bot import card_view
 from app.bot.card_view import Screen
@@ -52,7 +53,7 @@ from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport, InternalDebtorRecord
 from app.logging_setup import get_logger
 from app.services import card_identify, coverage
-from app.services.query_card import Card
+from app.services.query_card import Card, fill_from_bridge
 from app.utils.dates import utcnow
 
 logger = get_logger(__name__)
@@ -402,12 +403,42 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
         # Ручка молчит или никого не знает. Разница для оператора одна: дальше
         # он вводит фамилию. Одной строкой, без объяснений про источники.
         return card_view.NAME_NOT_RESOLVED
-    card.last_name = name.last_name
-    card.first_name = name.first_name
-    card.middle_name = name.middle_name
+
+    passport = getattr(result, "passport", None)
+    snils = getattr(result, "snils", None)
+    inn = getattr(result, "inn", None)
     birth = getattr(result, "birth_date", None)
-    if birth is not None and card.birth_date is None:
-        card.birth_date = birth
+    # Переносится ВСЁ, что пришло одним ответом, а не только имя с датой. Раньше
+    # здесь стояли четыре строки про ФИО и дату, и паспорт со СНИЛСом из того же
+    # оплаченного ответа терялись молча: карточка их не показывала, отчёт не
+    # получал, владелец шёл искать документы руками. Правила переноса — в
+    # :func:`~app.services.query_card.fill_from_bridge`.
+    fill_from_bridge(
+        card,
+        name=name,
+        birth_date=birth,
+        inn=inn,
+        passport=passport,
+        snils=snils,
+    )
+    # Журнал находок. Пишется здесь, а не при показе страницы, потому что
+    # отметка «новый клиент» — замер СВОЕГО дня: следующий импорт выгрузки
+    # изменит ответ, и посчитанный задним числом он соврал бы молча.
+    #
+    # Падение журнала не должно ронять ответ на номер: человек ждёт карточку, а
+    # не запись в таблицу. Ошибка уходит в лог и остаётся там.
+    try:
+        await container.phone_lookups.record(
+            telegram_user_id=card.telegram_user_id,
+            phone=card.phone,
+            name=name,
+            birth_date=birth,
+            inn=inn,
+            passport=passport,
+            snils=snils,
+        )
+    except SQLAlchemyError:
+        logger.exception("phone_lookup.record_failed", user_id=card.telegram_user_id)
     return None
 
 

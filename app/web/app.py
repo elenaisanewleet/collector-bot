@@ -39,6 +39,7 @@ from app.services.share import ShareKind
 from app.utils.dates import utcnow
 from app.web.render import ExportLinks, render_message_page, render_report_page
 from app.web.render_base import FeeRules, render_base_page, render_person_page
+from app.web.render_lookups import render_lookups_page
 from app.web.render_queue import render_queue_page
 
 logger = get_logger(__name__)
@@ -80,6 +81,7 @@ def build_app(container: Container) -> web.Application:
             web.get("/q/{token}/queue.csv", handle_queue_csv),
             web.get("/b/{token}", handle_base),
             web.get("/p/{token}", handle_person),
+            web.get("/n/{token}", handle_lookups),
         ]
     )
     return app
@@ -128,6 +130,28 @@ async def handle_base(request: web.Request) -> web.Response:
         app_name=container.settings.app_name,
         rules=_fee_rules(container),
         person_urls={row.id: f"/p/{share.person_token(link, row.id)}" for row in debtors},
+        demo_mode=container.settings.app_mode is AppMode.DEMO,
+        print_mode="print" in request.query,
+    )
+    return web.Response(text=html, content_type="text/html", headers=PRIVATE_HEADERS)
+
+
+async def handle_lookups(request: web.Request) -> web.Response:
+    """Проверки по номеру телефона: кого пробили и кого из них в базе нет.
+
+    Отдельная страница, а не вкладка справочника: справочник — это выгрузка
+    заказчика, а здесь люди, которых в ней ещё нет. Смешать их значило бы
+    выдать непроверенную личность из чужого источника за строку базы.
+    """
+    container = request.app[CONTAINER_KEY]
+    token = request.match_info["token"]
+    link = await container.share_service.resolve(token, ShareKind.LOOKUPS)
+    if link is None:
+        return _not_found(container)
+    lookups = await container.phone_lookups.recent(limit=container.settings.batch_max_debtors)
+    html = render_lookups_page(
+        lookups,
+        app_name=container.settings.app_name,
         demo_mode=container.settings.app_mode is AppMode.DEMO,
         print_mode="print" in request.query,
     )
