@@ -151,3 +151,136 @@ async def test_the_source_never_overwrites_what_the_operator_typed(settings: Set
     }
 
     assert update == {}, "мост переписал то, что ввёл оператор"
+
+
+# ------------------------------------------------- ответ-свалка: поля врозь
+
+
+@pytest.fixture
+def dump_settings(settings: Settings, tmp_path: Path) -> Settings:
+    """Настройки под поставщика, который отвечает свалкой находок по номеру.
+
+    Карта названа его ключами — ``full_name``, ``birth_date``, ``inn``,
+    ``passport``: именно их владелец подтвердил как верные на своём номере.
+    """
+    path = tmp_path / "dump.json"
+    path.write_text(
+        '{"records_path": "results", "fields": {"fio": "full_name",'
+        ' "birth_date": "birth_date", "inn": "inn", "passport": "passport"}}',
+        encoding="utf-8",
+    )
+    return settings.model_copy(update={"phone_bridge_field_map": path})
+
+
+#: Форма живого ответа depsearch, снятая с источника 08.09.2026 и обезличенная.
+#: Существенно в ней ровно три вещи, и каждая ломала мост по-своему:
+#: первое ``full_name`` — латиница (транслитерация из иностранной утечки),
+#: настоящая личность лежит ниже; дата рождения и паспорт стоят в своей строке;
+#: первый ``inn`` десятизначный, то есть юрлица.
+SCATTERED = {
+    "search_type": "phone",
+    "phone_info": {"phone": "+79990000000", "operator": "…"},
+    "results": [
+        {"phone": "+79990000000", "data": "доставка"},
+        {"full_name": "Ivanova Elena", "email": "e@example.test"},
+        {
+            "full_name": "Иванова Елена Петровна",
+            "birth_date": "1984-06-25",
+            "passport": "4510123456",
+        },
+        {"inn": "7701234567"},
+        {"full_name": "Иванова Елена Петровна", "inn": "770123456789"},
+    ],
+}
+
+
+@respx.mock
+async def test_the_identity_is_gathered_across_the_whole_answer(
+    dump_settings: Settings,
+) -> None:
+    """Поставщик отвечает свалкой находок, и личность в ней разложена по строкам.
+
+    Раньше брался первый ряд с читаемым именем, а остальные поля доставались
+    только из него. На живом ответе это давало имя без даты рождения — то есть
+    ключ, по которому в выгрузке из двух тысяч человек поднимется однофамилец,
+    и отчёт уедет про него.
+    """
+    respx.get(url__startswith=BASE).mock(return_value=Response(200, json=SCATTERED))
+    bridge = build_phone_bridge(dump_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.status is ProviderStatus.SUCCESS
+    assert result.name is not None
+    # Имя взято кириллическое, хотя латиница стояла раньше: транслитерацией в
+    # русской выгрузке не найдётся никто, и бот сказал бы «не найден» про
+    # человека, который в базе есть.
+    assert result.name.last_name == "Иванова"
+    assert result.birth_date is not None and result.birth_date.year == 1984
+    assert result.passport == "4510123456"
+    # Десятизначный ИНН принадлежит юрлицу; за ним ушли бы три платных запроса,
+    # которые вернут чужие дела или пустоту. Взят двенадцатизначный, ниже.
+    assert result.inn == "770123456789"
+    # Мост записей в отчёт не приносит — он делает возможным вопрос, а не факт.
+    assert not result.records
+
+
+@respx.mock
+async def test_a_translit_only_answer_is_still_better_than_silence(
+    dump_settings: Settings,
+) -> None:
+    """Есть только транслитерация — отдаём её, а не молчим.
+
+    В выгрузке по ней никто не найдётся, и бот честно попросит фамилию. Это
+    лучше, чем «имя не определено» при ответившем источнике: разница между «не
+    нашли» и «не спрашивали» — главное правило проекта.
+    """
+    respx.get(url__startswith=BASE).mock(
+        return_value=Response(200, json={"results": [{"full_name": "Ivanova Elena"}]})
+    )
+    bridge = build_phone_bridge(dump_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.status is ProviderStatus.SUCCESS
+    assert result.name is not None and result.name.last_name == "Ivanova"
+
+
+@respx.mock
+async def test_a_passport_that_is_not_a_russian_one_is_dropped(
+    dump_settings: Settings,
+) -> None:
+    """Загранпаспорт и иностранный к мосту ФНС не годятся — он ищет по паспорту РФ.
+
+    Источник подписывает вид документа словами, и отличить их можно только по
+    числу цифр. Пропустить негодный — купить пустой ответ ФНС за свои деньги.
+    """
+    respx.get(url__startswith=BASE).mock(
+        return_value=Response(
+            200,
+            json={
+                "results": [
+                    {"full_name": "Иванова Елена Петровна"},
+                    {"passport": "Загранпаспорт гражданина РФ 75 1234567"},
+                    {"passport": "Паспорт гражданина РФ 4510 123456"},
+                ]
+            },
+        )
+    )
+    bridge = build_phone_bridge(dump_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.passport == "4510123456"
