@@ -114,6 +114,20 @@ class BaseProvider(ABC):
         """
         return 1 if self.is_configured and self.supports_subject else 0
 
+    def runs_in_batch(self) -> bool:
+        """Участвует ли источник в массовом прогоне ВООБЩЕ.
+
+        Не про конкретного должника — про сам факт. Смета умножает число
+        источников на число должников, и источник, который в прогоне не
+        вызывается никогда, приписывает к счёту по обращению на каждого.
+
+        Куплено включением ЕГРН: он в прогоне не участвует (отдельная
+        настройка), но попал в ``configured_names``, и смета мгновенно
+        подорожала на 2052 несуществующих вызова — четыре тысячи рублей
+        воздуха ровно там, где владелец жмёт «Запустить».
+        """
+        return True
+
     def max_planned_calls(self, subject: SearchSubject, context: FetchContext = NO_CONTEXT) -> int:
         """The ceiling. Differs from :meth:`planned_calls` only for a chain,
         whose length is not known until the first source has answered."""

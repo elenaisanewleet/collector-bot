@@ -113,6 +113,21 @@ class ProviderRegistry:
     def configured_names(self) -> list[ProviderName]:
         return [provider.name for provider in self._external if provider.is_configured]
 
+    @property
+    def batch_names(self) -> list[ProviderName]:
+        """Источники, которые и правда опрашиваются в массовом прогоне.
+
+        Отличается от :attr:`configured_names` ровно на те, что в прогоне не
+        участвуют по своей настройке. Смета обязана считать по этому списку:
+        она умножается на число должников, и лишний источник в ней стоит
+        обращения на каждого.
+        """
+        return [
+            provider.name
+            for provider in self._external
+            if provider.is_configured and provider.runs_in_batch()
+        ]
+
 
 def _reject_duplicates(providers: Sequence[BaseProvider]) -> None:
     seen: set[ProviderName] = set()

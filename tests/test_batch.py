@@ -334,3 +334,53 @@ async def test_export_opens_in_excel() -> None:
     payload = queue_to_csv([])
     assert payload.startswith(b"\xef\xbb\xbf")
     assert b";" in payload
+
+
+def test_the_estimate_does_not_count_sources_that_never_run_in_a_batch() -> None:
+    """Смета умножается на число должников — лишний источник стоит дорого.
+
+    Куплено включением ЕГРН. Он в массовом прогоне не участвует (своя
+    настройка ROSREESTR_IN_BATCH), но попал в configured_names, а смета
+    считала именно по нему, вслепую. На базе заказчика это 2052
+    несуществующих вызова — около четырёх тысяч рублей воздуха ровно там, где
+    владелец жмёт «Запустить» и подтверждает трату.
+    """
+    from app.config import AppMode, Settings
+    from app.db.session import Database
+    from app.domain.enums import ProviderName
+    from app.providers.registry import (
+        ProviderRegistry,
+        build_external_providers,
+        build_internal_provider,
+    )
+
+    def registry(in_batch: bool) -> ProviderRegistry:
+        settings = Settings(
+            app_mode=AppMode.LIVE,
+            app_name="t",
+            telegram_bot_token="t",
+            allowed_telegram_user_ids="*",
+            owner_telegram_user_ids="111",
+            database_url="sqlite+aiosqlite:///:memory:",
+            newdb_api_key="fake",
+            newdb_base_url="https://example.test",
+            rosreestr_enabled=True,
+            rosreestr_in_batch=in_batch,
+            log_level="CRITICAL",
+            _env_file=None,
+        )
+        database = Database("sqlite+aiosqlite:///:memory:")
+        return ProviderRegistry(
+            internal=build_internal_provider(settings, database),
+            external=build_external_providers(settings),
+        )
+
+    off, on = registry(in_batch=False), registry(in_batch=True)
+
+    # Подключён в обоих случаях — это про смету, а не про доступность.
+    assert ProviderName.PROPERTY in off.configured_names
+    assert ProviderName.PROPERTY in on.configured_names
+
+    assert ProviderName.PROPERTY not in off.batch_names, "смета считает то, чего не будет"
+    assert ProviderName.PROPERTY in on.batch_names
+    assert len(on.batch_names) == len(off.batch_names) + 1

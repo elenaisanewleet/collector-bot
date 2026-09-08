@@ -352,7 +352,7 @@ class BatchService:
                 totals=totals,
                 items=items,
                 status=run.status,
-                providers_per_debtor=len(self._search.registry.configured_names),
+                providers_per_debtor=len(self._search.registry.batch_names),
             )
 
     # ------------------------------------------------------------- estimate
@@ -365,7 +365,7 @@ class BatchService:
         debtors = min(total, cap)
 
         scan = await self._scan(debtors)
-        providers = len(self._search.registry.configured_names)
+        providers = len(self._search.registry.batch_names)
         bridge = self._search.registry.inn_bridge
         return BatchEstimate(
             debtors=debtors,

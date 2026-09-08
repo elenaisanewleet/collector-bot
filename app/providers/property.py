@@ -105,6 +105,10 @@ class NewDBPropertyProvider(NewDBMethodProvider):
             return 0
         return 1 if _query_for(subject) is not None else 0
 
+    def runs_in_batch(self) -> bool:
+        """В прогоне — только под своей настройкой; см. :meth:`_allowed_here`."""
+        return self._settings.rosreestr_in_batch
+
     def _allowed_here(self, subject: SearchSubject, context: FetchContext) -> bool:
         """Поиск по адресу оператор выбрал сам; массовый прогон — под настройкой.
 
