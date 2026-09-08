@@ -611,7 +611,7 @@ async def test_the_miss_is_reported_once_not_over_every_question(
 # ---------------------------------------------------------------- первый шаг
 
 
-async def test_the_first_step_asks_for_a_phone_and_nothing_else(
+async def test_the_first_step_asks_for_a_number_or_a_name(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
     """Экран первого шага — четыре строки, и просит он телефон.
@@ -629,10 +629,10 @@ async def test_the_first_step_asks_for_a_phone_and_nothing_else(
     await feed(dispatcher, bot, message=make_message("Проверить человека"))
 
     assert last(sent) == (
-        "✎ Телефон\n"
+        "✎ Номер или ФИО\n"
         "\n"
-        "Отправьте номер сообщением.\n"
-        "Например: +7 999 123-45-67\n"
+        "Отправьте номер телефона или фамилию с именем.\n"
+        "Например: Иванов Иван Иванович\n"
         "Не знаете — «Дальше»."
     )
 

@@ -346,7 +346,7 @@ async def test_new_search_button_is_not_a_dead_end(
     await feed(dispatcher, bot, callback_query=make_callback("menu:back"))
 
     # Чистая карточка узнаётся по первому вопросу, а он спрашивает телефон.
-    assert sent.contains("✎ Телефон")
+    assert sent.contains("✎ Номер или ФИО")
     assert sent.callback_answers
 
 

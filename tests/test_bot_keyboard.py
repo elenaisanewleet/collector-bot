@@ -100,22 +100,25 @@ def test_every_label_is_a_phrase_nobody_enters_as_data(label: str) -> None:
 
 
 def test_the_placeholder_asks_for_the_same_thing_as_the_first_step() -> None:
-    """Поле ввода зовёт то же, что и первый вопрос, — телефон.
+    """Поле ввода зовёт то же, что и первый вопрос: номер или ФИО.
 
-    Подсказка перечисляла «госномер, телефон, ИНН», пока первый шаг звался
-    «Номер». Владелица поменяла шаг на телефон, и подсказка со старым
-    перечислением заставляла бы выбирать, кому верить: полю ввода или экрану.
-    Что код при этом принимает любой номер, текстом больше не обещается — за
-    это отвечает :meth:`QueryCardService.apply`, а не строка под пальцем.
+    Расхождение здесь уже было дважды, и оба раза заказчик присылал скриншот:
+    поле перечисляло «госномер, телефон, ИНН», пока экран просил телефон. Что
+    из двух правда — по такому экрану не решить.
 
-    Сверяется с самим заголовком шага, а не с написанным здесь словом: иначе
-    следующее переименование разведёт их молча, а это уже было.
+    Сверяется не со строкой, написанной в тесте, а с самим заголовком шага:
+    иначе следующее переименование разведёт их молча. Заголовок разбирается на
+    значащие слова, потому что подсказка длиннее его на «должника» и «телефона»
+    — и это нормально, а вот потерять из неё «ФИО» уже нет.
     """
     placeholder = main_reply_keyboard(owner=True).input_field_placeholder
     title = ASK_TITLES[Field.PHONE.value].lower()
 
     assert placeholder is not None
-    assert title in placeholder.lower(), f"поле ввода и вопрос зовут разное: {placeholder}"
+    for word in (w for w in title.split() if w not in {"или"}):
+        assert word in placeholder.lower(), (
+            f"поле ввода и вопрос зовут разное: «{placeholder}» против «{title}»"
+        )
     for gone in ("госномер", "инн", "договор"):
         assert gone not in placeholder.lower(), f"перечисление вернулось: {placeholder}"
 
@@ -203,7 +206,7 @@ async def test_the_keyboard_is_sent_once_per_start(
         (BUTTON_BATCH, "Внутренняя база пуста"),
         # Со значком: «Телефон» без него есть и на кнопке поля, и в строке
         # карточки, и проверка прошла бы, не дойдя до вопроса.
-        (BUTTON_SEARCH, "✎ Телефон"),
+        (BUTTON_SEARCH, "✎ Номер или ФИО"),
         (BUTTON_HISTORY, "История пуста"),
         (BUTTON_SOURCES, "ОТКУДА ДАННЫЕ"),
         (BUTTON_HELP, "как это работает"),
@@ -241,7 +244,7 @@ async def test_the_search_button_keeps_the_rarer_searches_reachable(
     должна: она за «Другие способы поиска».
     """
     await feed(dispatcher, bot, message=make_message(BUTTON_SEARCH))
-    assert sent.contains("✎ Телефон")
+    assert sent.contains("✎ Номер или ФИО")
 
     await feed(dispatcher, bot, callback_query=make_callback(MENU_MORE))
 

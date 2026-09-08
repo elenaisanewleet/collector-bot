@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import date, datetime
 from decimal import Decimal
 from typing import NamedTuple
 
@@ -40,6 +41,7 @@ from app.db.models import Debtor
 from app.domain.fees import FEE_BRACKETS, claim_fee, court_order_fee
 from app.utils.dates import format_datetime, utcnow
 from app.utils.formatting import pluralize_ru
+from app.utils.masking import mask_vin
 from app.utils.money import format_amount
 from app.web.render import cell, document, e, navigation, print_footer, raw_cell, section, table
 
@@ -599,29 +601,94 @@ def _number(value: Decimal) -> str:
 
 
 def _person_facts(debtor: Debtor) -> str:
-    plates = debtor.vehicle_plates or debtor.vehicle_plate or "—"
-    episodes = debtor.source_record_ids or debtor.external_debtor_id or "—"
-    count = len([item for item in episodes.split(",") if item.strip()]) if episodes != "—" else 0
-    rows = [
-        ("Машины", plates),
-        ("Задержаний", str(count) if count else "—"),
-        # В базе лежит одна пара дат, а не список эпизодов: выгрузка отдаёт их
-        # строками, а строки склеиваются в одного должника. Поэтому здесь
-        # сказано «последнее», а не «единственное» — иначе страница обещала бы
-        # полный перечень задержаний, которого у неё нет.
-        ("Последнее хранение", _storage_period(debtor)),
-        ("ИД записей в учёте", episodes),
-        ("Адрес", debtor.address or "—"),
-        # Паспорт только маской: сам номер нужен мосту к ИНН, а не читателю.
-        ("Паспорт", debtor.passport_masked or "—"),
-        ("ИНН", debtor.inn or "—"),
-        ("Договор", debtor.contract_number or "—"),
+    """Всё, что о человеке знает выгрузка, — одной таблицей.
+
+    Раньше здесь стояла выборка из восьми полей, и заказчик, привыкший смотреть
+    в 1С, недосчитывался остального: VIN, заявки, номера записи, даты постановки
+    и выдачи по отдельности. Страница заводилась ровно затем, чтобы в 1С не
+    лезть, — значит показывать она обязана всё, что оттуда приехало.
+
+    Пустые поля печатаются прочерком, а не прячутся. Прочерк здесь значит «в
+    выгрузке этого нет» — это факт о выгрузке, и он полезен: по нему видно,
+    какой колонки не хватает, чтобы бот заработал полнее. Скрытая строка
+    выглядела бы так, будто поля не существует вовсе.
+
+    Телефон и паспорт — только маской. Полные значения в базе есть (паспорт
+    нужен мосту к ИНН), но читателю страницы они не нужны ни разу, а ссылку
+    пересылают.
+    """
+    plates = debtor.vehicle_plates or debtor.vehicle_plate
+    # Число задержаний считается по обоим полям, а печатается каждое своё:
+    # при пустых «ИД записей» подстановка номера должника показала бы одно и то
+    # же значение в двух строках подряд, как будто это разные сведения.
+    episodes = debtor.source_record_ids or debtor.external_debtor_id
+    count = len([item for item in (episodes or "").split(",") if item.strip()])
+
+    groups: list[tuple[str, list[tuple[str, str | None]]]] = [
+        (
+            "Человек",
+            [
+                ("ФИО", debtor.fio),
+                ("Дата рождения", _date(debtor.birth_date)),
+                ("Адрес", debtor.address),
+                ("Телефон", debtor.phone_masked),
+                ("Паспорт", debtor.passport_masked),
+                ("ИНН", debtor.inn),
+            ],
+        ),
+        (
+            "Машины",
+            [
+                ("Госномера", plates),
+                ("VIN", mask_vin(debtor.vin) if debtor.vin else None),
+            ],
+        ),
+        (
+            "Задержания",
+            [
+                ("Всего задержаний", str(count) if count else None),
+                ("Последнее хранение", _storage_period(debtor)),
+                ("Поставлена", _moment(debtor.impounded_at)),
+                ("Выдана", _moment(debtor.released_at)),
+            ],
+        ),
+        (
+            "Учёт",
+            [
+                ("Договор", debtor.contract_number),
+                ("Заявка", debtor.claim_number),
+                ("ИД записей в учёте", debtor.source_record_ids),
+                ("Номер должника в учёте", debtor.external_debtor_id),
+                ("Откуда запись", _SOURCE_TITLES.get(debtor.source, debtor.source)),
+                ("Загружено", _moment(debtor.created_at)),
+                ("Обновлено", _moment(debtor.updated_at)),
+            ],
+        ),
     ]
-    body = table(
-        ("Поле", "Значение"),
-        [(cell(name, label="Поле"), cell(value, label="Значение")) for name, value in rows],
-    )
-    return section("facts", "Что известно", body)
+
+    rows: list[tuple[str, ...]] = []
+    for title, fields in groups:
+        # Заголовок группы — строка таблицы во всю ширину: отдельная секция на
+        # каждую четвёрку полей растянула бы страницу на три экрана.
+        rows.append((raw_cell(f'<b class="grp">{e(title)}</b>', label=""), raw_cell("", label="")))
+        rows.extend(
+            (cell(name, label="Поле"), cell(value or "—", label="Значение"))
+            for name, value in fields
+        )
+    return section("facts", "Что известно", table(("Поле", "Значение"), rows))
+
+
+#: Откуда взялась строка. В базе это техническое слово, а на странице у него
+#: должен быть смысл для читателя, а не для программиста.
+_SOURCE_TITLES = {"csv_import": "загрузка выгрузки", "manual": "заведено вручную"}
+
+
+def _date(value: date | None) -> str | None:
+    return value.strftime("%d.%m.%Y") if value else None
+
+
+def _moment(value: datetime | None) -> str | None:
+    return format_datetime(value) if value else None
 
 
 def _storage_period(debtor: Debtor) -> str:
