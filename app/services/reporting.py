@@ -216,6 +216,19 @@ class SourceState:
         return not self.answered
 
 
+#: Коды, которые обязаны звучать по-русски, потому что по ним принимают решение,
+#: а не заводят тикет. Имени поставщика и переменных окружения тут нет: правило
+#: 4 — оператор видит причину, а не наше устройство.
+_SPOKEN_CODES: dict[str, str] = {
+    # Поставщик отказал по деньгам или ключу. Разницы для читателя нет: в обоих
+    # случаях проверки не было, и починить это может только владелец.
+    "unauthorized": "не проверено — у поставщика данных нет доступа или средств",
+    # Поставщик принял запрос, но не успел подготовить ответ. Это не «пусто»:
+    # повторная проверка через несколько минут обычно проходит.
+    "poll_timeout": "не проверено — поставщик не успел ответить, стоит повторить",
+}
+
+
 def source_state(result: ProviderResult | None, *, records: int | None = None) -> SourceState:
     """Состояние источника по его результату.
 
@@ -242,6 +255,15 @@ def source_state(result: ProviderResult | None, *, records: int | None = None) -
         return SourceState(SourceStateCode.NOT_CONFIGURED, NOT_CONFIGURED_LABEL, "○", False)
     if result.error_code == "insufficient_query":
         return SourceState(SourceStateCode.INSUFFICIENT, "недостаточно данных", "?", False)
+    if result.error_code in _SPOKEN_CODES:
+        # Код словами. «unauthorized» — не диагноз, а латинское слово, и стоит
+        # оно ровно там, где решают, верить ли пустому отчёту. Проверено на
+        # проде: у поставщика кончился баланс, все источники ответили
+        # «недоступно (unauthorized)», и отчёт стал неотличим от честного
+        # «ничего не нашли». Это худший вид молчания — оплаченный.
+        return SourceState(
+            SourceStateCode.UNAVAILABLE, _SPOKEN_CODES[result.error_code], "!", False
+        )
     if result.status is ProviderStatus.UNAVAILABLE:
         code = result.error_code or "ошибка"
         return SourceState(SourceStateCode.UNAVAILABLE, f"недоступно ({code})", "!", False)

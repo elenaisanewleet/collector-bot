@@ -519,3 +519,61 @@ def test_a_company_found_by_inn_is_visible_on_the_page() -> None:
     assert "ООО РОМАШКА" in page
     assert "сопоставить с должником не удалось" not in page
     assert "ООО РОМАШКА" in reporting._business_block(report)
+
+
+def test_a_provider_out_of_money_says_so_in_words() -> None:
+    """«unauthorized» — латинское слово там, где решают, верить ли отчёту.
+
+    Найдено на проде: у поставщика кончился баланс, все источники ответили
+    «недоступно (unauthorized)», и отчёт стал неотличим от честного «ничего не
+    нашли». Это худший вид молчания — оплаченный: владелец видит пустые
+    разделы и делает вывод о должнике, а вывод надо делать о своём счёте.
+
+    Имени поставщика и переменных окружения в строке нет: правило 4 — оператор
+    видит причину, а не наше устройство.
+    """
+    from app.domain.enums import ProviderName, ProviderStatus
+    from app.domain.models import ProviderResult
+    from app.services import reporting
+
+    result = ProviderResult(
+        provider=ProviderName.FSSP,
+        status=ProviderStatus.UNAVAILABLE,
+        error_code="unauthorized",
+        error_message="Проверьте баланс и токен доступа (X-API-KEY)",
+    )
+    state = reporting.source_state(result)
+
+    assert state.code is reporting.SourceStateCode.UNAVAILABLE
+    assert "unauthorized" not in state.label
+    assert "средств" in state.label or "доступа" in state.label
+    # Ни ключа, ни имени поставщика, ни адреса поддержки наружу.
+    for leak in ("X-API-KEY", "newdb", "NewDB", "@"):
+        assert leak not in state.label
+
+
+def test_a_slow_provider_is_told_apart_from_an_empty_one() -> None:
+    """«Не успел ответить» и «ответил, ничего нет» — разные новости.
+
+    Первая чинится повтором через несколько минут, вторая не чинится ничем.
+    Сливать их в один код значит предлагать владельцу платить за повтор там,
+    где повторять нечего, — и не предлагать там, где стоит.
+    """
+    from app.domain.enums import ProviderName, ProviderStatus
+    from app.domain.models import ProviderResult
+    from app.services import reporting
+
+    slow = reporting.source_state(
+        ProviderResult(
+            provider=ProviderName.FSSP,
+            status=ProviderStatus.UNAVAILABLE,
+            error_code="poll_timeout",
+        )
+    )
+    empty = reporting.source_state(
+        ProviderResult(provider=ProviderName.FSSP, status=ProviderStatus.NO_RESULTS)
+    )
+
+    assert slow.label != empty.label
+    assert "повтор" in slow.label
+    assert not slow.answered and empty.answered
