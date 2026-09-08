@@ -331,6 +331,17 @@ async def settle(
 
     if guided:
         container.query_cards.step_forward(card)
+    elif found.missed and _searched_by(card) is not None:
+        # Номер прислали холодной строкой, и в выгрузке по нему никого нет.
+        # Раньше в ответ приезжала карточка сбора — форма на семнадцать строк
+        # с тринадцатью кнопками — там, где ответ короткий и известен заранее:
+        # «не нашёл, назовите фамилию». Сценарий владелицы дословно: «если
+        # номера недостаточно, он не нашёл его фамилию в базе по номеру» —
+        # дальше спрашиваем фамилию.
+        #
+        # begin_steps встаёт на первый НЕзаполненный из трёх шагов, то есть на
+        # фамилию: телефон уже прислан и переспрашивать его незачем.
+        container.query_cards.begin_steps(card)
     await show(
         message,
         container,
@@ -417,7 +428,14 @@ def _missed(found: card_identify.Identified, card: Card) -> str | None:
     key = _searched_by(card)
     if key is None:
         return None
-    return f"{card_view.NOT_IN_EXPORT.format(key=key)} {card_view.NOT_IN_EXPORT_TRY}"
+    missed = card_view.NOT_IN_EXPORT.format(key=key)
+    if card.awaiting_field:
+        # Следующей строкой бот сам спросит поле — «попробуйте фамилию с
+        # именем или госномер» поверх «✎ Фамилия» это второе объяснение того
+        # же, да ещё и зовущее не туда: спрашивают фамилию, а совет предлагает
+        # госномер.
+        return missed
+    return f"{missed} {card_view.NOT_IN_EXPORT_TRY}"
 
 
 def _searched_by(card: Card) -> str | None:

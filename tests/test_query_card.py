@@ -323,7 +323,13 @@ async def test_a_forgotten_secret_says_so_instead_of_showing_a_dash(
     # «Перезапуск»: сервис пересоздан, память процесса пуста, база — нет.
     container.query_cards = QueryCardService(container.database)
     restarted = setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)
-    await feed(restarted, bot, message=make_message("Тестов Андрей Сергеевич"))
+
+    # Карточку открывают отменой вопроса: оговорка живёт в списке полей, а
+    # экран вопроса полей не печатает — он задаёт одну строку.
+    #
+    # Полным ФИО тут пользоваться нельзя: оно опознаёт должника однозначно,
+    # проверка уходит сразу, и карточка не рисуется вовсе.
+    await feed(restarted, bot, callback_query=make_callback("qc:cancel"))
 
     assert "+7 (916) ***-**-67 — сам номер не храню, пришлите заново" in last(sent)
 
