@@ -469,9 +469,7 @@ def _person_hero(debtor: Debtor, kind: _Kind, fee: Decimal | None, back_url: str
     )
 
 
-def _person_money(
-    debtor: Debtor, kind: _Kind, fee: Decimal | None, rules: FeeRules
-) -> str:
+def _person_money(debtor: Debtor, kind: _Kind, fee: Decimal | None, rules: FeeRules) -> str:
     """Деньги и — раскрывающимся блоком — как они посчитаны.
 
     Расчёт свёрнут намеренно. Владелица просила ровно так: «алгоритм подсчёта
@@ -508,9 +506,7 @@ def _person_money(
     return section("money", "Деньги", body + note + _fee_math(amount, kind, fee, rules))
 
 
-def _fee_math(
-    amount: Decimal, kind: _Kind, fee: Decimal | None, rules: FeeRules
-) -> str:
+def _fee_math(amount: Decimal, kind: _Kind, fee: Decimal | None, rules: FeeRules) -> str:
     """Откуда взялось это число — ступень, ставка, множитель, порог.
 
     Числа считаются теми же ``claim_fee``/``court_order_fee``, что и всё
@@ -548,8 +544,7 @@ def _fee_math(
     )
     items = "".join(f"<li>{e(step)}</li>" for step in steps)
     return (
-        '<details class="math"><summary>Как посчитана пошлина</summary>'
-        f"<ol>{items}</ol></details>"
+        f'<details class="math"><summary>Как посчитана пошлина</summary><ol>{items}</ol></details>'
     )
 
 

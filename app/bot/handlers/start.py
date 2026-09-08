@@ -219,9 +219,7 @@ def build_router() -> Router:
         message: Message, state: FSMContext, container: Container, user_id: int
     ) -> None:
         await reset_state(state)
-        await message.answer(
-            CHOOSE_TYPE, reply_markup=await menu_markup(container, user_id)
-        )
+        await message.answer(CHOOSE_TYPE, reply_markup=await menu_markup(container, user_id))
 
     @router.message(Command("cancel"))
     async def handle_cancel(
@@ -229,9 +227,7 @@ def build_router() -> Router:
     ) -> None:
         await reset_state(state)
         await cancel_card(container, message.chat.id, user_id)
-        await message.answer(
-            CANCELLED, reply_markup=await menu_markup(container, user_id)
-        )
+        await message.answer(CANCELLED, reply_markup=await menu_markup(container, user_id))
 
     @router.callback_query(F.data == BACK_CALLBACK)
     async def handle_new_check(

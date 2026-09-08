@@ -92,9 +92,7 @@ def build_router() -> Router:
         """
         await reset_state(state)
         await cancel_card(container, message.chat.id, user_id)
-        await message.answer(
-            CHOOSE_TYPE, reply_markup=await menu_markup(container, user_id)
-        )
+        await message.answer(CHOOSE_TYPE, reply_markup=await menu_markup(container, user_id))
 
     @router.message(F.text.in_({BUTTON_BATCH, LEGACY_BUTTON_BATCH}))
     async def press_batch(

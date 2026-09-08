@@ -187,6 +187,7 @@ def test_narrowing_by_region_is_offered_only_when_it_would_change_something(
     не показывают «Узнать ИНН по паспорту», — кнопка не должна обещать того,
     чего не будет.
     """
+
     def keyboard(*, narrowable: bool) -> InlineKeyboardMarkup:
         return report_keyboard(
             url="https://reports.example.test/r/x",

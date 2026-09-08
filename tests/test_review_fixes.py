@@ -1650,4 +1650,3 @@ def test_a_forgotten_secret_makes_the_card_stale() -> None:
         telegram_user_id=1, chat_id=1, phone_masked="+7 (999) ***-**-01", phone="+79991234501"
     )
     assert not alive.stale
-

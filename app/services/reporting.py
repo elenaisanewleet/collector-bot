@@ -951,9 +951,7 @@ def _score_block(score: RecoveryScore | None) -> str:
 #: Источники, которые ничего не находят, а делают находимым остальное. Строка
 #: списка у них своя: общая напечатала бы «✓ … — 0 зап.» ровно там, где мост
 #: только что сделал всю проверку возможной.
-BRIDGES: frozenset[ProviderName] = frozenset(
-    {ProviderName.INN_BRIDGE, ProviderName.PHONE_BRIDGE}
-)
+BRIDGES: frozenset[ProviderName] = frozenset({ProviderName.INN_BRIDGE, ProviderName.PHONE_BRIDGE})
 
 #: Чем кончился мост: что он дал и чего не дал. Словами про то, что он ищет, —
 #: «ИНН не найден» на телефонном мосту было бы враньём про другой источник.
