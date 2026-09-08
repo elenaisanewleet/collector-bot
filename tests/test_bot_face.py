@@ -256,24 +256,29 @@ def test_sources_screen_separates_unchecked_from_clean(container: Container) -> 
     assert EMPTY_LABEL in screen
 
 
-def test_sources_screen_states_the_limits(container: Container) -> None:
-    """Границы названы тем, что не меняется, а не текущей настройкой.
+def test_the_only_promise_is_that_nothing_is_invented(container: Container) -> None:
+    """Границы описаны одной фразой, и она не устареет.
 
-    Раньше здесь стояло «ЕГРН не подключён» — правда ровно до дня, когда его
-    подключат, после чего экран начинает врать в обратную сторону. Настоящая
-    граница другая и вечная: правообладателя ЕГРН не называет никому. Метод
-    подключается, «что принадлежит должнику» — нет.
+    Раньше здесь был перечень: не покажет счета, не покажет имущество, не
+    определит владельца по госномеру. Каждый пункт был правдой ровно до дня,
+    когда соответствующий источник подключат, — и экран начинал обещать
+    неверное. Так уже вышло дважды: со строкой «ЕГРН не подключён» и со
+    строкой про телефон.
+
+    Осталось единственное, что не зависит ни от одной настройки: бот не
+    сочиняет. Это и есть главное обещание продукта — отчёт несут в суд, и там
+    важно не что бот знает, а что он не выдумывает того, чего не знает.
     """
     from app.bot.sources import LIMITS
 
     screen = sources_screen(container, debtors=0)
-    assert "не найдёт незнакомого человека по номеру телефона" in screen
-    assert "не покажет банковские счета" in screen
-    assert "правообладателя ЕГРН не называет" in screen
-    # Проверяется именно блок границ, а не весь экран: строкой ниже каждый
-    # источник честно пишет своё состояние, и «не подключено» там уместно —
-    # это про сегодняшнюю настройку, а не про закон.
-    assert "не подключён" not in LIMITS, "граница описана настройкой, а не законом"
+
+    assert "Не придумывает" in screen
+    assert "«не спрашивали» никогда не выглядит как «ничего не нашли»" in screen
+
+    # Ни одного пункта, зависящего от настройки: такой пункт устареет молча.
+    for brittle in ("не подключён", "не покажет", "не определит", "не найдёт"):
+        assert brittle not in LIMITS, f"вернулась граница, которая устареет: «{brittle}»"
 
 
 def test_internal_state_is_live_not_a_constant_tick(container: Container) -> None:
@@ -749,34 +754,3 @@ async def test_every_main_menu_carries_the_same_link(
             if button.url
         ]
         assert urls, f"после «{opening}» меню приехало без ссылки на базу"
-
-
-def test_the_phone_limit_disappears_when_the_bridge_is_wired(container: Container) -> None:
-    """Строка про телефон зависит от настройки, а не от памяти правившего.
-
-    «Не найдёт незнакомого человека по номеру телефона» — правда, пока мост
-    «телефон → ФИО» не подключён. Подключат — перестанет быть правдой в ту же
-    минуту, а экран, обещающий уже неверное, хуже отсутствующего. Поэтому
-    строка не константа, а следствие ``phone_bridge_configured``.
-    """
-    from dataclasses import replace as replace_container
-
-    from app.bot.sources import sources_screen
-
-    assert "не найдёт незнакомого человека по номеру телефона" in sources_screen(
-        container, debtors=0
-    )
-
-    wired = container.settings.model_copy(
-        update={
-            "phone_bridge_enabled": True,
-            "phone_bridge_base_url": "https://example.test",
-            "phone_bridge_path": "/lookup/{phone}",
-            "phone_bridge_field_map": Path("config/field_maps/example_phone_bridge.json"),
-        }
-    )
-    screen = sources_screen(replace_container(container, settings=wired), debtors=0)
-
-    assert "не найдёт незнакомого человека по номеру телефона" not in screen
-    # Остальные границы на месте: они от настроек не зависят.
-    assert "не покажет банковские счета" in screen
