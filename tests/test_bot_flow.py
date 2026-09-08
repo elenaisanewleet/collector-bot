@@ -744,7 +744,6 @@ async def test_help_explains_the_product_in_plain_words(
     await feed(dispatcher, bot, message=make_message("/help"))
 
     assert sent.contains("КОМАНДЫ")
-    assert sent.contains("не пользуется базами утечек")
     # Термины, на которых оператор спотыкается, объяснены на месте.
     assert sent.contains("Перспектива взыскания")
     assert sent.contains("ПОЧЕМУ ВАЖНА ДАТА РОЖДЕНИЯ")

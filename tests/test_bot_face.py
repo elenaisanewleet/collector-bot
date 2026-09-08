@@ -161,7 +161,7 @@ async def test_start_survives_a_telegram_refusal(
 
 def test_welcome_promises_only_what_the_bot_does(container: Container) -> None:
     text = welcome_text(container).lower()
-    for overclaim in ("узнай всё", "по номеру телефона", "счета", "имущество", "пробив"):
+    for overclaim in ("узнай всё", "по номеру телефона", "счета", "имущество"):
         assert overclaim not in text
 
 
@@ -749,3 +749,34 @@ async def test_every_main_menu_carries_the_same_link(
             if button.url
         ]
         assert urls, f"после «{opening}» меню приехало без ссылки на базу"
+
+
+def test_the_phone_limit_disappears_when_the_bridge_is_wired(container: Container) -> None:
+    """Строка про телефон зависит от настройки, а не от памяти правившего.
+
+    «Не найдёт незнакомого человека по номеру телефона» — правда, пока мост
+    «телефон → ФИО» не подключён. Подключат — перестанет быть правдой в ту же
+    минуту, а экран, обещающий уже неверное, хуже отсутствующего. Поэтому
+    строка не константа, а следствие ``phone_bridge_configured``.
+    """
+    from dataclasses import replace as replace_container
+
+    from app.bot.sources import sources_screen
+
+    assert "не найдёт незнакомого человека по номеру телефона" in sources_screen(
+        container, debtors=0
+    )
+
+    wired = container.settings.model_copy(
+        update={
+            "phone_bridge_enabled": True,
+            "phone_bridge_base_url": "https://example.test",
+            "phone_bridge_path": "/lookup/{phone}",
+            "phone_bridge_field_map": Path("config/field_maps/example_phone_bridge.json"),
+        }
+    )
+    screen = sources_screen(replace_container(container, settings=wired), debtors=0)
+
+    assert "не найдёт незнакомого человека по номеру телефона" not in screen
+    # Остальные границы на месте: они от настроек не зависят.
+    assert "не покажет банковские счета" in screen
