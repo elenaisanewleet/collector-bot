@@ -257,10 +257,23 @@ def test_sources_screen_separates_unchecked_from_clean(container: Container) -> 
 
 
 def test_sources_screen_states_the_limits(container: Container) -> None:
+    """Границы названы тем, что не меняется, а не текущей настройкой.
+
+    Раньше здесь стояло «ЕГРН не подключён» — правда ровно до дня, когда его
+    подключат, после чего экран начинает врать в обратную сторону. Настоящая
+    граница другая и вечная: правообладателя ЕГРН не называет никому. Метод
+    подключается, «что принадлежит должнику» — нет.
+    """
+    from app.bot.sources import LIMITS
+
     screen = sources_screen(container, debtors=0)
     assert "не найдёт незнакомого человека по номеру телефона" in screen
     assert "не покажет банковские счета" in screen
-    assert "ЕГРН не подключён" in screen
+    assert "правообладателя ЕГРН не называет" in screen
+    # Проверяется именно блок границ, а не весь экран: строкой ниже каждый
+    # источник честно пишет своё состояние, и «не подключено» там уместно —
+    # это про сегодняшнюю настройку, а не про закон.
+    assert "не подключён" not in LIMITS, "граница описана настройкой, а не законом"
 
 
 def test_internal_state_is_live_not_a_constant_tick(container: Container) -> None:
