@@ -113,6 +113,7 @@ async def show(
     card: Card,
     *,
     notice: str | None = None,
+    answering: bool = False,
 ) -> None:
     """Нарисовать карточку: поправить своё сообщение или отправить новое.
 
@@ -127,6 +128,19 @@ async def show(
     delete + send и молча теряет ``message_id``, а карточке он нужен, чтобы
     после перезапуска бота править то же самое сообщение.
 
+    ``answering`` — «мы отвечаем на СООБЩЕНИЕ человека, а не на нажатие
+    кнопки». Разница решающая. На нажатие можно не ответить ничем: кнопка
+    стоит под карточкой, карточка на экране, и неизменившийся вид — это
+    нормально. А на набранное сообщение не ответить нельзя ни при каких
+    условиях: человек написал и получил пустоту, а пустота читается как
+    «бот сломался». Ровно это и случилось на проде — оператор прислал номер
+    второй раз и не получил ничего.
+
+    Поэтому при ``answering`` неизменившаяся карточка не пропускается, а
+    ПЕРЕЕЗЖАЕТ ВНИЗ: старое сообщение снимается, новое встаёт рядом с
+    сообщением оператора. Это и есть ответ — видно, что присланное дошло и
+    куда именно легло.
+
     ``reply_markup`` передаётся всегда — см. докстринг модуля.
     """
     conflict = _pending_conflict(card)
@@ -138,7 +152,14 @@ async def show(
         conflict=conflict,
     )
     if _unchanged(container, card, screen):
-        return
+        if not answering:
+            return
+        # Правкой на месте тут не обойтись: Telegram отвечает на одинаковую
+        # правку 400 «message is not modified», и сообщение осталось бы там же,
+        # выше по чату, — то есть для написавшего ничего бы не изменилось.
+        await _drop_card_message(message, container, card)
+        card.card_message_id = None
+        container.query_cards.forget_screen(card)
 
     bot = message.bot
     if bot is not None and card.card_message_id is not None:
@@ -226,6 +247,14 @@ async def absorb(message: Message, container: Container, user_id: int) -> None:
         with suppress(Exception):
             await message.delete()
     if not applied.changed and applied.notice is None:
+        # Присланное ничего не изменило: тот же номер второй раз, то же имя.
+        # Раньше здесь стоял молчаливый выход, и он же был виден заказчику как
+        # «бот молчит»: /start, номер — и пустота, потому что этот номер уже
+        # лежал в карточке с прошлого раза.
+        #
+        # Сказать нечего — но ответить обязаны. Карточка переезжает вниз и
+        # показывает, что присланное дошло и куда легло.
+        await show(message, container, applied.card, answering=True)
         return
     if applied.rejected:
         # Ответ не подошёл под заданный вопрос. Шаг остаётся заданным, вперёд

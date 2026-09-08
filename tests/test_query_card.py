@@ -202,25 +202,47 @@ async def test_garbage_leaves_the_card_untouched(
     assert "Фамилия: Тестов" in before
 
 
-async def test_an_empty_message_does_not_redraw_anything(
+async def test_a_message_is_never_left_without_an_answer(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """Иначе ``edit_text`` уехал бы с тем же текстом и вернул 400."""
+    """На сообщение человека бот отвечает всегда, даже когда сказать нечего.
+
+    Это дефект с прода, и он выглядел страшнее, чем был: заказчик нажал
+    /start, прислал номер — и не получил НИЧЕГО. Номер уже лежал в её
+    карточке с прошлого раза, ``apply`` вернул «не изменилось», и обработчик
+    выходил молча. Со стороны это неотличимо от упавшего бота.
+
+    Тишина стояла здесь намеренно и по разумной причине: Telegram отвечает на
+    правку сообщения тем же текстом ошибкой 400, а её обработчик отправил бы
+    карточку заново. Но лекарство оказалось хуже болезни. Правильный ответ —
+    не править на месте, а ПЕРЕСТАВИТЬ карточку вниз: старое сообщение
+    снимается, новое встаёт рядом с тем, что человек написал. И 400 не
+    случается, потому что правки нет.
+    """
+    await feed(dispatcher, bot, message=make_message("12.03.1985"))
+    count = len(sent.texts)
+
+    await feed(dispatcher, bot, message=make_message("12.03.1985"))
+
+    assert len(sent.texts) > count, "то же значение второй раз осталось без ответа"
+
+
+async def test_even_a_blank_message_gets_an_answer(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Пробелы — тоже сообщение, и на него тоже отвечают.
+
+    Исключений из правила «сообщение без ответа не остаётся» нет намеренно:
+    каждое такое исключение — это ещё одна дорога к молчащему боту, а отличить
+    «я отправил случайно» от «бот меня не слышит» человек по пустому экрану не
+    может.
+    """
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
     count = len(sent.texts)
 
     await feed(dispatcher, bot, message=make_message("   "))
-    assert len(sent.texts) == count
 
-
-async def test_the_same_value_twice_does_not_touch_telegram(
-    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
-) -> None:
-    await feed(dispatcher, bot, message=make_message("12.03.1985"))
-    count = len(sent.texts)
-
-    await feed(dispatcher, bot, message=make_message("12.03.1985"))
-    assert len(sent.texts) == count
+    assert len(sent.texts) > count
 
 
 # ---------------------------------------------------------------- десять цифр
