@@ -278,9 +278,17 @@ class SearchService:
         if found is None:
             return subject, result
         update: dict[str, object] = {"name": found}
-        birth = getattr(result, "birth_date", None)
-        if birth is not None and subject.birth_date is None:
-            update["birth_date"] = birth
+        # Дописывается только в ПУСТОЕ. Названное оператором сильнее найденного
+        # мостом: он смотрит в документ, мост — в чужую базу.
+        #
+        # ИНН и паспорт нужны не для показа, а чтобы открыть банкротство, ИП и
+        # арбитраж: они ищут только по ИНН. С готовым ИНН мост «паспорт → ИНН»
+        # не сработает вовсе — он проверяет is_needed, — и это минус одно
+        # платное обращение с каждого должника.
+        for field in ("birth_date", "inn", "passport"):
+            value = getattr(result, field, None)
+            if value is not None and getattr(subject, field, None) in (None, ""):
+                update[field] = value
         return subject.model_copy(update=update), result
 
     async def _resolve_inn(

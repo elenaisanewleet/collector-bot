@@ -54,7 +54,15 @@ from typing import Any
 
 from app.config import Settings
 from app.domain.enums import PROVIDER_TITLES, MissingInput, ProviderName, ProviderStatus
-from app.domain.identity import NameParseError, PersonName, SearchSubject, parse_fio
+from app.domain.identity import (
+    INN_INDIVIDUAL_LENGTH,
+    NameParseError,
+    PersonName,
+    SearchSubject,
+    normalize_inn,
+    normalize_passport,
+    parse_fio,
+)
 from app.domain.models import ProviderResult
 from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
@@ -76,6 +84,15 @@ class PhoneNameResult(ProviderResult):
 
     name: PersonName | None = None
     birth_date: Any = None
+    #: ИНН и паспорт, если поставщик их отдал. Оба необязательны и оба сильно
+    #: экономят: с готовым ИНН мост «паспорт → ИНН» не сработает вовсе (он
+    #: проверяет ``is_needed``), а это минус одно платное обращение с каждого
+    #: должника и охват всех, а не только тех, у кого паспорт есть в выгрузке.
+    #:
+    #: Как и имя, живут в памяти одного прогона: в ``search_results`` не
+    #: пишутся, на кэш-хите берутся из сохранённого субъекта.
+    inn: str | None = None
+    passport: str | None = None
 
 
 class PhoneNameProvider(BaseProvider):
@@ -139,6 +156,20 @@ class PhoneNameProvider(BaseProvider):
         return _read_rows(records, phone=subject.phone, provider=self)
 
 
+def _individual_inn(raw: object) -> str | None:
+    """ИНН ФИЗЛИЦА — двенадцать цифр, и только он.
+
+    Десятизначный ИНН принадлежит юрлицу. Три источника, ради которых ИНН и
+    добывается, ищут по ``innfiz`` и валидируют его как двенадцать знаков:
+    десятизначный будет отклонён, но вызов всё равно оплачен. Молча пропустить
+    его — значит купить три гарантированно пустых ответа на каждом должнике.
+    """
+    if not raw:
+        return None
+    value = normalize_inn(str(raw))
+    return value if value and len(value) == INN_INDIVIDUAL_LENGTH else None
+
+
 def _read_rows(
     rows: list[RecordDict], *, phone: str, provider: PhoneNameProvider
 ) -> ProviderResult:
@@ -157,12 +188,20 @@ def _read_rows(
         except NameParseError:
             continue
         birth_raw = _first(row, "birth_date", "dob")
+        # ИНН и паспорт проходят ту же нормализацию, что и введённые руками, и
+        # молча отбрасываются, если не проходят. Здесь это не придирка к
+        # формату: по кривому ИНН уйдут ПЛАТНЫЕ запросы в банкротство, ИП и
+        # арбитраж — и вернут чужие дела или пустоту, неотличимую от «чисто».
+        inn_raw = _first(row, "inn", "innfiz")
+        passport_raw = _first(row, "passport", "passport_number")
         return PhoneNameResult(
             provider=provider.name,
             status=ProviderStatus.SUCCESS,
             records=(),
             name=name,
             birth_date=parse_date(str(birth_raw)) if birth_raw else None,
+            inn=_individual_inn(inn_raw),
+            passport=normalize_passport(str(passport_raw)) if passport_raw else None,
             note=f"ФИО определено по номеру {mask_phone(phone)}",
         )
 
