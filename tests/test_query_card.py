@@ -748,3 +748,48 @@ async def test_no_message_is_ever_left_without_an_answer(
         await feed(dispatcher, bot, message=make_message(text))
 
         assert len(sent.texts) > before, f"шаг {step}: на «{text}» бот промолчал"
+
+
+async def test_the_search_button_always_starts_a_new_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """«Проверить человека» — значит СЛЕДУЮЩЕГО человека, всегда.
+
+    Раньше чистились только проверенная и остывшая карточки, а недособранная
+    сохранялась «чтобы оператор вернулся к своему человеку». Вышло обратное:
+    заказчик нажимал кнопку, ожидая начать заново, и получал ту же карточку с
+    чужим телефоном и чужой фамилией вперемешку. Дословно: «продолжается сбор
+    данных какой-то солянки, нет даже сброса».
+
+    Вернуться к недособранному по-прежнему можно и проще прежнего: дописать
+    поле сообщением, не трогая кнопку.
+    """
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("Тестов"))
+    assert "Тестов" in last(sent)
+
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+
+    screen = last(sent)
+    assert "Тестов" not in screen, "фамилия прежнего должника осталась в карточке"
+    assert "***-**-45" not in screen, "телефон прежнего должника остался в карточке"
+    assert "✎" in screen, "после сброса бот обязан задать первый вопрос"
+
+
+async def test_filling_a_field_edits_the_card_instead_of_sending_a_new_one(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Одна карточка, которая обновляется, а не лента одинаковых сообщений.
+
+    Дословная жалоба: «несколько раз пришло одно сообщение, хотя надо сделать
+    так, чтобы просто обновлялось одно сообщение». Это сломала предыдущая
+    починка молчания: она отвечала на ввод переездом карточки вниз, то есть
+    новым сообщением на каждое слово.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    sends, edits = len(sent.sends), len(sent.edits)
+
+    await feed(dispatcher, bot, message=make_message("Тестов"))
+
+    assert len(sent.sends) == sends, "карточка уехала новым сообщением вместо правки"
+    assert len(sent.edits) > edits, "карточка не обновилась"
