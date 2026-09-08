@@ -776,23 +776,27 @@ async def test_the_search_button_always_starts_a_new_person(
     assert "✎" in screen, "после сброса бот обязан задать первый вопрос"
 
 
-async def test_filling_a_field_edits_the_card_instead_of_sending_a_new_one(
+async def test_the_card_moves_down_to_the_answer_and_leaves_no_copy(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """Одна карточка, которая обновляется, а не лента одинаковых сообщений.
+    """Одна карточка, всегда внизу, без копий.
 
-    Дословная жалоба: «несколько раз пришло одно сообщение, хотя надо сделать
-    так, чтобы просто обновлялось одно сообщение». Это сломала предыдущая
-    починка молчания: она отвечала на ввод переездом карточки вниз, то есть
-    новым сообщением на каждое слово.
+    Требование менялось, и оба его конца записаны заказчиком дословно:
+    «надо чтобы просто обновлялось одно сообщение» и, тремя правками позже,
+    «опять молчание бота на номер». Второе — про правку на месте: карточка
+    исправно обновлялась, но восемью сообщениями выше, и человек смотрел вниз,
+    где её не было.
+
+    Обе жалобы снимает одно решение: прежнее сообщение удаляется, новое встаёт
+    под тем, что человек написал. Копий не остаётся, и ответ видно.
     """
     await feed(dispatcher, bot, message=make_message("Проверить человека"))
-    sends, edits = len(sent.sends), len(sent.edits)
+    sends, deleted = len(sent.sends), len(sent.deleted)
 
     await feed(dispatcher, bot, message=make_message("Тестов"))
 
-    assert len(sent.sends) == sends, "карточка уехала новым сообщением вместо правки"
-    assert len(sent.edits) > edits, "карточка не обновилась"
+    assert len(sent.sends) > sends, "ответ не появился внизу — его не увидят"
+    assert len(sent.deleted) > deleted, "прежняя карточка осталась копией в чате"
 
 
 async def test_starting_a_new_person_removes_the_previous_card(
