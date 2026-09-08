@@ -50,6 +50,9 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 from app.config import Settings
@@ -173,12 +176,74 @@ def _individual_inn(raw: object) -> str | None:
 def _read_rows(
     rows: list[RecordDict], *, phone: str, provider: PhoneNameProvider
 ) -> ProviderResult:
-    """Собрать имя из ответа поставщика.
+    """Собрать личность из ответа поставщика.
 
-    Разбор строгий, как везде в проекте: имя, которое не читается как ФИО, не
-    угадывается по кускам. Неверно разобранное имя тихо отравляет всё, что
-    ниже, — им будет найден не тот человек в выгрузке, и отчёт уедет про него.
+    Поставщики по номеру телефона отвечают не записью о человеке, а списком
+    разнородных находок: сорок с лишним строк из разных утечек, где имя лежит в
+    одной, дата рождения в другой, паспорт в третьей, а половина строк — про
+    доставку еды. Поэтому каждое поле ищется по всему ответу, а не в одной
+    строке: раньше брался первый ряд с читаемым именем и остальные поля
+    доставались только из него — на живом ответе это давало имя без даты
+    рождения, то есть ключ, по которому в выгрузке поднимется однофамилец.
+
+    **Берётся первое ПРИГОДНОЕ значение, а не первое попавшееся.** Разница не
+    косметическая, она снята с живого ответа:
+
+    * первое ``full_name`` там оказалось латиницей — транслитерация из
+      иностранной утечки. Как ФИО оно разбирается, а в русской выгрузке по нему
+      не найдётся никто, и бот сказал бы «должник не найден» про человека,
+      который в базе есть. Кириллическое имя лежало пятой строкой;
+    * первый ``inn`` был десятизначным, то есть принадлежал юрлицу. Его молчаливый
+      пропуск стоит трёх платных запросов, которые вернут чужие дела или пустоту
+      (:func:`_individual_inn`);
+    * паспорта приходят и как «4510123456», и как «Паспорт гражданина РФ 4510
+      123456», и как загранпаспорт с девятью цифрами — последний не паспорт РФ и
+      к мосту ФНС не годится.
+
+    Поля, кроме имени, сначала ищутся в той же строке, где нашлось имя: строка,
+    где ФИО и дата стоят вместе, — это одна личность, а не две склеенные.
+    Остальное добирается по всему ответу, и вот здесь надо понимать цену:
+    **собранная личность — гипотеза, а не запись источника.** Находки объединяет
+    только номер, а номером пользуются и родственники, и прежние владельцы
+    номера. Ровно поэтому имя остаётся ключом поиска и не попадает в отчёт
+    фактом — правило, ради которого мост написан так, что записей не приносит.
     """
+    name, home = _pick_name(rows)
+    if name is None:
+        return PhoneNameResult(
+            provider=provider.name,
+            status=ProviderStatus.NO_RESULTS,
+            records=(),
+            name=None,
+            note=f"По номеру {mask_phone(phone)} имя не определено",
+        )
+
+    return PhoneNameResult(
+        provider=provider.name,
+        status=ProviderStatus.SUCCESS,
+        records=(),
+        name=name,
+        birth_date=_pick(rows, home, _read_birth, "birth_date", "dob"),
+        inn=_pick(rows, home, _individual_inn, "inn", "innfiz"),
+        passport=_pick(rows, home, _read_passport, "passport", "passport_number"),
+        note=f"ФИО определено по номеру {mask_phone(phone)}",
+    )
+
+
+#: Кириллическое слово. Требование не про язык, а про пригодность ключа: искать
+#: в русской выгрузке транслитерацией — то же самое, что не искать.
+_CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+
+
+def _pick_name(rows: list[RecordDict]) -> tuple[PersonName | None, RecordDict | None]:
+    """Первое имя, которым можно искать в выгрузке, и строка, где оно нашлось.
+
+    Кириллица предпочтительнее, но не обязательна: если поставщик отдал только
+    транслитерацию, лучше отдать её и получить честное «в выгрузке не найден»,
+    чем промолчать. Разбор строгий — имя, которое не читается как ФИО, не
+    собирается по кускам: полусобранное поднимет чужую строку.
+    """
+    fallback: tuple[PersonName, RecordDict] | None = None
     for row in rows:
         raw = _first(row, "fio", "full_name", "name")
         if not raw:
@@ -187,39 +252,63 @@ def _read_rows(
             name = parse_fio(str(raw))
         except NameParseError:
             continue
-        birth_raw = _first(row, "birth_date", "dob")
-        # ИНН и паспорт проходят ту же нормализацию, что и введённые руками, и
-        # молча отбрасываются, если не проходят. Здесь это не придирка к
-        # формату: по кривому ИНН уйдут ПЛАТНЫЕ запросы в банкротство, ИП и
-        # арбитраж — и вернут чужие дела или пустоту, неотличимую от «чисто».
-        inn_raw = _first(row, "inn", "innfiz")
-        passport_raw = _first(row, "passport", "passport_number")
-        return PhoneNameResult(
-            provider=provider.name,
-            status=ProviderStatus.SUCCESS,
-            records=(),
-            name=name,
-            birth_date=parse_date(str(birth_raw)) if birth_raw else None,
-            inn=_individual_inn(inn_raw),
-            passport=normalize_passport(str(passport_raw)) if passport_raw else None,
-            note=f"ФИО определено по номеру {mask_phone(phone)}",
-        )
+        if _CYRILLIC.search(str(raw)):
+            return name, row
+        if fallback is None:
+            fallback = (name, row)
+    return fallback if fallback is not None else (None, None)
 
-    return PhoneNameResult(
-        provider=provider.name,
-        status=ProviderStatus.NO_RESULTS,
-        records=(),
-        name=None,
-        note=f"По номеру {mask_phone(phone)} имя не определено",
-    )
+
+def _pick[T](
+    rows: list[RecordDict],
+    home: RecordDict | None,
+    read: Callable[[object], T | None],
+    *keys: str,
+) -> T | None:
+    """Первое значение, которое ``read`` признал годным.
+
+    Сначала строка, где нашлось имя: поля одной строки — про одного человека.
+    Потом весь ответ по порядку — иначе дата рождения, лежащая отдельно от
+    имени, потеряется, а без неё в выгрузке поднимется однофамилец.
+    """
+    ordered = [home, *rows] if home is not None else list(rows)
+    for row in ordered:
+        raw = _first(row, *keys)
+        if raw is None:
+            continue
+        value = read(raw)
+        if value is not None:
+            return value
+    return None
 
 
 def _first(row: RecordDict, *keys: str) -> Any:
+    """Первое непустое из синонимов поля в одной строке ответа.
+
+    Синонимы нужны потому, что поставщик не один: у кого ``fio``, у кого
+    ``full_name``. Пустая строка не считается значением — иначе она заслонила
+    бы заполненный синоним рядом.
+    """
     for key in keys:
         value = row.get(key)
         if value:
             return value
     return None
+
+
+def _read_birth(raw: object) -> date | None:
+    return parse_date(str(raw))
+
+
+def _read_passport(raw: object) -> str | None:
+    """Паспорт РФ из строки поставщика.
+
+    Источник подписывает вид документа словами — «Паспорт гражданина РФ 4510
+    123456», «Загранпаспорт», «Паспорт иностранного гражданина». Нормализация
+    оставляет цифры, и негодные отсеиваются длиной: у загранпаспорта их девять,
+    у иностранного семь, и мост ФНС на них ответит пустотой за наши деньги.
+    """
+    return normalize_passport(str(raw))
 
 
 def build_phone_bridge(settings: Settings) -> PhoneNameProvider | None:
