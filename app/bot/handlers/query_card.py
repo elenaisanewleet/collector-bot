@@ -260,7 +260,7 @@ async def absorb(message: Message, container: Container, user_id: int) -> None:
         # Ответ не подошёл под заданный вопрос. Шаг остаётся заданным, вперёд
         # сценарий не идёт: вопрос, который не получил ответа, обязан
         # задаться ещё раз, а не молча пропасть.
-        await show(message, container, applied.card, notice=applied.notice)
+        await show(message, container, applied.card, notice=applied.notice, answering=True)
         return
     await settle(message, container, applied.card, user_id, notice=applied.notice)
 
@@ -277,6 +277,15 @@ async def settle(
     notice: str | None = None,
 ) -> None:
     """Что делать после того, как в карточку легло новое поле.
+
+    Все ``show`` отсюда идут с ``answering=True``, и это не украшение. В эту
+    функцию попадают ТОЛЬКО из :func:`absorb`, то есть в ответ на набранное
+    человеком сообщение, — а на сообщение бот обязан ответить всегда, даже
+    когда экран не изменился ни на символ. Иначе выходит то, что заказчик
+    видит как «ввёл номер, и ничего не произошло».
+
+    Первый раз это чинилось только в одной ветке absorb, и дефект вернулся
+    через несколько часов другой дорогой: тем же молчанием, но из settle.
 
     Здесь живёт правило, которое важнее порядка шагов: **как только человек
     опознан в выгрузке однозначно — вопросы прекращаются**. Владелица сказала
@@ -299,7 +308,7 @@ async def settle(
     случился бы без нажатия на единственную платящую кнопку.
     """
     if card.pending_ten or card.pending_name:
-        await show(message, container, card, notice=notice)
+        await show(message, container, card, notice=notice, answering=True)
         return
 
     guided = card.guided
@@ -308,7 +317,7 @@ async def settle(
         # догадка. По ней выгрузка не спрашивается: подставленная из неё дата
         # рождения легла бы в карточку поверх той, которую оператор намеренно
         # пропустил.
-        await show(message, container, card, notice=notice)
+        await show(message, container, card, notice=notice, answering=True)
         return
 
     # По одному номеру искать в выгрузке нечем: телефона в ней нет и не будет.
@@ -346,6 +355,7 @@ async def settle(
         message,
         container,
         card,
+        answering=True,
         notice=bridge_note
         or _ambiguous(found, card)
         or _once(container, card, _missed(found, card))
@@ -553,7 +563,9 @@ async def recognised(
 
     # Оговорка к разбору не выбрасывается ради хорошей новости: угаданное поле
     # надо показать даже тогда.
-    await show(message, container, card, notice=f"{notice} {found}" if notice else found)
+    await show(
+        message, container, card, notice=f"{notice} {found}" if notice else found, answering=True
+    )
 
 
 # ---------------------------------------------------------------- прогон

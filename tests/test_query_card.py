@@ -713,3 +713,38 @@ async def test_a_phone_nobody_has_leads_to_the_surname_question(
     screen = last(sent)
     assert "По номеру телефона никого не нашёл" in screen, "поиск был, а сказано о нём не было"
     assert "✎ Фамилия" in screen, "разговор упёрся в тот же вопрос"
+
+
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        pytest.param(["79851982945", "79851982945"], id="тот же номер дважды"),
+        pytest.param(["Тестов", "Тестов"], id="та же фамилия дважды"),
+        pytest.param(["12.03.1985", "12.03.1985"], id="та же дата дважды"),
+        pytest.param(["   ", "   "], id="пробелы дважды"),
+        pytest.param(["А123ВС77", "А123ВС77"], id="тот же госномер дважды"),
+        pytest.param(["не пойми что", "не пойми что"], id="мусор дважды"),
+        pytest.param(["79851982945", "не пойми что"], id="номер, потом мусор"),
+    ],
+)
+async def test_no_message_is_ever_left_without_an_answer(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, conversation: list[str]
+) -> None:
+    """На КАЖДОЕ сообщение приходит ответ. Без исключений и на любой дороге.
+
+    Дефект возвращался дважды, и оба раза заказчик видел одно: «ввёл номер, и
+    ничего не произошло». Первый раз молчал ранний выход из ``absorb``; его
+    починили — и через несколько часов то же молчание пришло другой дорогой,
+    из ``settle``, где ``show`` звался без ``answering``.
+
+    Поэтому тест перебирает пути, а не случай: разные типы ввода, повтор того
+    же значения, мусор. Экран при этом может не измениться ни на символ —
+    отвечать всё равно обязаны, хотя бы переставив карточку вниз.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+
+    for step, text in enumerate(conversation, start=1):
+        before = len(sent.texts)
+        await feed(dispatcher, bot, message=make_message(text))
+
+        assert len(sent.texts) > before, f"шаг {step}: на «{text}» бот промолчал"
