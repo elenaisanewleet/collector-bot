@@ -101,6 +101,9 @@ def bridged(container: Container) -> Container:
     container.settings = settings
     container.share_service = ShareLinkService(settings, container.database)
     container.phone_lookups = PhoneLookupService(settings, container.database)
+    # Карточка тоже читает флаг — без пересборки она осталась бы со старыми
+    # настройками, и тесты проверяли бы не ту конфигурацию.
+    container.query_cards = QueryCardService(container.database, settings)
     container.registry = ProviderRegistry(
         internal=container.registry.internal,
         external=container.registry.external,
@@ -128,11 +131,9 @@ async def test_the_documents_the_lookup_paid_for_reach_the_card(
     «Паспорт выдан» и «СНИЛС» карточка не показывала вовсе — и вопрос
     владелицы «почему паспорт не доезжает» был ровно про это.
 
-    Целиком, а не масками. Оператор ввёл номер и спросил «кто это»; ответ на
-    этот вопрос — документы человека, и заявление подают с ними. Обещания
-    «номер не сохраняю, сообщение удалю» здесь не звучало: он ничего не вводил
-    и удалять нечего. Обратный случай — паспорт, введённый руками, — проверяет
-    ``tests/test_query_card.py``, и там по-прежнему маска.
+    Целиком, а не масками: обещание «номер не сохраняю и сообщение удалю»
+    владелица отменила, и вместе с ним отпало основание для маски. Заявление в
+    суд подают с серией и номером, не с их тенью.
     """
     await feed(bridged_dispatcher, bot, message=make_message(PHONE))
 
@@ -144,27 +145,49 @@ async def test_the_documents_the_lookup_paid_for_reach_the_card(
     assert f"СНИЛС: {SNILS}" in screen, "СНИЛС из ответа не доехал до карточки"
 
 
-async def test_after_a_restart_the_card_falls_back_to_the_mask(
-    bridged: Container, bridged_dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+async def test_the_documents_survive_a_restart(
+    bridged: Container, bridged_dispatcher: Dispatcher, bot: Bot
 ) -> None:
-    """Бот забыл документ — и честно показывает маску, а не прочерк.
+    """Перезапуск бота не стирает оплаченное — ради этого хранение и включили.
 
-    Сам документ живёт в памяти процесса час, в базу едет только маска. После
-    перезапуска карточка обязана сказать «было, но не сохраняю» — это та же
-    разница между «не спрашивали» и «спросили», на которой держится весь
-    продукт.
+    Дословно: «нам надо наоборот сохранять эти номера». Раньше документы жили
+    час в памяти процесса и после рестарта карточка просила прислать их заново
+    — а прислать их неоткуда, они добыты платным обращением. Это и значило
+    платить дважды за одно.
     """
     await feed(bridged_dispatcher, bot, message=make_message(PHONE))
-    # Перезапуск: память процесса пуста, строка в базе на месте.
-    bridged.query_cards = QueryCardService(bridged.database)
+    # Перезапуск: новая служба, память процесса пуста, строка в базе на месте.
+    bridged.query_cards = QueryCardService(bridged.database, bridged.settings)
 
+    card = await bridged.query_cards.load(OPERATOR_ID, CHAT_ID)
+
+    assert card.shown("passport") == PASSPORT
+    assert card.shown("snils") == SNILS
+    assert card.shown("passport_issued") == "20.02.2015"
+    assert not card.forgotten("passport")
+
+
+async def test_without_the_flag_a_restart_leaves_the_mask_not_a_dash(
+    bridged: Container, bridged_dispatcher: Dispatcher, bot: Bot
+) -> None:
+    """Развёртывание может документы не хранить — и тогда разница обязана быть видна.
+
+    «Было, но не сохранилось» и «не спрашивали» — это разные новости, и вторая
+    заставила бы владельца заново платить за уже полученное, думая, что бот не
+    искал. Поэтому маска остаётся рядом с номером даже там, где номера нет.
+    """
+    plain = bridged.settings.model_copy(update={"store_sensitive_identifiers": False})
+    bridged.query_cards = QueryCardService(bridged.database, plain)
+
+    await feed(bridged_dispatcher, bot, message=make_message(PHONE))
+    bridged.query_cards = QueryCardService(bridged.database, plain)
     card = await bridged.query_cards.load(OPERATOR_ID, CHAT_ID)
 
     assert card.shown("passport") == "45** ******"
     assert card.shown("snils") == "***-***-*** 11"
     assert card.forgotten("passport")
-    # Дата выдачи переживает перезапуск: она в базе, потому что сама по себе
-    # никого не опознаёт.
+    # Дата выдачи переживает и это: сама по себе она никого не опознаёт, и
+    # прятать её не за чем.
     assert card.shown("passport_issued") == "20.02.2015"
 
 
@@ -192,9 +215,7 @@ def test_the_operator_beats_the_bridge() -> None:
     )
 
     assert card.passport == "9999999999", "мост переписал паспорт оператора"
-    # И маску его не тронул: паспорт оператора остаётся маской, потому что
-    # своё сообщение с ним бот удалил.
-    assert card.shown("passport") == "99** ******"
+    assert card.shown("passport") == "9999999999"
     assert card.inn == "770912345601"
     assert card.birth_date == date(1980, 3, 15)
     # А пустое поле он заполняет: спор был только там, где спорить было о чем.

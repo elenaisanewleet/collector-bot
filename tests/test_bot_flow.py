@@ -359,11 +359,13 @@ async def test_ambiguous_ten_digits_ask_instead_of_guessing(
     )
 
     assert sent.contains("паспорт или телефон")
-    assert not sent.contains("Паспорт: 92** ******")
+    assert not sent.contains("Паспорт: 9204384710")
     assert not sent.contains("RECOVERY SCORE")
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:ten:p"))
-    assert sent.contains("92** ******")
+    # Ответили «паспорт» — номер встаёт в карточку целиком: маску владелица
+    # отменила («нам надо наоборот сохранять эти номера»).
+    assert sent.contains("Паспорт: 9204384710")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
     subject = next(iter(container.subject_store._items.values()))[0]
@@ -551,14 +553,22 @@ async def test_vin_search_runs(dispatcher: Dispatcher, bot: Bot, sent: SentMessa
     assert sent.contains("RECOVERY SCORE")
 
 
-async def test_passport_search_masks_the_number(
+async def test_passport_search_shows_the_number_it_was_given(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
+    """Паспорт печатается целиком — маску владелица отменила.
+
+    Раньше здесь стояла обратная проверка: номера в чате быть не должно. Она
+    закрепляла обещание «номер не сохраняю и сообщение удалю», которое бот
+    давал перед вводом. Обещание снято дословным указанием — «надо убрать это,
+    нам надо наоборот сохранять эти номера», — и продукт под ним изменился: бот
+    закрыт, принадлежит одному владельцу и добывает документы ровно затем,
+    чтобы тот подал с ними в суд.
+    """
     await feed(dispatcher, bot, callback_query=make_callback("menu:passport"))
     await feed(dispatcher, bot, message=make_message("4509123456"))
 
-    assert not sent.contains("4509123456")
-    assert sent.contains("45** ******")
+    assert sent.contains("4509123456")
 
 
 # ------------------------------------------------- паспорт: только после отчёта
@@ -613,13 +623,17 @@ async def test_the_passport_button_is_hidden_when_it_would_lie(
     assert not sent.contains("Узнать ИНН по паспорту")
 
 
-async def test_the_passport_button_masks_the_number_and_feeds_the_bridge(
+async def test_the_passport_button_shows_the_number_and_feeds_the_bridge(
     bot: Bot, sent: SentMessages, container: Container
 ) -> None:
-    """Нажали кнопку — паспорт спрашивается, удаляется из чата и едет в мост.
+    """Нажали кнопку — паспорт спрашивается, встаёт в карточку и едет в мост.
 
     В демо мост детерминированно выдаёт ИНН профиля, поэтому его строка
     появляется в блоке ИСТОЧНИКИ.
+
+    Раньше здесь же проверялось, что бот удаляет сообщение оператора и печатает
+    маску. Удаление отменено владелицей: «нам надо наоборот сохранять эти
+    номера».
     """
     from app.db.repository import SearchRepository
 
@@ -630,12 +644,13 @@ async def test_the_passport_button_masks_the_number_and_feeds_the_bridge(
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:passport"))
 
     assert sent.contains("✎ Паспорт")
-    assert sent.contains("Номер не сохраняю")
-    assert sent.contains("сообщение удалю")
+    # Обещаний про хранение экран больше не даёт: их отменила владелица, а
+    # оговорка, не меняющая поведение человека, — лишний текст на экране.
+    assert not sent.contains("Номер не сохраняю")
+    assert not sent.contains("сообщение удалю")
 
     await feed(dispatcher, bot, message=make_message("4509123456"))
-    assert not sent.contains("4509123456")
-    assert sent.contains("45** ******")
+    assert sent.contains("4509123456")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
     assert sent.contains("✓ ИНН по паспорту (ФНС) — ИНН получен")

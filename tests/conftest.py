@@ -114,7 +114,7 @@ async def container(settings: Settings, database: Database) -> AsyncIterator[Con
         share_service=ShareLinkService(settings, database),
         subject_store=SubjectStore(),
         access_service=AccessService(settings, database),
-        query_cards=QueryCardService(database),
+        query_cards=QueryCardService(database, settings),
         phone_lookups=PhoneLookupService(settings, database),
     )
     yield instance

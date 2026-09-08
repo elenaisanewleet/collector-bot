@@ -5,7 +5,7 @@
     "birth_date": "birth_date",
     "inn": "inn",
     "passport": "passport",
-    "passport_date": "passport_date",
+    "passport_info": "passport_info",
     "snils": "snils"
   }
 }

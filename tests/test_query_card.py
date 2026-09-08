@@ -252,7 +252,7 @@ async def test_even_a_blank_message_gets_an_answer(
     ("line", "expected_row"),
     [
         ("(916) 000-00-00", "Телефон: +7 (916) ***-**-00"),
-        ("4515 384710", "Паспорт: 45** ******"),
+        ("4515 384710", "Паспорт: 4515384710"),
     ],
     ids=["телефон по форме записи", "паспорт по форме записи"],
 )
@@ -280,27 +280,54 @@ async def test_ten_joined_digits_are_asked_about_not_guessed(
 # ---------------------------------------------------------------- приватность
 
 
-def test_the_table_has_no_column_for_a_passport_or_a_phone() -> None:
-    """Ни под каким флагом. В базу едут только необратимые маски."""
+def test_the_table_stores_documents_but_never_the_phone() -> None:
+    """Паспорт и СНИЛС — да, телефон — нет, и это две разные причины.
+
+    Документы хранятся с 08.09.2026 по прямому указанию владелицы («нам надо
+    наоборот сохранять эти номера») и по общему правилу базы: сама запись
+    происходит только при поднятом ``STORE_SENSITIVE_IDENTIFIERS``, а маска
+    рядом остаётся — по ней карточка отличает «было, но не сохранилось» от «не
+    спрашивали».
+
+    Телефона нет ни под каким флагом, и это не забыли: оператор вводит его сам
+    и помнит, хранить нечего.
+    """
     columns = {column.name for column in Base.metadata.tables["query_cards"].columns}
-    assert "passport" not in columns
+    assert {"passport", "snils"} <= columns
     assert "phone" not in columns
-    assert {"passport_masked", "phone_masked"} <= columns
+    assert {"passport_masked", "snils_masked", "phone_masked"} <= columns
 
 
-async def test_a_passport_is_masked_deleted_and_never_stored(
+async def test_a_passport_is_shown_kept_in_memory_and_left_out_of_history(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
+    """Паспорт виден целиком, маска рядом, в историю запросов не едет.
+
+    Три разных правила, и они не спорят.
+
+    ВИДЕН — потому что владелица отменила обещание «номер не сохраняю и
+    сообщение удалю»: бот закрыт, принадлежит ей одной и добывает документы
+    ровно затем, чтобы подать с ними в суд.
+
+    МАСКА РЯДОМ — потому что при опущенном ``STORE_SENSITIVE_IDENTIFIERS``
+    (умолчание, и в этом тесте тоже) сам номер в базу не едет, и после
+    перезапуска карточка обязана сказать «было, но не сохранилось», а не
+    показать прочерк.
+
+    В ИСТОРИЮ НЕ ЕДЕТ — ``redact_subject`` вычёркивает паспорт из
+    ``subject_json``. История это список «кто что искал», и превращать её в
+    хранилище документов не нужно никому.
+    """
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич 12.03.1985"))
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:passport"))
     await feed(dispatcher, bot, message=make_message("4509123456"))
 
-    assert "Паспорт: 45** ******" in last(sent)
-    assert not sent.contains("4509123456")
+    assert "Паспорт: 4509123456" in last(sent)
 
     row = await card_of(container)
     assert row is not None
     assert row.passport_masked == "45** ******"
+    assert row.passport is None, "флаг опущен — самого номера в базе быть не должно"
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
     async with container.database.session() as session:
@@ -321,7 +348,7 @@ async def test_a_forgotten_secret_says_so_instead_of_showing_a_dash(
     assert "+7 (916) ***-**-67" in last(sent)
 
     # «Перезапуск»: сервис пересоздан, память процесса пуста, база — нет.
-    container.query_cards = QueryCardService(container.database)
+    container.query_cards = QueryCardService(container.database, container.settings)
     restarted = setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)
 
     # Карточку открывают отменой вопроса: оговорка живёт в списке полей, а
@@ -510,7 +537,7 @@ async def test_a_new_person_starts_from_a_clean_card(
         ("menu:vehicle_plate", "О123АА777", "Авто — не подключено"),
         ("menu:contract", "EV-20481", "НАШИ ДАННЫЕ"),
         ("menu:address", "Москва", "ФИО, если известно"),
-        ("menu:passport", "4509123456", "45** ******"),
+        ("menu:passport", "4509123456", "4509123456"),
     ],
     ids=["госномер", "договор", "адрес", "паспорт"],
 )

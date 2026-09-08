@@ -12,8 +12,6 @@ Both are internal-matching tools in this MVP.
 
 from __future__ import annotations
 
-from contextlib import suppress
-
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -30,7 +28,6 @@ from app.domain.identity import (
     normalize_passport,
     parse_fio,
 )
-from app.utils.masking import mask_passport
 
 ASK_ADDRESS = "Введите адрес.\n\nПример: Москва, ул. Примерная, д. 1, кв. 2"
 ASK_ADDRESS_FIO = "ФИО, если известно. Можно пропустить."
@@ -145,12 +142,11 @@ def build_router() -> Router:
             return
         await state.clear()
 
-        # Delete the operator's message so the number does not sit in chat history.
-        # Best-effort: in a group this needs admin rights we may not have.
-        with suppress(Exception):
-            await message.delete()
-
-        await message.answer(f"Ищу по паспорту {mask_passport(passport)}…")
+        # Сообщение оператора больше не удаляется, и номер печатается целиком.
+        # Прежнее поведение держалось на обещании «номер не сохраняю, сообщение
+        # удалю»; владелица его сняла — «нам надо наоборот сохранять эти
+        # номера», — и карточка ведёт себя так же (``Card.shown``).
+        await message.answer(f"Ищу по паспорту {passport}…")
         subject = SearchSubject(search_type=SearchType.PASSPORT.value, passport=passport)
         await run_and_send_report(message, container, subject, user_id=user_id)
 

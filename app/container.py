@@ -73,6 +73,6 @@ def build_container(settings: Settings | None = None) -> Container:
         share_service=ShareLinkService(resolved, database),
         subject_store=SubjectStore(),
         access_service=AccessService(resolved, database),
-        query_cards=QueryCardService(database),
+        query_cards=QueryCardService(database, resolved),
         phone_lookups=PhoneLookupService(resolved, database),
     )

@@ -168,7 +168,7 @@ def dump_settings(settings: Settings, tmp_path: Path) -> Settings:
     path.write_text(
         '{"records_path": "results", "fields": {"fio": "full_name",'
         ' "birth_date": "birth_date", "inn": "inn", "passport": "passport",'
-        ' "snils": "snils"}}',
+        ' "passport_info": "passport_info", "snils": "snils"}}',
         encoding="utf-8",
     )
     return settings.model_copy(update={"phone_bridge_field_map": path})
@@ -349,3 +349,153 @@ async def test_a_snils_that_is_not_one_is_dropped(dump_settings: Settings) -> No
     assert isinstance(result, PhoneNameResult)
     assert result.status is ProviderStatus.SUCCESS, "имя всё равно должно доехать"
     assert result.snils is None
+
+
+# ------------------------------------------- якорь и родня: чужие в том же ответе
+
+
+#: Форма живого ответа depsearch, снятая 08.09.2026 и обезличенная целиком:
+#: номера и имена выдуманы, повторена только СТРУКТУРА, а она у поставщика для
+#: любого номера одна и та же — это владелица и сформулировала как правило
+#: («названия полей и где в каком блоке, для каждого номера это всё идентично»).
+#:
+#: Существенно в ней четыре вещи, и каждая ломала разбор по-своему:
+#: первым идёт блок из иностранной утечки с одной латиницей;
+#: личность лежит одним блоком — ФИО, дата рождения, паспорт и СНИЛС вместе;
+#: рядом лежат ЧУЖИЕ люди — номером пользуются родственники и прежние владельцы;
+#: дата выдачи паспорта отдельного поля не имеет и лежит текстом в ``passport_info``
+#: у блоков с ДРУГИМИ документами тоже.
+CROWDED = {
+    "search_type": "phone",
+    "results": [
+        {"phone": "+79990000000", "data": "доставка"},
+        {"full_name": "Ivanova Elena", "email": "e@example.test"},
+        {
+            "full_name": "Иванова Елена Петровна",
+            "birth_date": "1984-06-25",
+            "passport": "4510123456",
+            "snils": "11223344595",
+        },
+        # Чужой человек с тем же номером телефона: другая фамилия, своя дата
+        # рождения и свой паспорт. Ни одно его поле не имеет права уехать.
+        {
+            "full_name": "Петров Пётр Петрович",
+            "birth_date": "1959-01-02",
+            "passport": "4511654321",
+            "inn": "770123456789",
+        },
+        # Блок без имени, но с тем же паспортом: это она, и ИНН здесь её.
+        {"passport": "45 10 123456", "inn": "500100732259"},
+        # Медицинская утечка: тот же паспорт и дата выдачи текстом.
+        {"passport": "4510123456", "passport_info": "выдан ОВД, 29.01.2015"},
+        # Загранпаспорт — другой документ, и дата выдачи у него своя.
+        {"passport": "751234567", "passport_info": "выдан 10.10.2020"},
+    ],
+}
+
+
+@respx.mock
+async def test_the_identity_is_taken_from_its_own_block(dump_settings: Settings) -> None:
+    """Личность собирается вокруг блока, где её признаки стоят вместе.
+
+    Раньше якорем была первая запись с читаемым именем, а недостающее
+    добиралось по всему ответу подряд. На такой свалке это давало личность,
+    которой не существует: имя одного, дата рождения другого.
+    """
+    respx.get(url__startswith=BASE).mock(return_value=Response(200, json=CROWDED))
+    bridge = build_phone_bridge(dump_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.name is not None and result.name.last_name == "Иванова"
+    assert result.birth_date is not None and result.birth_date.year == 1984
+    assert result.passport == "4510123456"
+    assert result.snils == "11223344595"
+    # ИНН взят из блока без имени, но с ТЕМ ЖЕ паспортом: это проверяемое «тот
+    # же человек», а не догадка по соседству.
+    assert result.inn == "500100732259"
+
+
+@respx.mock
+async def test_a_stranger_sharing_the_phone_number_contributes_nothing(
+    dump_settings: Settings,
+) -> None:
+    """Ни одно поле чужого человека не попадает в собранную личность.
+
+    Это самая дорогая из возможных ошибок разбора и единственная, которую не
+    видно по отчёту: он выглядел бы совершенно обычно. Номером телефона
+    пользуются родственники и прежние владельцы номера — в живом ответе рядом с
+    владелицей лежат ещё три человека.
+    """
+    respx.get(url__startswith=BASE).mock(return_value=Response(200, json=CROWDED))
+    bridge = build_phone_bridge(dump_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.passport != "4511654321", "уехал паспорт другого человека"
+    assert result.inn != "770123456789", "уехал ИНН другого человека"
+    assert result.birth_date is not None and result.birth_date.year != 1959
+
+
+@respx.mock
+async def test_the_issue_date_belongs_to_the_passport_it_was_found_with(
+    dump_settings: Settings,
+) -> None:
+    """Дата выдачи берётся у ТОГО ЖЕ документа, а не первая найденная.
+
+    Отдельного поля под неё поставщик не отдаёт: она лежит свободным текстом
+    внутри ``passport_info``, и такие блоки есть у нескольких разных документов
+    сразу. Приписать дату выдачи загранпаспорта к номеру внутреннего — ошибка,
+    которую в заявлении заметит только суд.
+    """
+    respx.get(url__startswith=BASE).mock(return_value=Response(200, json=CROWDED))
+    bridge = build_phone_bridge(dump_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.passport == "4510123456"
+    assert result.passport_issued is not None
+    assert result.passport_issued.isoformat() == "2015-01-29"
+
+
+@respx.mock
+async def test_an_eleven_digit_inn_is_a_snils_and_is_refused(dump_settings: Settings) -> None:
+    """Поставщик кладёт СНИЛС в поле ``inn`` — и на живом ответе это случилось.
+
+    Владелица приняла такое число за свой ИНН, пока контрольная сумма не
+    показала, что это её же СНИЛС. Пропустить его дальше — купить три платных
+    ответа, которые вернут пустоту.
+    """
+    respx.get(url__startswith=BASE).mock(
+        return_value=Response(
+            200,
+            json={
+                "results": [
+                    {"full_name": "Иванова Елена Петровна", "snils": "11223344595"},
+                    {"inn": "11223344595"},
+                ]
+            },
+        )
+    )
+    bridge = build_phone_bridge(dump_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.status is ProviderStatus.SUCCESS
+    assert result.inn is None, "одиннадцать цифр — это не ИНН"

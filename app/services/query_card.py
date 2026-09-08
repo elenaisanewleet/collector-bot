@@ -17,13 +17,19 @@ VIN, адрес, договор, паспорт, импорт — привяза
 забрала бы себе весь текст и сняла бы этот фильтр. Поэтому «какое поле мы ждём»
 — колонка в таблице, а не ``State``, и порядок роутеров не меняется вовсе.
 
-**Паспорт и телефон в базу не едут.** В ``query_cards`` их колонок нет ни под
-каким флагом — только маски. Сами номера лежат час в памяти процесса
-(:class:`CardSecrets`), ровно как паспорт в ``SubjectStore``. Карточка — черновик
-на несколько минут; платить за него отменой действующей политики приватности
-нечем. После перезапуска карточка честно пишет «сам номер не храню, пришлите
-заново»: это не прочерк и не молчание, разница между «не спрашивали» и «было, но
-не сохраняю» видна.
+**Паспорт и СНИЛС хранятся при поднятом ``STORE_SENSITIVE_IDENTIFIERS``** — то
+же правило, что у ``debtors``: маска всегда, документ при флаге. Раньше их не
+хранили ни под каким флагом; отменила это владелица («нам надо наоборот
+сохранять эти номера»), и довод против устарел вместе с продуктом: бот теперь
+документы не принимает, а НАХОДИТ и платит за это. Черновик, теряющий
+оплаченное при перезапуске, заставляет платить дважды.
+
+**Телефон в базу не едет** ни под каким флагом — только маска. Его оператор
+вводит сам и помнит, а ``phone_hash`` в ``debtors`` считается без соли.
+
+При опущенном флаге после перезапуска карточка честно пишет «сам номер не храню,
+пришлите заново»: разница между «не спрашивали» и «было, но не сохранилось»
+видна.
 
 **Пустое поле — это «мы не спрашивали», а не «мы не нашли».** Главный инвариант
 проекта в применении к карточке. Отсюда же запрет на «заполнено 4 из 7» и
@@ -52,6 +58,7 @@ from app.bot.identifiers import (
     parse_query,
     spills_beyond,
 )
+from app.config import Settings
 from app.db.repository import QueryCardRepository
 from app.db.session import Database
 from app.domain.enums import SearchType
@@ -189,11 +196,6 @@ class Card:
     phone: str | None = None
     passport: str | None = None
     snils: str | None = None
-    #: Документы, которые НАШЁЛ БОТ, а не ввёл оператор. От этого зависит, что
-    #: карточка печатает — сам документ или его маску, и почему, написано в
-    #: :meth:`shown`. Тоже только в памяти: после перезапуска бот не помнит ни
-    #: документа, ни того, откуда он взялся, и печатает маску.
-    found: frozenset[str] = frozenset()
     #: Десять цифр с девятки, ждущие ответа «паспорт или телефон». Тоже только
     #: в памяти: половину времени это паспорт.
     pending_ten: str | None = None
@@ -340,32 +342,31 @@ class Card:
     def shown(self, name: str) -> str | None:
         """Что печатать в строке поля.
 
-        ДОКУМЕНТ, КОТОРЫЙ НАШЁЛ БОТ, ПЕЧАТАЕТСЯ ЦЕЛИКОМ. Оператор ввёл номер
-        телефона и спросил «кто это»; ответ на этот вопрос — паспорт и СНИЛС
-        человека, и заявление в суд подают с ними, а не с их тенью. Показать
-        маску значит отправить владельца искать тот же документ где-то ещё,
-        отменив смысл обращения, за которое уже заплачено.
+        ДОКУМЕНТЫ ПЕЧАТАЮТСЯ ЦЕЛИКОМ. Раньше здесь стояла маска, и держалась
+        она на обещании, которое бот давал перед вводом паспорта: «номер не
+        сохраняю и сообщение удалю». Обещание владелица отменила дословно —
+        «надо убрать это, нам надо наоборот сохранять эти номера», — и вместе с
+        ним отпало основание для маски. Бот закрыт, принадлежит одному
+        человеку, а документы добывает ровно затем, чтобы тот подал с ними в
+        суд: заявление подаётся с серией и номером, не с их тенью.
 
-        ДОКУМЕНТ, КОТОРЫЙ ВВЁЛ ОПЕРАТОР, ПЕЧАТАЕТСЯ МАСКОЙ. Разница не в
-        чувствительности — документ один и тот же, — а в том, что бот пообещал
-        вслух. Спрашивая паспорт, он пишет «номер не сохраняю, сообщение
-        удалю», и удаляет; напечатать тот же номер строкой ниже значило бы
-        отменить собственное удаление и нарушить обещание на том же экране.
+        Маска показывается ровно в одном случае — когда самого документа нет, а
+        она осталась. Так бывает после перезапуска, если развёртывание не
+        хранит документы (``STORE_SENSITIVE_IDENTIFIERS`` опущен): карточка
+        честно говорит «было, но не сохранилось», и это не то же самое, что «не
+        спрашивали».
 
-        Различает их :attr:`found`, живущий в памяти процесса. После
-        перезапуска бот не помнит ни документа, ни его происхождения — и честно
-        показывает маску: «было, но не сохраняю».
-
-        Телефон — всегда маской: его прислал сам оператор, он его знает, а
-        карточка живёт в переписке, которую пересылают.
+        Телефон — всегда маской, и он тут особый: его прислал сам оператор, он
+        его и так знает, а строка карточки от полного номера длиннее ровно на
+        ничего.
         """
         match name:
             case "phone":
                 return self.phone_masked
             case "passport":
-                return self.passport if "passport" in self.found else self.passport_masked
+                return self.passport or self.passport_masked
             case "snils":
-                return self.snils if "snils" in self.found else self.snils_masked
+                return self.snils or self.snils_masked
             case "birth_date" | "passport_issued":
                 value = self.value(name)
                 return value.strftime("%d.%m.%Y") if isinstance(value, date) else None
@@ -392,7 +393,9 @@ class Card:
             "birth_date": self.birth_date,
             "inn": self.inn,
             "phone_masked": self.phone_masked,
+            "passport": self.passport,
             "passport_masked": self.passport_masked,
+            "snils": self.snils,
             "snils_masked": self.snils_masked,
             "passport_issued": self.passport_issued,
             "plate": self.plate,
@@ -476,8 +479,6 @@ class Applied:
     notice: str | None = None
     changed: bool = False
     conflict: PersonName | None = None
-    #: Что попросить удалить из чата: сообщение с паспортом.
-    delete_message: bool = False
     #: Присланное не подошло под названное поле, вопрос остаётся заданным.
     #: Ведомый сценарий по такому вводу вперёд не идёт: шаг, который не
     #: получил ответа, обязан задаться ещё раз, а не молча пропасть.
@@ -489,10 +490,6 @@ class _Secrets:
     phone: str | None = None
     passport: str | None = None
     snils: str | None = None
-    #: Какие из них нашёл бот, а не ввёл оператор. Хранится рядом с самими
-    #: документами, потому что живёт ровно столько же: забыли документ — забыли
-    #: и то, откуда он.
-    found: frozenset[str] = frozenset()
     pending_ten: str | None = None
     #: ФИО, присланное поверх другой фамилии и ждущее ответа «новый человек или
     #: исправление». Не секрет, но такой же незакрытый вопрос: пережить
@@ -560,8 +557,9 @@ class QueryCardService:
     удалялась бы и прыгала вниз чата.
     """
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, settings: Settings) -> None:
         self._database = database
+        self._settings = settings
         self._secrets = CardSecrets()
         self._screens: dict[tuple[int, int], _Screen] = {}
 
@@ -587,7 +585,9 @@ class QueryCardService:
                 birth_date=row.birth_date,
                 inn=row.inn,
                 phone_masked=row.phone_masked,
+                passport=row.passport,
                 passport_masked=row.passport_masked,
+                snils=row.snils,
                 snils_masked=row.snils_masked,
                 passport_issued=row.passport_issued,
                 plate=row.plate,
@@ -604,9 +604,10 @@ class QueryCardService:
             )
         secrets = self._secrets.get(card.key)
         card.phone = secrets.phone
-        card.passport = secrets.passport
-        card.snils = secrets.snils
-        card.found = secrets.found
+        # Память свежее базы и старше её: при опущенном флаге в базе документа
+        # нет вовсе, а в памяти он ещё живой. Пустая память базу не затирает.
+        card.passport = secrets.passport or card.passport
+        card.snils = secrets.snils or card.snils
         card.pending_ten = secrets.pending_ten
         card.pending_name = secrets.pending_name
         return card
@@ -618,15 +619,19 @@ class QueryCardService:
                 phone=card.phone,
                 passport=card.passport,
                 snils=card.snils,
-                found=card.found,
                 pending_ten=card.pending_ten,
                 pending_name=card.pending_name,
             ),
         )
+        columns = card.to_columns()
+        if not self._settings.store_sensitive_identifiers:
+            # Флаг опущен — в базу едут только маски. Решение развёртывания, а
+            # не умолчание кода: снаружи это видно по тому, что после
+            # перезапуска карточка просит прислать номер заново.
+            columns["passport"] = None
+            columns["snils"] = None
         async with self._database.session() as session:
-            await QueryCardRepository(session).save(
-                card.telegram_user_id, card.chat_id, card.to_columns()
-            )
+            await QueryCardRepository(session).save(card.telegram_user_id, card.chat_id, columns)
 
     async def wipe(self, telegram_user_id: int, chat_id: int) -> Card:
         """Очистить карточку целиком, включая секреты.
@@ -893,7 +898,7 @@ class QueryCardService:
         if not digits:
             return Applied(card=card, changed=True)
         if as_passport:
-            return _merge(Applied(card=card, delete_message=True), _set_passport(card, digits))
+            return _set_passport(card, digits)
         return _set_phone(card, f"+7{digits}")
 
     def _resolve_ten_by_text(self, card: Card, raw: str) -> Applied:
@@ -954,7 +959,6 @@ def _merge(first: Applied, second: Applied) -> Applied:
         notice=first.notice or second.notice,
         changed=first.changed or second.changed,
         conflict=first.conflict or second.conflict,
-        delete_message=first.delete_message or second.delete_message,
         rejected=first.rejected or second.rejected,
     )
 
@@ -977,35 +981,33 @@ def _set_phone(card: Card, phone: str) -> Applied:
 
 
 def _set_passport(card: Card, passport: str) -> Applied:
-    """Паспорт: в карточку маска, в память номер, сообщение оператора — удалить.
+    """Паспорт: и в память, и маской в карточку.
 
-    Удаление best-effort: в личке Telegram разрешает его 48 часов, в группе
-    нужны права администратора. Не получилось — номер остаётся в истории чата,
-    и это ровно тот случай, где падать нельзя, а молчать можно.
+    Раньше отсюда уходило поручение удалить сообщение оператора, а карточка
+    печатала маску: бот обещал «номер не сохраняю и сообщение удалю» и обещание
+    держал. Владелица это отменила дословно — «надо убрать это, нам надо
+    наоборот сохранять эти номера», — и она права: бот закрыт, принадлежит
+    одному человеку и добывает документы ровно затем, чтобы тот подал с ними в
+    суд. Удалять сообщение с номером, который через минуту сам же покажешь на
+    странице, — это не приватность, а неудобство.
+
+    Маска остаётся рядом с номером, а не вместо него: по ней карточка после
+    перезапуска отличает «было, но не сохранилось» от «не спрашивали».
     """
     if card.passport == passport and card.passport_masked:
         return Applied(card=card)
     card.passport = passport
     card.passport_masked = mask_passport(passport)
-    # Введённый руками перестаёт быть найденным: с этой секунды бот обязан
-    # печатать маску, потому что сообщение оператора он сейчас удалит.
-    card.found = card.found - {"passport"}
     card.skipped = card.skipped - {"passport"}
-    return Applied(card=card, changed=True, delete_message=True)
+    return Applied(card=card, changed=True)
 
 
 def _set_snils(card: Card, snils: str) -> Applied:
-    """СНИЛС: в карточку маска, в память номер.
-
-    Сообщение оператора здесь не удаляется, в отличие от паспорта: СНИЛС никто
-    не вводит руками — он приходит из ответа по номеру телефона, и удалять
-    нечего.
-    """
+    """СНИЛС: и в память, и маской в карточку. То же, что у паспорта."""
     if card.snils == snils and card.snils_masked:
         return Applied(card=card)
     card.snils = snils
     card.snils_masked = mask_snils(snils)
-    card.found = card.found - {"snils"}
     card.skipped = card.skipped - {"snils"}
     return Applied(card=card, changed=True)
 
@@ -1216,8 +1218,6 @@ def fill_from_bridge(
     Имя — исключение и ставится целиком: мост зовут только тогда, когда имени в
     карточке нет вовсе (см. ``_resolve_name``), так что затирать здесь нечего.
 
-    Найденные документы помечаются в :attr:`Card.found`, и от этой пометки
-    зависит, покажет карточка номер или маску, — см. :meth:`Card.shown`.
     """
     _set_name(card, name)
     if birth_date is not None and card.birth_date is None:
@@ -1226,13 +1226,8 @@ def fill_from_bridge(
         card.inn = inn
     if passport and not card.passport_masked:
         _set_passport(card, passport)
-        # Пометка «нашёл бот» ставится ПОСЛЕ ``_set_passport``: он её снимает,
-        # потому что написан под ввод руками. Здесь ввода не было — не было и
-        # обещания удалить сообщение, поэтому карточка вправе показать номер.
-        card.found = card.found | {"passport"}
     if snils and not card.snils_masked:
         _set_snils(card, snils)
-        card.found = card.found | {"snils"}
     if passport_issued is not None and card.passport_issued is None:
         card.passport_issued = passport_issued
 

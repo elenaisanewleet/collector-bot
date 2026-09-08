@@ -242,11 +242,6 @@ async def absorb(message: Message, container: Container, user_id: int) -> None:
         card = await container.query_cards.wipe(user_id, message.chat.id)
         container.query_cards.begin_steps(card)
     applied = container.query_cards.apply(card, message.text or "")
-    if applied.delete_message:
-        # Паспорт: убираем сообщение оператора, чтобы номер не остался в
-        # истории чата. Best-effort — в группе на это нужны права админа.
-        with suppress(Exception):
-            await message.delete()
     if not applied.changed and applied.notice is None:
         # Присланное ничего не изменило: тот же номер второй раз, то же имя.
         # Раньше здесь стоял молчаливый выход, и он же был виден заказчику как
