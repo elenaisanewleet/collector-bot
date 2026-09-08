@@ -593,6 +593,10 @@ class SearchSubject(BaseModel):
     #: одним и тем же обращением. В ``redact_subject`` он вычеркнут наравне с
     #: паспортом.
     snils: str | None = None
+    #: Дата выдачи паспорта. Здесь по той же причине и на тех же правах, что
+    #: СНИЛС: ФНС ищет ИНН по серии и номеру и даты не спрашивает, а в заявлении
+    #: паспорт указывают целиком. Вычёркивается вместе с паспортом.
+    passport_issued: date | None = None
     address: str | None = None
     regions: tuple[str, ...] = Field(default_factory=tuple)
     vehicle: VehicleDescriptor | None = None

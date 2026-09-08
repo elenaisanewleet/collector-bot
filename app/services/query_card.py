@@ -83,6 +83,7 @@ FIELD_ORDER: tuple[str, ...] = (
     "birth_date",
     "inn",
     "passport",
+    "passport_issued",
     "snils",
     "plate",
     "vin",
@@ -94,7 +95,7 @@ FIELD_ORDER: tuple[str, ...] = (
 #: Семь пустых строк подряд читаются как шкала полноты, а это ровно то
 #: впечатление, которое карточка создавать не должна.
 OPTIONAL_ROWS: frozenset[str] = frozenset(
-    {"passport", "snils", "plate", "vin", "contract_number", "address"}
+    {"passport", "passport_issued", "snils", "plate", "vin", "contract_number", "address"}
 )
 
 FIELD_TITLES: dict[str, str] = {
@@ -105,6 +106,7 @@ FIELD_TITLES: dict[str, str] = {
     "phone": "Телефон",
     "inn": "ИНН",
     "passport": "Паспорт",
+    "passport_issued": "Паспорт выдан",
     "snils": "СНИЛС",
     "plate": "Госномер",
     "vin": "VIN",
@@ -158,6 +160,11 @@ class Card:
     phone_masked: str | None = None
     passport_masked: str | None = None
     snils_masked: str | None = None
+    #: Дата выдачи паспорта. В базу едет как есть, а не маской, и это не
+    #: послабление: сама по себе дата не опознаёт никого — опознаёт номер, а он
+    #: по-прежнему живёт только в памяти. Ради маски над датой пришлось бы
+    #: заводить формат, который ничего не скрывает.
+    passport_issued: date | None = None
     plate: str | None = None
     vin: str | None = None
     contract_number: str | None = None
@@ -182,6 +189,11 @@ class Card:
     phone: str | None = None
     passport: str | None = None
     snils: str | None = None
+    #: Документы, которые НАШЁЛ БОТ, а не ввёл оператор. От этого зависит, что
+    #: карточка печатает — сам документ или его маску, и почему, написано в
+    #: :meth:`shown`. Тоже только в памяти: после перезапуска бот не помнит ни
+    #: документа, ни того, откуда он взялся, и печатает маску.
+    found: frozenset[str] = frozenset()
     #: Десять цифр с девятки, ждущие ответа «паспорт или телефон». Тоже только
     #: в памяти: половину времени это паспорт.
     pending_ten: str | None = None
@@ -315,6 +327,7 @@ class Card:
             inn=self.inn,
             passport=self.passport,
             snils=self.snils,
+            passport_issued=self.passport_issued,
             vehicle=vehicle,
             contract_number=self.contract_number,
             address=self.address,
@@ -325,28 +338,37 @@ class Card:
         return getattr(self, name, None)
 
     def shown(self, name: str) -> str | None:
-        """Что печатать в строке поля. Документы — только масками.
+        """Что печатать в строке поля.
 
-        Маска, а не номер, и это не забывчивость. Карточка живёт в переписке
-        Telegram: её пересылают, её видит любой, кому показали экран, и стереть
-        её оттуда нельзя. Ради этого же ``_set_passport`` удаляет сообщение
-        оператора с паспортом — печатать тот же номер строкой ниже значило бы
-        отменить удаление.
+        ДОКУМЕНТ, КОТОРЫЙ НАШЁЛ БОТ, ПЕЧАТАЕТСЯ ЦЕЛИКОМ. Оператор ввёл номер
+        телефона и спросил «кто это»; ответ на этот вопрос — паспорт и СНИЛС
+        человека, и заявление в суд подают с ними, а не с их тенью. Показать
+        маску значит отправить владельца искать тот же документ где-то ещё,
+        отменив смысл обращения, за которое уже заплачено.
 
-        Сами документы владелец берёт со страницы проверок по номеру: она
-        живёт за подписанной ссылкой с коротким сроком, гасится ``/revoke`` и
-        существует ровно затем, чтобы из неё заполнить заявление. Разделение
-        такое: в чате — что нашли, на странице — чем это заполнять.
+        ДОКУМЕНТ, КОТОРЫЙ ВВЁЛ ОПЕРАТОР, ПЕЧАТАЕТСЯ МАСКОЙ. Разница не в
+        чувствительности — документ один и тот же, — а в том, что бот пообещал
+        вслух. Спрашивая паспорт, он пишет «номер не сохраняю, сообщение
+        удалю», и удаляет; напечатать тот же номер строкой ниже значило бы
+        отменить собственное удаление и нарушить обещание на том же экране.
+
+        Различает их :attr:`found`, живущий в памяти процесса. После
+        перезапуска бот не помнит ни документа, ни его происхождения — и честно
+        показывает маску: «было, но не сохраняю».
+
+        Телефон — всегда маской: его прислал сам оператор, он его знает, а
+        карточка живёт в переписке, которую пересылают.
         """
         match name:
             case "phone":
                 return self.phone_masked
             case "passport":
-                return self.passport_masked
+                return self.passport if "passport" in self.found else self.passport_masked
             case "snils":
-                return self.snils_masked
-            case "birth_date":
-                return self.birth_date.strftime("%d.%m.%Y") if self.birth_date else None
+                return self.snils if "snils" in self.found else self.snils_masked
+            case "birth_date" | "passport_issued":
+                value = self.value(name)
+                return value.strftime("%d.%m.%Y") if isinstance(value, date) else None
             case _:
                 value = self.value(name)
                 return str(value) if value else None
@@ -372,6 +394,7 @@ class Card:
             "phone_masked": self.phone_masked,
             "passport_masked": self.passport_masked,
             "snils_masked": self.snils_masked,
+            "passport_issued": self.passport_issued,
             "plate": self.plate,
             "vin": self.vin,
             "contract_number": self.contract_number,
@@ -466,6 +489,10 @@ class _Secrets:
     phone: str | None = None
     passport: str | None = None
     snils: str | None = None
+    #: Какие из них нашёл бот, а не ввёл оператор. Хранится рядом с самими
+    #: документами, потому что живёт ровно столько же: забыли документ — забыли
+    #: и то, откуда он.
+    found: frozenset[str] = frozenset()
     pending_ten: str | None = None
     #: ФИО, присланное поверх другой фамилии и ждущее ответа «новый человек или
     #: исправление». Не секрет, но такой же незакрытый вопрос: пережить
@@ -562,6 +589,7 @@ class QueryCardService:
                 phone_masked=row.phone_masked,
                 passport_masked=row.passport_masked,
                 snils_masked=row.snils_masked,
+                passport_issued=row.passport_issued,
                 plate=row.plate,
                 vin=row.vin,
                 contract_number=row.contract_number,
@@ -578,6 +606,7 @@ class QueryCardService:
         card.phone = secrets.phone
         card.passport = secrets.passport
         card.snils = secrets.snils
+        card.found = secrets.found
         card.pending_ten = secrets.pending_ten
         card.pending_name = secrets.pending_name
         return card
@@ -589,6 +618,7 @@ class QueryCardService:
                 phone=card.phone,
                 passport=card.passport,
                 snils=card.snils,
+                found=card.found,
                 pending_ten=card.pending_ten,
                 pending_name=card.pending_name,
             ),
@@ -957,6 +987,9 @@ def _set_passport(card: Card, passport: str) -> Applied:
         return Applied(card=card)
     card.passport = passport
     card.passport_masked = mask_passport(passport)
+    # Введённый руками перестаёт быть найденным: с этой секунды бот обязан
+    # печатать маску, потому что сообщение оператора он сейчас удалит.
+    card.found = card.found - {"passport"}
     card.skipped = card.skipped - {"passport"}
     return Applied(card=card, changed=True, delete_message=True)
 
@@ -972,6 +1005,7 @@ def _set_snils(card: Card, snils: str) -> Applied:
         return Applied(card=card)
     card.snils = snils
     card.snils_masked = mask_snils(snils)
+    card.found = card.found - {"snils"}
     card.skipped = card.skipped - {"snils"}
     return Applied(card=card, changed=True)
 
@@ -1163,6 +1197,7 @@ def fill_from_bridge(
     inn: str | None = None,
     passport: str | None = None,
     snils: str | None = None,
+    passport_issued: date | None = None,
 ) -> None:
     """Положить в карточку всё, что мост поднял по номеру телефона.
 
@@ -1180,6 +1215,9 @@ def fill_from_bridge(
 
     Имя — исключение и ставится целиком: мост зовут только тогда, когда имени в
     карточке нет вовсе (см. ``_resolve_name``), так что затирать здесь нечего.
+
+    Найденные документы помечаются в :attr:`Card.found`, и от этой пометки
+    зависит, покажет карточка номер или маску, — см. :meth:`Card.shown`.
     """
     _set_name(card, name)
     if birth_date is not None and card.birth_date is None:
@@ -1188,8 +1226,15 @@ def fill_from_bridge(
         card.inn = inn
     if passport and not card.passport_masked:
         _set_passport(card, passport)
+        # Пометка «нашёл бот» ставится ПОСЛЕ ``_set_passport``: он её снимает,
+        # потому что написан под ввод руками. Здесь ввода не было — не было и
+        # обещания удалить сообщение, поэтому карточка вправе показать номер.
+        card.found = card.found | {"passport"}
     if snils and not card.snils_masked:
         _set_snils(card, snils)
+        card.found = card.found | {"snils"}
+    if passport_issued is not None and card.passport_issued is None:
+        card.passport_issued = passport_issued
 
 
 __all__ = [

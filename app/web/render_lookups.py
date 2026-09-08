@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import date
 
 from app.db.models import PhoneLookup
 from app.utils.dates import format_datetime, utcnow
@@ -40,6 +41,7 @@ _HEADERS = (
     "Дата рождения",
     "Телефон",
     "Паспорт",
+    "Выдан",
     "СНИЛС",
     "ИНН",
     "В базе",
@@ -54,8 +56,8 @@ NEW_NOTE = (
     "в базе не было. Отметка не пересчитывается: она про тот день, а не про сегодня."
 )
 DOC_NOTE = (
-    "Паспорт и СНИЛС пришли из проверки по номеру и не подтверждены документом. "
-    "Перед подачей сверьте их с тем, что на руках."
+    "Паспорт, дата выдачи и СНИЛС пришли из проверки по номеру и не подтверждены "
+    "документом. Перед подачей сверьте их с тем, что на руках."
 )
 
 
@@ -138,6 +140,10 @@ def _document(full: str | None, masked: str | None) -> str:
     return full or masked or "—"
 
 
+def _day(value: date | None) -> str:
+    return value.strftime("%d.%m.%Y") if value else "—"
+
+
 def _table(lookups: Sequence[PhoneLookup]) -> str:
     if not lookups:
         return section("lookups", "Проверки по номеру", f'<p class="hint">{e(EMPTY_NOTE)}</p>')
@@ -147,7 +153,8 @@ def _table(lookups: Sequence[PhoneLookup]) -> str:
     for lookup in lookups:
         passport = _document(lookup.passport, lookup.passport_masked)
         snils = _document(lookup.snils, lookup.snils_masked)
-        birth = lookup.birth_date.strftime("%d.%m.%Y") if lookup.birth_date else "—"
+        birth = _day(lookup.birth_date)
+        issued = _day(lookup.passport_issued)
         mark = (
             '<span class="pill k-new">Новый клиент</span>'
             if lookup.is_new_client
@@ -163,13 +170,17 @@ def _table(lookups: Sequence[PhoneLookup]) -> str:
                 # перенести эти цифры в заявление, и перебивать их руками —
                 # это опечатка в иске.
                 cell(passport, label="Паспорт", copy=passport != "—"),
+                cell(issued, label="Выдан"),
                 cell(snils, label="СНИЛС", copy=snils != "—"),
                 cell(lookup.inn or "—", label="ИНН", copy=bool(lookup.inn)),
                 raw_cell(mark, label="В базе"),
             )
         )
         haystack = " ".join(
-            filter(None, (lookup.fio, birth, lookup.phone_masked, passport, snils, lookup.inn))
+            filter(
+                None,
+                (lookup.fio, birth, lookup.phone_masked, passport, issued, snils, lookup.inn),
+            )
         ).lower()
         kind = "new" if lookup.is_new_client else "known"
         attrs.append(f'data-find="{e(haystack)}" data-kind="{kind}"')

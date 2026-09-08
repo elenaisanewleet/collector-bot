@@ -408,6 +408,7 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
     snils = getattr(result, "snils", None)
     inn = getattr(result, "inn", None)
     birth = getattr(result, "birth_date", None)
+    issued = getattr(result, "passport_issued", None)
     # Переносится ВСЁ, что пришло одним ответом, а не только имя с датой. Раньше
     # здесь стояли четыре строки про ФИО и дату, и паспорт со СНИЛСом из того же
     # оплаченного ответа терялись молча: карточка их не показывала, отчёт не
@@ -420,6 +421,7 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
         inn=inn,
         passport=passport,
         snils=snils,
+        passport_issued=issued,
     )
     # Журнал находок. Пишется здесь, а не при показе страницы, потому что
     # отметка «новый клиент» — замер СВОЕГО дня: следующий импорт выгрузки
@@ -436,6 +438,7 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
             inn=inn,
             passport=passport,
             snils=snils,
+            passport_issued=issued,
         )
     except SQLAlchemyError:
         logger.exception("phone_lookup.record_failed", user_id=card.telegram_user_id)

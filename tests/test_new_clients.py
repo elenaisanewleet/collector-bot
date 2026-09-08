@@ -32,11 +32,18 @@ from app.domain.models import ProviderResult
 from app.providers.phone_bridge import PhoneNameProvider, PhoneNameResult
 from app.providers.registry import ProviderRegistry
 from app.services.phone_lookups import PhoneLookupService
-from app.services.query_card import Card, fill_from_bridge
+from app.services.query_card import Card, QueryCardService, fill_from_bridge
 from app.services.share import ShareKind, ShareLinkService, ShareTarget
 from app.web.app import build_app
 
-from .bot_harness import OPERATOR_ID, SentMessages, dispatcher_for, feed, make_message
+from .bot_harness import (
+    CHAT_ID,
+    OPERATOR_ID,
+    SentMessages,
+    dispatcher_for,
+    feed,
+    make_message,
+)
 
 
 def last(sent: SentMessages) -> str:
@@ -44,13 +51,14 @@ def last(sent: SentMessages) -> str:
 
 
 PUBLIC_URL = "https://reports.example.test"
-PHONE = "+79851982945"
+PHONE = "+79990001122"
 
 FOUND = PersonName(last_name="Клочкова", first_name="Елена", middle_name="Николаевна")
 #: Контрольная сумма сходится — иначе :func:`normalize_snils` его отвергнет, и
 #: тест проверял бы отказ вместо переноса.
 SNILS = "16011086811"
 PASSPORT = "4510123456"
+ISSUED = date(2015, 2, 20)
 INN = "770123456789"
 
 
@@ -74,6 +82,7 @@ class _BridgeStub(PhoneNameProvider):
             inn=INN,
             passport=PASSPORT,
             snils=SNILS,
+            passport_issued=ISSUED,
             note="ФИО определено по номеру",
         )
 
@@ -112,26 +121,51 @@ def bridged_dispatcher(bridged: Container) -> Dispatcher:
 async def test_the_documents_the_lookup_paid_for_reach_the_card(
     bridged: Container, bridged_dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """Номер телефона — и в карточке появляются паспорт со СНИЛСом.
+    """Номер телефона — и в карточке сразу вся личность, документами.
 
     Раньше здесь были только фамилия, имя, отчество и дата рождения: перенос
-    был написан на четыре поля, а ответ приносил семь. Строки «Паспорт» и
-    «СНИЛС» карточка не показывала вовсе — и вопрос владелицы «почему паспорт
-    не доезжает» был ровно про это.
+    был написан на четыре поля, а ответ приносил семь. Строк «Паспорт»,
+    «Паспорт выдан» и «СНИЛС» карточка не показывала вовсе — и вопрос
+    владелицы «почему паспорт не доезжает» был ровно про это.
 
-    Масками, а не номерами: карточка живёт в переписке, которую пересылают, и
-    ради того же ``_set_passport`` удаляет сообщение оператора. Сами документы
-    лежат на странице проверок — см. тест ниже.
+    Целиком, а не масками. Оператор ввёл номер и спросил «кто это»; ответ на
+    этот вопрос — документы человека, и заявление подают с ними. Обещания
+    «номер не сохраняю, сообщение удалю» здесь не звучало: он ничего не вводил
+    и удалять нечего. Обратный случай — паспорт, введённый руками, — проверяет
+    ``tests/test_query_card.py``, и там по-прежнему маска.
     """
     await feed(bridged_dispatcher, bot, message=make_message(PHONE))
 
     screen = last(sent)
     assert "Фамилия: Клочкова" in screen
     assert "Дата рождения: 24.11.1994" in screen
-    assert "Паспорт: 45** ******" in screen, "паспорт из ответа не доехал до карточки"
-    assert "СНИЛС: ***-***-*** 11" in screen, "СНИЛС из ответа не доехал до карточки"
-    assert PASSPORT not in screen, "паспорт целиком в переписке остаться не должен"
-    assert SNILS not in screen
+    assert f"Паспорт: {PASSPORT}" in screen, "паспорт из ответа не доехал до карточки"
+    assert "Паспорт выдан: 20.02.2015" in screen, "дата выдачи не доехала до карточки"
+    assert f"СНИЛС: {SNILS}" in screen, "СНИЛС из ответа не доехал до карточки"
+
+
+async def test_after_a_restart_the_card_falls_back_to_the_mask(
+    bridged: Container, bridged_dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Бот забыл документ — и честно показывает маску, а не прочерк.
+
+    Сам документ живёт в памяти процесса час, в базу едет только маска. После
+    перезапуска карточка обязана сказать «было, но не сохраняю» — это та же
+    разница между «не спрашивали» и «спросили», на которой держится весь
+    продукт.
+    """
+    await feed(bridged_dispatcher, bot, message=make_message(PHONE))
+    # Перезапуск: память процесса пуста, строка в базе на месте.
+    bridged.query_cards = QueryCardService(bridged.database)
+
+    card = await bridged.query_cards.load(OPERATOR_ID, CHAT_ID)
+
+    assert card.shown("passport") == "45** ******"
+    assert card.shown("snils") == "***-***-*** 11"
+    assert card.forgotten("passport")
+    # Дата выдачи переживает перезапуск: она в базе, потому что сама по себе
+    # никого не опознаёт.
+    assert card.shown("passport_issued") == "20.02.2015"
 
 
 def test_the_operator_beats_the_bridge() -> None:
@@ -154,9 +188,13 @@ def test_the_operator_beats_the_bridge() -> None:
         inn=INN,
         passport=PASSPORT,
         snils=SNILS,
+        passport_issued=ISSUED,
     )
 
     assert card.passport == "9999999999", "мост переписал паспорт оператора"
+    # И маску его не тронул: паспорт оператора остаётся маской, потому что
+    # своё сообщение с ним бот удалил.
+    assert card.shown("passport") == "99** ******"
     assert card.inn == "770912345601"
     assert card.birth_date == date(1980, 3, 15)
     # А пустое поле он заполняет: спор был только там, где спорить было о чем.
@@ -181,6 +219,7 @@ async def test_the_lookup_is_written_down_and_marked_a_new_client(
     assert row.birth_date == date(1994, 11, 24)
     assert row.passport == PASSPORT, "при поднятом флаге документ пишется целиком"
     assert row.snils == SNILS
+    assert row.passport_issued == ISSUED
     assert row.passport_masked == "45** ******"
     assert row.base_matches == 0
     assert row.is_new_client, "в базе нет никого с такой фамилией — это новый клиент"
@@ -263,6 +302,7 @@ async def test_the_new_clients_page_shows_the_documents_and_the_mark(
         inn=INN,
         passport=PASSPORT,
         snils=SNILS,
+        passport_issued=ISSUED,
     )
     url = await bridged.share_service.issue(
         ShareTarget(ShareKind.LOOKUPS, 0), telegram_user_id=OPERATOR_ID
@@ -276,6 +316,7 @@ async def test_the_new_clients_page_shows_the_documents_and_the_mark(
     assert response.status == 200
     assert "Клочкова Елена Николаевна" in body
     assert PASSPORT in body, "паспорт на странице обязан быть читаемым"
+    assert "20.02.2015" in body, "без даты выдачи паспорт в заявлении неполон"
     assert SNILS in body
     assert "Новый клиент" in body
     # Персональные данные не индексируются и не кэшируются — как и везде.

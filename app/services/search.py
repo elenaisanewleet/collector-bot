@@ -811,6 +811,7 @@ def redact_subject(subject: SearchSubject, *, store_sensitive: bool) -> dict[str
     if not store_sensitive:
         payload.pop("passport", None)
         payload.pop("snils", None)
+        payload.pop("passport_issued", None)
         payload.pop("phone", None)
     return payload
 

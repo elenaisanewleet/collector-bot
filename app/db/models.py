@@ -339,6 +339,9 @@ class QueryCard(Base):
     phone_masked: Mapped[str | None] = mapped_column(String(32))
     passport_masked: Mapped[str | None] = mapped_column(String(32))
     snils_masked: Mapped[str | None] = mapped_column(String(32))
+    # Дата выдачи паспорта хранится как есть, а не маской: сама по себе она не
+    # опознаёт никого — опознаёт номер, а он сюда по-прежнему не едет.
+    passport_issued: Mapped[date | None] = mapped_column(Date)
     plate: Mapped[str | None] = mapped_column(String(16))
     vin: Mapped[str | None] = mapped_column(String(17))
     # Договор и адрес ищутся только в нашей выгрузке: ни один внешний реестр по
@@ -416,6 +419,7 @@ class PhoneLookup(Base):
     passport_masked: Mapped[str | None] = mapped_column(String(32))
     snils: Mapped[str | None] = mapped_column(String(16))
     snils_masked: Mapped[str | None] = mapped_column(String(32))
+    passport_issued: Mapped[date | None] = mapped_column(Date)
     base_matches: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
 

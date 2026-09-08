@@ -557,7 +557,7 @@ async def test_going_to_the_menu_keeps_the_card(
     Проверяется именно способ доставки: меню приходит НОВЫМ сообщением, а не
     правкой чужого.
     """
-    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("79990001122"))
     # Номера в выгрузке нет, поэтому бот спрашивает фамилию, а не показывает
     # форму: требование владелицы от 08.09.2026 — «если телефон не сработал,
     # пишем не найдено в базе, введите фамилию».
@@ -1128,7 +1128,7 @@ async def test_a_phone_reaches_the_debtor_through_the_name_bridge(
     service = SearchService(settings=container.settings, database=database, registry=registry)
 
     outcome = await service.search_detailed(
-        SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945"),
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990001122"),
         telegram_user_id=OPERATOR_ID,
     )
     report = outcome.report
@@ -1156,12 +1156,12 @@ async def test_the_operators_own_name_beats_the_bridge(container: Container) -> 
     bridge = _PhoneBridgeStub(container.settings)
     named = SearchSubject(
         search_type=SearchType.PERSON.value,
-        phone="+79851982945",
+        phone="+79990001122",
         name=PersonName(last_name="Сидорова", first_name="Анна"),
     )
     assert not bridge.is_needed(named)
     assert bridge.is_needed(
-        SearchSubject(search_type=SearchType.PERSON.value, phone="+79851982945")
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990001122")
     )
 
 
@@ -1235,7 +1235,7 @@ async def test_a_phone_alone_runs_the_check_from_the_bot(
     )
     dispatcher = dispatcher_for(container)
 
-    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("79990001122"))
     sent.texts.clear()
     await feed(dispatcher, bot, callback_query=make_callback("qc:run"))
 
@@ -1254,7 +1254,7 @@ async def test_without_the_bridge_a_phone_alone_still_refuses(
     assert container.registry.phone_bridge is None
     dispatcher = dispatcher_for(container)
 
-    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("79990001122"))
     sent.texts.clear()
     await feed(dispatcher, bot, callback_query=make_callback("qc:run"))
 
@@ -1480,7 +1480,7 @@ async def test_a_phone_alone_produces_the_whole_report(
 
     await feed(dispatcher, bot, message=make_message("Проверить человека"))
     sent.texts.clear()
-    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("79990001122"))
 
     chat = sent.joined
     assert "Македонский Василий Витальевич" in chat, "ФИО по номеру не подставилось"
@@ -1504,7 +1504,7 @@ async def test_a_silent_bridge_asks_for_a_surname_in_one_line(
 
     await feed(dispatcher, bot, message=make_message("Проверить человека"))
     sent.texts.clear()
-    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("79990001122"))
 
     assert sent.contains("Введите фамилию")
     assert not sent.contains("RECOVERY SCORE"), "платный прогон без имени"

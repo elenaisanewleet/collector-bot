@@ -626,7 +626,7 @@ async def test_the_miss_is_reported_once_not_over_every_question(
     правда ново.
     """
     await feed(dispatcher, bot, message=make_message("Проверить человека"))
-    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("79990001122"))
 
     assert "никого не нашёл" in last(sent)
 
@@ -708,7 +708,7 @@ async def test_a_phone_nobody_has_leads_to_the_surname_question(
     навсегда — с номером, по которому и не могло найтись.
     """
     await feed(dispatcher, bot, message=make_message("Проверить человека"))
-    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("79990001122"))
 
     screen = last(sent)
     assert "По номеру телефона никого не нашёл" in screen, "поиск был, а сказано о нём не было"

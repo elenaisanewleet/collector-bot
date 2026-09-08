@@ -47,6 +47,7 @@ class PhoneLookupService:
         inn: str | None = None,
         passport: str | None = None,
         snils: str | None = None,
+        passport_issued: date | None = None,
     ) -> PhoneLookup:
         """Записать одну находку и посчитать, знаем ли мы такую фамилию."""
         keep = self._settings.store_sensitive_identifiers
@@ -65,6 +66,9 @@ class PhoneLookupService:
                     passport_masked=mask_passport(passport),
                     snils=snils if keep else None,
                     snils_masked=mask_snils(snils),
+                    # Дата выдачи пишется всегда: сама по себе она не опознаёт
+                    # никого, а без неё паспорт в заявлении неполон.
+                    passport_issued=passport_issued,
                     base_matches=matches,
                 )
             )

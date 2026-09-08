@@ -102,6 +102,12 @@ class PhoneNameResult(ProviderResult):
     #: что нужен владельцу в заявлении, а приходит тем же ответом — не взять
     #: его значит заставить искать документ отдельно и вручную.
     snils: str | None = None
+    #: Дата выдачи паспорта. Тоже не ключ поиска: ФНС ищет ИНН по серии и
+    #: номеру и даты не спрашивает (см. ``identity_bridge.missing_input_for``).
+    #: Нужна там же, где СНИЛС, — в заявлении, где паспорт указывают полностью.
+    #: ``Any``, а не ``date``, по той же причине, что и ``birth_date``:
+    #: ``ProviderResult`` не знает про домен.
+    passport_issued: Any = None
 
 
 class PhoneNameProvider(BaseProvider):
@@ -229,10 +235,13 @@ def _read_rows(
         status=ProviderStatus.SUCCESS,
         records=(),
         name=name,
-        birth_date=_pick(rows, home, _read_birth, "birth_date", "dob"),
+        birth_date=_pick(rows, home, _read_day, "birth_date", "dob"),
         inn=_pick(rows, home, _individual_inn, "inn", "innfiz"),
         passport=_pick(rows, home, _read_passport, "passport", "passport_number"),
         snils=_pick(rows, home, _read_snils, "snils"),
+        passport_issued=_pick(
+            rows, home, _read_day, "passport_date", "passport_issued", "issue_date"
+        ),
         note=f"ФИО определено по номеру {mask_phone(phone)}",
     )
 
@@ -303,7 +312,12 @@ def _first(row: RecordDict, *keys: str) -> Any:
     return None
 
 
-def _read_birth(raw: object) -> date | None:
+def _read_day(raw: object) -> date | None:
+    """Дата из строки поставщика — в любом из форматов, которые он шлёт.
+
+    Одна функция на дату рождения и на дату выдачи паспорта: формат у них один
+    и тот же, а два разбора разошлись бы на первой правке.
+    """
     return parse_date(str(raw))
 
 
