@@ -43,6 +43,7 @@ from app.domain.models import (
 )
 from app.services import reporting
 from app.web import render
+from app.web.style import CSS
 
 # Состояния источника ровно те, что различает NewDB и наш собственный слой.
 # ``payment_required`` и ``unauthorized`` приезжают как ProviderStatus.ERROR
@@ -99,6 +100,13 @@ SECTIONS: dict[str, tuple[ProviderName, Callable[[DebtorReport], str], Callable[
     "property": (ProviderName.PROPERTY, reporting._property_block, render.property_section),
     "court": (ProviderName.COURT, reporting._court_block, render.court_section),
 }
+
+# Разделы страницы, которых в таблице выше нет намеренно: источника у них нет
+# вовсе, и прогонять по ним состояния ``ProviderResult`` не из чего. Список
+# закрытый: секция, забытая и тут, и в SECTIONS, выпала бы из главной проверки
+# правила — три параметризованных теста ниже её просто не увидели бы, а pytest
+# остался бы зелёным.
+EXEMPT_SECTIONS = {"sources", "score", "bank"}
 
 ADDRESS = "Саратовская обл., г. Ртищево, ул. Красная, д.22, кв.10"
 
@@ -305,6 +313,143 @@ def test_egrn_section_exists_on_the_page() -> None:
     assert "64:47:040605:229" in page
     assert reporting.OWNERSHIP_DISCLAIMER in page
     assert "1 200 000" in page
+
+
+def test_every_section_of_the_page_is_covered_by_the_state_table() -> None:
+    """Секция, не попавшая ни в SECTIONS, ни в EXEMPT_SECTIONS, — дыра в правиле.
+
+    Таблица SECTIONS ведётся руками, и три главных теста этого файла
+    параметризуются от неё. Новый раздел, забытый в таблице, не проверяется
+    вовсе: зелёный pytest перестаёт означать «инвариант проверен». Здесь это
+    становится падением, а не тишиной.
+    """
+    report = DebtorReport(subject=SearchSubject(search_type=SearchType.PERSON.value))
+    report.provider_results.extend(
+        ProviderResult(provider=provider, status=ProviderStatus.NO_RESULTS)
+        for provider, _text, _web in SECTIONS.values()
+    )
+    anchors = {block.anchor for block in render.build_blocks(report)}
+
+    assert anchors <= set(SECTIONS) | EXEMPT_SECTIONS, sorted(
+        anchors - set(SECTIONS) - EXEMPT_SECTIONS
+    )
+
+
+# ---------------------------------------------------------------- счета в банках
+
+
+def test_bank_accounts_are_not_a_source_we_forgot_to_ask() -> None:
+    """«Источника нет» обязано отличаться от «не подключено» и «не опрашивался».
+
+    Это тот же инвариант, что и во всём файле, но в самом дорогом его виде: тут
+    речь не о том, что мы не сходили, а о том, что сходить нельзя никому, кроме
+    пристава и суда. Раздел, взявший чужую подпись, обещал бы подключение — а
+    подключать нечего, и читающий строил бы на этом обещании план взыскания.
+    """
+    text = reporting._bank_block()
+    page = plain(render.bank_section())
+
+    for output in (text, page):
+        assert reporting.NOT_CONFIGURED_LABEL not in output
+        assert reporting.NOT_CONFIGURED_REPORT_LINE not in output
+        assert reporting.EMPTY_LABEL not in output
+        assert "не опрашивался" not in output
+        # «Не найдено» здесь было бы утверждением о счетах, которого никто не
+        # проверял: пустой ответ и отсутствие вопроса — разные вещи.
+        for word in NOT_FOUND_WORDS:
+            assert word not in output
+
+
+def test_the_state_of_a_source_that_cannot_exist_stands_apart() -> None:
+    """Подпись, знак и класс чипа — свои, и на бумаге тоже.
+
+    Все непроверенные состояния красятся одним штрихованным классом, и новое
+    состояние по умолчанию слилось бы с «не подключено» ровно там, где раздел и
+    заводился, чтобы их развести, — на распечатке, которую несут в суд.
+    """
+    others = [
+        reporting.source_state(None),
+        *(
+            reporting.source_state(ProviderResult(provider=ProviderName.FSSP, **state))
+            for state in STATES.values()
+        ),
+    ]
+    assert all(reporting.NO_SOURCE_STATE.label != state.label for state in others)
+    assert all(reporting.NO_SOURCE_STATE.mark != state.mark for state in others)
+
+    tag = render.state_tag(reporting.NO_SOURCE_STATE)
+    assert "unchecked" not in tag
+    assert 'class="tag nosource"' in tag
+    assert ".tag.nosource{" in CSS
+    assert ".tag.nosource{" in CSS[CSS.index("@media print{") :]
+
+
+def test_no_provider_result_can_ever_claim_this_state() -> None:
+    """``source_state`` это состояние не выдаёт — и не должна.
+
+    У неё есть ветка ``case _`` в :func:`unanswered_line` и такая же в карточке
+    чата: состояние, приехавшее туда через выдуманный ``ProviderResult``,
+    напечаталось бы как «ошибка обращения к источнику (unknown)».
+    """
+    answers = (ProviderResult(provider=ProviderName.FSSP, status=s) for s in ProviderStatus)
+    for result in (None, *answers):
+        assert reporting.source_state(result).code is not reporting.SourceStateCode.NO_SOURCE
+
+
+def test_bank_section_says_where_the_data_can_actually_be_obtained() -> None:
+    """Раздел полезен, а не просто честен: он называет, что делать дальше.
+
+    «Данных нет» — это не ответ взыскателю. Ответ — два законных пути и
+    основание каждого; ими раздел и заканчивается.
+    """
+    for output in (reporting._bank_block(), plain(render.bank_section())):
+        assert "суде" in output
+        assert "пристава" in output
+        assert "ст. 26" in output
+        assert "ст. 69 ФЗ-229" in output
+
+
+def test_bank_section_names_no_source_and_no_setting() -> None:
+    """Правило 4: имён источников и настроек в тексте для оператора нет.
+
+    Название закона — не имя источника, а основание, и оно как раз обязано
+    стоять: без него «нет и не будет» это наше слово против его вопроса.
+    """
+    for output in (reporting._bank_block(), plain(render.bank_section())):
+        for name in ("ЕГРН", "Федресурс", "ЕФРСБ", "Росреестр", "ФНП", "NewDB", "ENABLED"):
+            assert name not in output
+
+
+def test_bank_section_stays_short() -> None:
+    """Владелица много раз возвращала лишний текст. Четыре строки — потолок."""
+    body = reporting._bank_block().split("\n")[1:]
+    assert len(body) <= 4
+
+
+def test_bank_section_reads_the_same_on_the_page_and_in_the_file() -> None:
+    """Раздел без провайдера легко завести только в одном из двух выводов.
+
+    ``test_text_export_matches_the_report_sent_to_chat`` этого не поймает: обе
+    его стороны берутся из ``reporting``, и веб-секцию он не видит вовсе. А в
+    дело уходит именно файл.
+    """
+    report = DebtorReport(subject=SearchSubject(search_type=SearchType.PERSON.value))
+    text = reporting.render_report(report)
+    page = plain("".join(block.html for block in render.build_blocks(report)))
+
+    assert reporting.BANK_TITLE.upper() in text
+    assert reporting.BANK_TITLE in page
+    for line in (reporting.BANK_NO_SOURCE_LINE, reporting.BANK_ACCESS_LINE):
+        assert line in text
+        assert line in page
+
+
+def test_bank_section_stands_next_to_property() -> None:
+    """В хвосте оглавления раздел читался бы как оговорка, а не как ответ."""
+    report = DebtorReport(subject=SearchSubject(search_type=SearchType.PERSON.value))
+    anchors = [block.anchor for block in render.build_blocks(report)]
+
+    assert anchors.index("bank") == anchors.index("property") + 1
 
 
 def test_pledge_and_court_keep_their_scope_note_when_unchecked() -> None:

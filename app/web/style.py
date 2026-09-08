@@ -258,6 +258,11 @@ button.copy[data-done="1"]{border-color:var(--good);color:var(--good)}
   border-style:dashed;
   background-image:repeating-linear-gradient(135deg,transparent 0 5px,
     var(--hatch) 5px 10px)}
+/* «Источника нет» — тоже не ответ, но и не «не проверено»: рваная рамка со
+   штриховкой обещала бы, что когда-нибудь сходим, а сюда сходить нельзя.
+   Двойная сплошная рамка читается как закрытая дверь и переживает ч/б печать. */
+.tag.nosource{background:transparent;color:var(--ink-2);border-color:var(--ink-2);
+  border-style:double;border-width:3px;padding:0 5px}
 
 .empty{color:var(--ink-2)}
 .empty.unchecked{color:var(--warn);font-weight:600;
@@ -557,6 +562,10 @@ tbody tr[data-tone]{cursor:default}
   .tag.unchecked{border-style:dashed;
     background-image:repeating-linear-gradient(135deg,transparent 0 4px,
       rgba(0,0,0,.16) 4px 8px)!important}
+  /* Без этой строки «источника нет» на бумаге стало бы обычным чипом и
+     слилось бы с «проверено, записей нет» — ровно та подмена, ради снятия
+     которой раздел заведён, и ровно на том листе, который подшивают. */
+  .tag.nosource{border:2.5pt double #000}
   .empty.unchecked{border-left:2pt solid #000;color:#000}
   .plate,button.copy{border:.5pt solid #000;background:#fff}
   /* Таблицы не рвутся, шапка повторяется, заголовок не висит в конце листа. */

@@ -22,6 +22,7 @@ from app.config import Settings
 from app.domain.enums import MissingInput, ProviderName, ProviderStatus, SearchType
 from app.domain.identity import PersonName, SearchSubject
 from app.domain.models import DebtorReport, ProviderResult
+from app.services import reporting
 from app.services.scoring import RecoveryScoreEngine
 from app.services.verdict import VerdictEngine
 
@@ -158,6 +159,28 @@ def test_an_answered_source_produces_no_line_at_all(settings: Settings) -> None:
     # С двоеточием: «Не ответили ключевые источники …» — это заголовок вердикта,
     # он про другое и приходит из :mod:`app.services.verdict`.
     assert "Не ответили: " not in text
+
+
+def test_a_section_without_a_source_never_reaches_the_card(settings: Settings) -> None:
+    """Раздел «Счета в банках» живёт в отчёте и в карточку не протекает.
+
+    В карточке печатается только то, на что ответили, и строка «счетов нет» под
+    каждым должником — ровно тот лишний текст, который владелица возвращала.
+    Плюс это ловит выдуманного провайдера: он всплыл бы здесь репликой
+    «Проверено не всё», то есть позвал бы оператора чинить нечинимое.
+    """
+    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12)))
+    report.provider_results.append(
+        ProviderResult(provider=ProviderName.FSSP, status=ProviderStatus.NO_RESULTS)
+    )
+
+    text = card(report, settings)
+
+    assert reporting.BANK_TITLE not in text
+    assert reporting.BANK_NO_SOURCE_LINE not in text
+    assert "счета" not in text.lower()
+    assert view._facts(report) == ["Исполнительные производства: нет"]
+    assert view._gaps(report) == []
 
 
 # ---------------------------------------------------------------- эхо разбора

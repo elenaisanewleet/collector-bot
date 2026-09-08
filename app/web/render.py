@@ -54,6 +54,9 @@ from app.domain.models import (
 from app.domain.scoring import PROVIDER_CONFIDENCE_WEIGHTS
 from app.domain.verdict import FEE_BASIS_TITLES, VERDICT_TITLES, VerdictDecision
 from app.services.reporting import (
+    BANK_ACCESS_LINE,
+    BANK_NO_SOURCE_LINE,
+    BANK_TITLE,
     BRIDGES,
     COMPANY_ASSETS_DISCLAIMER,
     COURT_SCOPE_NOTE,
@@ -63,6 +66,7 @@ from app.services.reporting import (
     NO_FACTORS_NOTE,
     NO_PROPERTY_FOUND,
     NO_PROPERTY_FOUND_WITHOUT_ADDRESS,
+    NO_SOURCE_STATE,
     OWNERSHIP_DISCLAIMER,
     PLEDGE_SCOPE_NOTE,
     PROPERTY_SCOPE_NOTE,
@@ -286,14 +290,23 @@ def match_tag(level: MatchLevel) -> str:
 def state_tag(state: SourceState) -> str:
     """Чип состояния источника.
 
-    Форма и знак несут смысл раньше цвета: все четыре непроверенных состояния
-    получают один контурный штрихованный класс, и на чёрно-белой распечатке
-    «не проверено» остаётся отличимым от «проверено, записей нет».
+    Форма и знак несут смысл раньше цвета: непроверенные состояния получают один
+    контурный штрихованный класс, и на чёрно-белой распечатке «не проверено»
+    остаётся отличимым от «проверено, записей нет».
+
+    Исключение одно — «источника нет». Оно тоже не отвечено, но штриховка «мы
+    сюда ещё не сходили» была бы здесь обещанием сходить: чинить и ждать нечего.
+    Свой класс живёт и в экранном, и в печатном блоке стилей — иначе различие,
+    ради которого раздел и заведён, умерло бы на листе, который несут в суд.
     """
-    tone = "unchecked" if state.is_unchecked else _answered_tone(state)
+    tone = _unchecked_tone(state) if state.is_unchecked else _answered_tone(state)
     return (
         f'<span class="tag {tone}"><span class="mark">{e(state.mark)}</span>{e(state.label)}</span>'
     )
+
+
+def _unchecked_tone(state: SourceState) -> str:
+    return "nosource" if state.code is SourceStateCode.NO_SOURCE else "unchecked"
 
 
 def _answered_tone(state: SourceState) -> str:
@@ -1025,6 +1038,28 @@ def property_section(report: DebtorReport) -> str:
     )
 
 
+def bank_section() -> str:
+    """Счета в банках — раздел, у которого источника нет и не будет.
+
+    Отчёта без него читающий не мог разобрать: счета названы в ТЗ прямым
+    текстом, а раздела не было, и отсутствие читалось как «забыли». Теперь оно
+    названо, и названо полезно — второй строкой стоит то, ради чего раздел и
+    нужен: кто эти сведения всё-таки получает и на каком основании.
+
+    Ни ``report``, ни ``ProviderResult`` тут не нужны и не заводятся: состояние
+    известно заранее (:data:`NO_SOURCE_STATE`), а выдуманный источник уехал бы в
+    счётчик «ответили N из M», в строку «Не проверено: …» на первом экране и в
+    карточку чата — три ложных приглашения починить нечинимое.
+
+    Текст — из :mod:`app.services.reporting`, как и у всех соседей: слова о
+    состоянии источника этот модуль не сочиняет.
+    """
+    body = (
+        f'<p class="empty">{e(BANK_NO_SOURCE_LINE)}</p><p class="empty">{e(BANK_ACCESS_LINE)}</p>'
+    )
+    return section("bank", BANK_TITLE, body, state=NO_SOURCE_STATE)
+
+
 def _property_cost(item: PropertyRecord) -> str:
     """Стоимость снятого с учёта объекта не печатается.
 
@@ -1243,6 +1278,10 @@ def build_blocks(report: DebtorReport) -> list[Block]:
         Block("pledge", "Залоги", pledge_section(report)),
         Block("inheritance", "Наследственные дела", inheritance_section(report)),
         Block("property", PROPERTY_TITLE, property_section(report)),
+        # Сразу за имуществом: читающий ищет, с чего взыскивать, и счета — тот же
+        # вопрос, а не примечание в конце. В хвосте оглавления раздел выглядел бы
+        # оговоркой, тогда как это единственный ответ, который у нас на него есть.
+        Block("bank", BANK_TITLE, bank_section()),
         Block("court", "Суды", court_section(report)),
         Block("business", "Бизнес", business_section(report)),
         Block("sources", "Источники", sources_section(report)),

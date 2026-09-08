@@ -23,7 +23,12 @@ from app.domain.enums import (
 from app.domain.identity import SearchSubject, parse_fio
 from app.domain.models import DebtorReport, ProviderResult
 from app.services.aggregation import Aggregator
-from app.services.reporting import render_report, source_state, unanswered_line
+from app.services.reporting import (
+    NO_SOURCE_STATE,
+    render_report,
+    source_state,
+    unanswered_line,
+)
 from app.services.scoring import RecoveryScoreEngine
 from app.services.share import ShareKind, ShareLinkService, ShareTarget
 from app.utils.dates import utcnow
@@ -506,6 +511,51 @@ def test_navigation_never_links_to_a_missing_section(person_subject: SearchSubje
     assert "score" not in {block.anchor for block in blocks}
 
 
+def test_the_report_declares_its_sections_explicitly(person_subject: SearchSubject) -> None:
+    """Состав разделов и их порядок закреплены списком, а не «как получится».
+
+    Проверка непустоты html выше пропускала любую новую секцию молча — в том
+    числе поставленную не туда и печатающую два противоречащих состояния разом.
+    Список здесь ведётся руками намеренно: добавляющий раздел обязан объявить
+    его и увидеть, куда тот встал в оглавлении.
+    """
+    report = _report_for(person_subject, [])
+
+    assert [block.anchor for block in render.build_blocks(report)] == [
+        "internal",
+        "fssp",
+        "bankruptcy",
+        "pledge",
+        "inheritance",
+        "property",
+        "bank",
+        "court",
+        "business",
+        "sources",
+        "score",
+    ]
+
+
+def test_a_section_without_a_source_does_not_touch_the_counter(
+    person_subject: SearchSubject,
+) -> None:
+    """«Счета в банках» — раздел, а не источник, и в «ответили N из M» не идёт.
+
+    Самый дешёвый способ завести раздел — выдумать провайдера, и он портит три
+    места разом: знаменатель счётчика, строку «Не проверено: …» на первом экране
+    и карточку в чате. Все три говорили бы «могли, но не стали» о том, чего
+    сделать нельзя.
+    """
+    report = _report_for(person_subject, [])
+    answered, total, missing = render.coverage(report)
+
+    assert total == len(render.EXPECTED_PROVIDERS)
+    assert answered == 0
+    assert "Счета в банках" not in missing
+    assert "Счета в банках" not in render.coverage_line(report)
+    assert "Счета в банках" not in render.sources_section(report)
+
+
 async def test_report_page_never_says_clean_about_an_unchecked_source(
     web_container: Container,
 ) -> None:
@@ -798,6 +848,13 @@ def test_source_states_are_distinguishable_without_colour() -> None:
     assert all(mark.strip() for mark in unchecked_marks | answered_marks)
     # Ответивший и непроверенный источник не могут совпасть по знаку.
     assert not (unchecked_marks & answered_marks)
+
+    # «Источника нет» не сводится ни к тому, ни к другому: спрашивать некого, и
+    # ни знак, ни класс чипа не должны совпасть ни с одной из двух групп. Класс
+    # обязан жить и в печатном блоке — иначе на бумаге останется общий чип.
+    assert NO_SOURCE_STATE.mark not in unchecked_marks | answered_marks
+    assert "unchecked" not in render.state_tag(NO_SOURCE_STATE)
+    assert ".tag.nosource{" in _print_css()
 
     # Разметка несёт знак отдельным элементом, а не только цветной чип.
     for _name, result in UNCHECKED_STATES:
