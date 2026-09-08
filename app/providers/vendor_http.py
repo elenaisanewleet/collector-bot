@@ -12,10 +12,12 @@ vendor. Supply nothing and the provider stays ``NOT_CONFIGURED``.
 from __future__ import annotations
 
 import base64
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from app.config import AuthStyle
 from app.providers.base import ProviderUnavailableError
@@ -40,6 +42,48 @@ class VendorConfig:
     @property
     def is_usable(self) -> bool:
         return bool(self.base_url and self.path and self.field_map_path is not None)
+
+
+#: Плейсхолдер в пути: ``/lookup/{phone}``. Имя внутри скобок — ключ из params.
+_PLACEHOLDER = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
+
+
+def _fill_path(path: str, params: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Подставить значения в путь и убрать их из параметров запроса.
+
+    Зачем. Половина API принимает значение в пути (``/lookup/+79991234567``), а
+    не параметром, и адаптер это обещал: в документации моста «ФИО по телефону»
+    прямо написано, что номер подставляется в ``{phone}``. На деле путь уезжал
+    в запрос как есть, httpx экранировал скобки, и на сервер уходило
+    ``/lookup/%7Bphone%7D?phone=%2B7...``. Ответ — 404, и ни одной подсказки,
+    почему: источник настроен, ключ верный, а имя «не определилось».
+
+    Подставленное **не дублируется** в query. Иначе номер уходил бы дважды —
+    в пути и параметром, — и вендор, разбирающий строку запроса строго,
+    отвечал бы ошибкой на верно настроенный мост.
+
+    Значение экранируется целиком, включая ``/``: телефон ``+7...`` обязан стать
+    ``%2B7...``, а не разъехаться на два сегмента пути. Плейсхолдер, которому
+    нечего подставить, — это ошибка настройки, и она называется вслух: молчаливая
+    подстановка пустой строки дала бы тот же необъяснимый 404.
+    """
+    if "{" not in path:
+        return path, dict(params)
+
+    used: set[str] = set()
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in params or params[name] is None:
+            raise ProviderUnavailableError(
+                "bad_path_template",
+                f"В пути источника есть {{{name}}}, а значения для него нет",
+            )
+        used.add(name)
+        return quote(str(params[name]), safe="")
+
+    filled = _PLACEHOLDER.sub(replace, path)
+    return filled, {key: value for key, value in params.items() if key not in used}
 
 
 class VendorJsonClient:
@@ -68,7 +112,7 @@ class VendorJsonClient:
     async def fetch_records(self, params: Mapping[str, Any]) -> tuple[list[RecordDict], str]:
         field_map = self._load_field_map()
         headers = self._auth_headers()
-        query = dict(params)
+        path, query = _fill_path(self._config.path, params)
         query.update(self._auth_query())
 
         async with build_client(
@@ -79,7 +123,7 @@ class VendorJsonClient:
             payload, raw = await request_json(
                 client,
                 self._config.method,
-                self._config.path,
+                path,
                 params=query if self._config.method.upper() == "GET" else None,
                 json_body=query if self._config.method.upper() != "GET" else None,
                 retry=self._retry,
