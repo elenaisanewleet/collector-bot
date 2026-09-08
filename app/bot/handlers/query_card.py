@@ -213,6 +213,21 @@ def _starts_new_person(text: str | None) -> bool:
     return classify_fragment(text).kind is FragmentKind.PHONE
 
 
+def _asked_phone(card: Card) -> bool:
+    """Спрошен ли телефон нарочно — кнопкой «Телефон» на карточке."""
+    return card.awaiting_field == Field.PHONE.value
+
+
+def _describes_someone(card: Card) -> bool:
+    """Описан ли в карточке КОНКРЕТНЫЙ человек, а не просто набран номер.
+
+    Именно человек: фамилия, имя, дата рождения, ИНН, паспорт. Телефон и
+    госномер сюда не входят — с них разговор и начинается, и пришедший следом
+    номер не должен стирать сам себя.
+    """
+    return any((card.last_name, card.first_name, card.middle_name, card.birth_date, card.inn))
+
+
 def _pending_conflict(card: Card):  # type: ignore[no-untyped-def]
     """Отложенное ФИО, если вопрос «другой человек или исправление» ещё открыт."""
     from app.domain.identity import NameParseError, parse_fio
@@ -235,13 +250,22 @@ async def absorb(message: Message, container: Container, user_id: int) -> None:
     запрос, оно продолжает предыдущий.
     """
     card = await container.query_cards.load(user_id, message.chat.id)
-    if card.checked_at is not None and _starts_new_person(message.text):
-        # Присланный телефон после законченной проверки — это следующий
-        # должник, а не добавка к прошлому. Дописать номер в проверенную
-        # карточку значит выпустить отчёт про прежнего человека под новым
-        # номером. Остальные поля («дошлите ИНН — перепроверю того же»)
-        # по-прежнему дописываются: телефон здесь единственный ключ, с которого
-        # начинается НОВЫЙ человек.
+    if _starts_new_person(message.text) and _describes_someone(card) and not _asked_phone(card):
+        # Присланный телефон — это СЛЕДУЮЩИЙ должник, а не добавка к прошлому.
+        #
+        # Раньше условие требовало ещё и законченной проверки, и в этом была
+        # дыра: незаконченная карточка не чистилась. Заказчик ввёл номер и
+        # увидел его рядом с фамилией «Абаджян», оставшейся от прошлых попыток,
+        # — «это вообще не тот человек, это мой номер». До отчёта про чужого
+        # человека оттуда один шаг, а отчёт несут в суд.
+        #
+        # Чистится только когда в карточке УЖЕ кто-то описан: телефон, дописанный
+        # к пустой карточке или к своему же номеру, ничего не начинает заново.
+        # И не чистится, когда номер спросили кнопкой «Телефон»: оператор сам
+        # попросил это поле у ЭТОГО человека, стирать его было бы наглостью.
+        # Остальные поля («дошлите ИНН — перепроверю того же») по-прежнему
+        # дописываются: телефон здесь единственный ключ, с которого начинается
+        # новый человек.
         card = await container.query_cards.wipe(user_id, message.chat.id)
         container.query_cards.begin_steps(card)
     applied = container.query_cards.apply(card, message.text or "")

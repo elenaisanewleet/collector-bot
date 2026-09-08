@@ -819,3 +819,47 @@ async def test_starting_a_new_person_removes_the_previous_card(
     await feed(dispatcher, bot, message=make_message("Проверить человека"))
 
     assert len(sent.deleted) > deleted, "прежняя карточка осталась висеть в чате"
+
+
+async def test_a_new_phone_does_not_inherit_the_previous_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Номер начинает СЛЕДУЮЩЕГО должника, даже если прошлого не доверили.
+
+    Со скриншота заказчика: она ввела свой номер и увидела его рядом с
+    фамилией «Абаджян», оставшейся от прошлых попыток, — «это вообще не тот
+    человек, это мой номер».
+
+    Раньше карточка чистилась только после ЗАКОНЧЕННОЙ проверки, а
+    незаконченная тащила чужую фамилию к новому номеру. Отсюда один шаг до
+    отчёта про другого человека, а отчёт несут в суд.
+    """
+    await feed(dispatcher, bot, message=make_message("Абаджян"))
+    assert "Абаджян" in last(sent)
+
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+
+    screen = last(sent)
+    assert "Абаджян" not in screen, "чужая фамилия прилипла к новому номеру"
+    assert "***-**-45" in screen, "сам номер до карточки не доехал"
+
+
+async def test_the_phone_button_adds_to_the_same_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """А вот кнопка «Телефон» дописывает номер ТОМУ ЖЕ человеку.
+
+    Обратная сторона правила выше, и без неё оно вредит: оператор набрал ФИО,
+    нарочно нажал «Телефон», прислал номер — и потерял бы всё набранное.
+    Разница в том, кто попросил поле: бот по просьбе оператора или оператор
+    сам прислал номер ни с того ни с сего.
+    """
+    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(dispatcher, bot, callback_query=make_callback("qc:ask:phone"))
+
+    await feed(dispatcher, bot, message=make_message("+7 916 123 45 67"))
+
+    # Ищется по всей переписке: полное ФИО опознаёт должника однозначно, и
+    # последним сообщением уходит отчёт, а не карточка.
+    assert "Тестов" in sent.joined, "нажатие «Телефон» стёрло набранного человека"
+    assert "***-**-67" in sent.joined, "номер не дописался к тому же человеку"
