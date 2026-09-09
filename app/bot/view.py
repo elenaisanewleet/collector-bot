@@ -56,7 +56,12 @@ def progress_bar(fraction: float, *, width: int = BAR_WIDTH) -> str:
 
 
 def searching(
-    stage_index: int, *, subject_name: str, accepted: str | None = None, note: str | None = None
+    stage_index: int,
+    *,
+    subject_name: str,
+    accepted: str | None = None,
+    note: str | None = None,
+    waited_seconds: int | None = None,
 ) -> str:
     """Сообщение о ходе проверки. Правится на месте, а не шлётся заново.
 
@@ -66,16 +71,33 @@ def searching(
 
     ``note`` — чего не хватило и что это закрывает. Стоит здесь, а не только под
     отчётом, потому что ничего не стоит и учит: оператор читает её, пока ждёт.
+
+    ``waited_seconds`` — сколько идёт проверка. Появляется, когда стадии
+    кончились, а ответа ещё нет: четыре стадии проходят за пять секунд, а один
+    источник вправе думать до полутора минут. Без этой строки сообщение
+    застывало на «Считаю перспективу…» и читалось как зависший бот — именно так
+    его и прочитали.
     """
     stage_index = max(0, min(len(STAGES) - 1, stage_index))
     fraction = (stage_index + 1) / (len(STAGES) + 1)
     lines = [f"Проверяю: {subject_name}"]
     if accepted:
         lines.append(accepted)
-    lines.extend(("", progress_bar(fraction), STAGES[stage_index] + "…"))
+    stage = STAGES[stage_index] + "…"
+    if waited_seconds is not None:
+        stage = f"{stage} {waited_seconds} с"
+    lines.extend(("", progress_bar(fraction), stage))
+    if waited_seconds is not None:
+        lines.append(WAITING_NOTE)
     if note:
         lines.append(note)
     return "\n".join(lines)
+
+
+#: Почему ждём. Источники отвечают по-разному, и самый медленный держит всех:
+#: у каждого потолок в полторы минуты, и это не поломка, а цена честного «мы
+#: спросили всех».
+WAITING_NOTE = "Источники отвечают по-разному — жду самый медленный."
 
 
 def accepted_line(subject: SearchSubject) -> str | None:

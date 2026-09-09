@@ -7,6 +7,7 @@ that is neither collection nor rendering lives here or in the service layer.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Sequence
 from contextlib import suppress
 from datetime import timedelta
@@ -32,6 +33,10 @@ logger = get_logger(__name__)
 # Как часто двигать полосу, пока идёт проверка. Реже, чем лимит Telegram на
 # правку сообщения, и достаточно часто, чтобы это читалось как движение.
 STAGE_INTERVAL_SECONDS = 1.6
+#: Как часто сообщение обновляется ПОСЛЕ того, как стадии кончились. Реже, чем
+#: стадии: сказать больше нечего, кроме «я ещё работаю», а правки Telegram
+#: считает.
+WAITING_INTERVAL_SECONDS = 5.0
 
 #: Показывается, пока идёт проверка, и только когда правда. Три источника из
 #: шести ищут только по ИНН физлица; сказать об этом до отчёта ничего не стоит и
@@ -113,7 +118,7 @@ async def run_and_send_report(
         return None
 
     accepted = view.accepted_line(subject)
-    note = "\n".join([*notes, *filter(None, (_progress_note(subject),))]) or None
+    note = "\n".join([*notes, *filter(None, (_progress_note(subject, container),))]) or None
     notice = await message.answer(
         view.searching(0, subject_name=subject.display_name, accepted=accepted, note=note)
     )
@@ -170,11 +175,26 @@ async def run_and_send_report(
     return report
 
 
-def _progress_note(subject: SearchSubject) -> str | None:
-    """Что не откроется на этих данных. Только для поиска по человеку."""
+def _progress_note(subject: SearchSubject, container: Container) -> str | None:
+    """Что не откроется на этих данных. Только для поиска по человеку.
+
+    МОЛЧИТ, ЕСЛИ МОСТ СЕЙЧАС ПОЙДЁТ ЗА ИНН. Строка «Без ИНН не спрошу
+    банкротство, ИП и арбитраж» писалась ДО поиска и по субъекту, каким он был
+    до него, — а ИНН добывается ВНУТРИ поиска, мостом «паспорт → ИНН». С
+    паспортом на руках предсказание оказывалось ложным ровно тогда, когда всё
+    получалось: бот обещал не спросить три источника и тут же их спрашивал.
+
+    Это и был вопрос владелицы — «надо же ИНН доставать, почему в ФНС нельзя
+    получить ИНН». Можно и достаётся; врала строка, а не мост.
+    """
     if subject.search_type != SearchType.PERSON.value:
         return None
-    return NO_INN_NOTE if individual_inn(subject) is None else None
+    if individual_inn(subject) is not None:
+        return None
+    bridge = container.registry.inn_bridge
+    if bridge is not None and bridge.will_query(subject):
+        return None
+    return NO_INN_NOTE
 
 
 async def _tick_stages(
@@ -185,12 +205,35 @@ async def _tick_stages(
     Отдельная задача, потому что сам поиск ничего о показе не знает и знать не
     должен. Отменяется, как только результат готов.
     """
+    started = time.monotonic()
     try:
         for index in range(1, len(view.STAGES)):
             await asyncio.sleep(STAGE_INTERVAL_SECONDS)
             with suppress(Exception):  # правка сообщения — дело необязательное
                 await notice.edit_text(
                     view.searching(index, subject_name=subject_name, accepted=accepted, note=note)
+                )
+        # Стадии кончились, а проверка — нет, и вот тут раньше всё замирало.
+        # Четыре стадии по 1,6 с — это пять секунд, а бюджет одного источника
+        # 150: полоса застывала на «Считаю перспективу…» и не двигалась минуту,
+        # две, три. Владелица прочитала это ровно так, как оно выглядит: «ну и
+        # всё зависло».
+        #
+        # Поэтому дальше сообщение продолжает жить и называет, сколько идёт.
+        # Реже — раз в пять секунд: Telegram считает правки, а нового сказать
+        # тут нечего, кроме «я ещё работаю».
+        while True:
+            await asyncio.sleep(WAITING_INTERVAL_SECONDS)
+            waited = int(time.monotonic() - started)
+            with suppress(Exception):
+                await notice.edit_text(
+                    view.searching(
+                        len(view.STAGES) - 1,
+                        subject_name=subject_name,
+                        accepted=accepted,
+                        note=note,
+                        waited_seconds=waited,
+                    )
                 )
     except asyncio.CancelledError:  # pragma: no cover - обычный путь отмены
         pass
