@@ -48,7 +48,14 @@ from app.bot.report_actions import (
 )
 from app.bot.view import missing_reason
 from app.container import Container
-from app.domain.enums import PROVIDER_TITLES, ProviderStatus, Region, SearchType
+from app.domain.enums import (
+    PROVIDER_TITLES,
+    MissingInput,
+    ProviderName,
+    ProviderStatus,
+    Region,
+    SearchType,
+)
 from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport, InternalDebtorRecord
 from app.logging_setup import get_logger
@@ -711,8 +718,15 @@ def run_notes(subject: SearchSubject, container: Container) -> list[str]:
 
     Формулировка одинаковая для «не спрашивали» и «пропустили»: разница между
     ними — про оператора, а не про качество проверки, и в отчёте ей не место.
+
+    ИСТОЧНИКИ, КОТОРЫЕ ОТКРОЕТ МОСТ, ОТСЮДА ВЫЧЁРКИВАЮТСЯ. Оговорка считается
+    ДО поиска, а ИНН добывается ВНУТРИ него — мостом «паспорт → ИНН». С
+    паспортом на руках строка «Не спрашивали: ЕФРСБ, ФНС, Суды — нужен ИНН»
+    оказывалась ложной ровно тогда, когда всё срабатывало: бот обещал не
+    спросить три источника и тут же их спрашивал. Что вышло на самом деле,
+    говорит блок ИСТОЧНИКИ в отчёте — он пишется по факту, а не по прогнозу.
     """
-    gaps = coverage.blocked(subject, container.registry)
+    gaps = _without_bridged(coverage.blocked(subject, container.registry), subject, container)
     if not gaps:
         return []
     reasons = "; ".join(
@@ -721,6 +735,23 @@ def run_notes(subject: SearchSubject, container: Container) -> list[str]:
         for reason, names in gaps.items()
     )
     return [f"Не спрашивали: {reasons}. {card_view.NOT_ASKED}"]
+
+
+def _without_bridged(
+    gaps: dict[tuple[MissingInput, ...], tuple[ProviderName, ...]],
+    subject: SearchSubject,
+    container: Container,
+) -> dict[tuple[MissingInput, ...], tuple[ProviderName, ...]]:
+    """Убрать из «не спрашивали» тех, кого мост вот-вот откроет.
+
+    Мост идёт за ИНН до внешней волны и часто его приносит. Обещать заранее,
+    что три источника останутся неспрошенными, — значит соврать в половине
+    случаев, причём в тех самых, где всё получилось.
+    """
+    bridge = container.registry.inn_bridge
+    if bridge is None or not bridge.will_query(subject):
+        return gaps
+    return {reason: names for reason, names in gaps.items() if MissingInput.INN not in reason}
 
 
 async def run_card(

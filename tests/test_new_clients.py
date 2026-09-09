@@ -23,13 +23,18 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiohttp.test_utils import TestClient, TestServer
 
-from app.bot import card_view
+from app.bot import card_view, common, view
 from app.config import Settings
 from app.container import Container
 from app.db.repository import DebtorRepository, PhoneLookupRepository
-from app.domain.enums import ProviderName, ProviderStatus
+from app.domain.enums import MissingInput, ProviderName, ProviderStatus, SearchType
 from app.domain.identity import PersonName, SearchSubject
 from app.domain.models import ProviderResult
+from app.providers.identity_bridge import (
+    InnBridgeProvider,
+    InnBridgeResult,
+    missing_bridge_fields,
+)
 from app.providers.phone_bridge import PhoneNameProvider, PhoneNameResult
 from app.providers.registry import ProviderRegistry
 from app.services.phone_lookups import PhoneLookupService
@@ -465,3 +470,111 @@ def test_the_interface_examples_name_nobody_real() -> None:
 
     for real in ("Клочков", "24.11.1994", "9851982945"):
         assert real not in shown, f"в примерах интерфейса снова настоящие данные: {real}"
+
+
+# ------------------------------------------- 5. ожидание и обещания про ИНН
+
+
+def test_the_progress_message_keeps_moving_after_the_stages_run_out() -> None:
+    """Стадии кончились — сообщение обязано остаться живым.
+
+    Четыре стадии проходят за пять секунд, а один источник вправе думать до
+    полутора минут. Раньше полоса застывала на «Считаю перспективу…» и не
+    менялась ни разу до самого отчёта — владелица прочитала это ровно так, как
+    оно выглядит: «ну и всё зависло».
+    """
+    frozen = view.searching(3, subject_name="Иванова Мария Сергеевна")
+    alive = view.searching(3, subject_name="Иванова Мария Сергеевна", waited_seconds=47)
+
+    assert "Считаю перспективу…" in frozen
+    assert "47 с" in alive, "сообщение не говорит, сколько уже идёт"
+    assert view.WAITING_NOTE in alive, "не сказано, почему ждём"
+    assert alive != frozen, "сообщение не изменилось — Telegram не покажет движения"
+
+
+class _NoInnBridge(PhoneNameProvider):
+    """Мост по телефону, отдающий паспорт, но НЕ ИНН — как живой depsearch.
+
+    Это не упрощение ради теста: на живом ответе ИНН физлица нет вовсе (в поле
+    ``inn`` там лежит одиннадцатизначный СНИЛС), и весь смысл моста
+    «паспорт → ИНН» именно в этом случае.
+    """
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        return PhoneNameResult(
+            provider=ProviderName.PHONE_BRIDGE,
+            status=ProviderStatus.SUCCESS,
+            records=(),
+            name=FOUND,
+            birth_date=date(1985, 7, 5),
+            passport=PASSPORT,
+            snils=SNILS,
+            passport_issued=ISSUED,
+        )
+
+
+class _FnsBridge(InnBridgeProvider):
+    """Мост «паспорт → ИНН», который настроен и готов идти. Без сети."""
+
+    name = ProviderName.INN_BRIDGE
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
+        return missing_bridge_fields(subject)
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        return InnBridgeResult(
+            provider=ProviderName.INN_BRIDGE,
+            status=ProviderStatus.SUCCESS,
+            records=(),
+            inn=INN,
+        )
+
+
+async def test_the_bot_does_not_promise_to_skip_what_the_bridge_will_unlock(
+    bridged: Container, bot: Bot, sent: SentMessages
+) -> None:
+    """С паспортом на руках «не спрошу без ИНН» — ложь, и ровно в удачном случае.
+
+    Оговорка считается ДО поиска, а ИНН добывается ВНУТРИ него, мостом
+    «паспорт → ИНН». Бот обещал не спрашивать банкротство, ИП и арбитраж — и
+    тут же их спрашивал. Вопрос владелицы был именно об этом: «надо же ИНН
+    доставать, почему в ФНС нельзя получить ИНН». Можно; врала строка.
+
+    Что вышло на самом деле, говорит блок ИСТОЧНИКИ в отчёте: он пишется по
+    факту, а не по прогнозу.
+    """
+    bridged.registry = ProviderRegistry(
+        internal=bridged.registry.internal,
+        external=bridged.registry.external,
+        inn_bridge=_FnsBridge(bridged.settings),
+        phone_bridge=_NoInnBridge(bridged.settings),
+    )
+    await feed(dispatcher_for(bridged), bot, message=make_message(PHONE))
+
+    answer = sent.joined
+    assert "Без ИНН не спрошу" not in answer, "обещание не спрашивать дано при живом мосте"
+    assert "нужен ИНН физлица" not in answer, "источники объявлены неспрошенными заранее"
+
+
+def test_the_promise_stays_when_there_is_no_passport_to_bridge_with(
+    container: Container,
+) -> None:
+    """А без паспорта оговорка обязана остаться: мост не пойдёт, и это правда."""
+    subject = SearchSubject(
+        search_type=SearchType.PERSON.value,
+        name=FOUND,
+        birth_date=date(1985, 7, 5),
+    )
+
+    assert common._progress_note(subject, container) == common.NO_INN_NOTE
