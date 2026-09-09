@@ -81,30 +81,25 @@ async def start_person_card(message: Message, container: Container, user_id: int
     кнопкой и вводом стоял ровно поперёк него. Остальные шесть типов никуда не
     делись, они за «Другие способы поиска».
     """
-    card = await container.query_cards.load(user_id, message.chat.id)
-    if card.checked_at is not None or card.stale:
-        # Проверенная карточка чистится. Второй должник подряд — обычный
-        # рабочий случай: оператор жмёт ту же кнопку и вводит следующий телефон.
-        # До этой правки он получал карточку ПРЕДЫДУЩЕГО человека, новый номер
-        # ложился рядом с чужой фамилией, и отчёт выходил про прошлого должника,
-        # подписанный телефоном нового, — с чужим долгом и чужой пошлиной.
-        # Условие ``blank`` этот случай не ловит: у проверенной заполнено всё.
-        #
-        # Остывшая — по той же причине, только беда другая. Недособранная
-        # карточка переживала и перезапуск бота, и сутки простоя: человек жал
-        # «Проверить человека» и получал экран с чужим телефоном, который бот
-        # уже забыл, и с «пропустили» в трёх полях, которых он не пропускал.
-        # Выглядит это поломкой, и справедливо.
-        card = await container.query_cards.wipe(user_id, message.chat.id)
-    # Начинают — значит карточка обязана быть видна прямо сейчас, даже если её
-    # сообщение уже уехало вверх чата.
-    container.query_cards.forget_screen(card)
-    card.card_message_id = None
-    if card.blank:
-        # Пустая карточка — это начало разговора, и начинается он вопросами по
-        # одному полю. Недособранная не трогается: оператор вернулся к своему
-        # человеку, а не начал нового.
-        container.query_cards.begin_steps(card)
+    # ЧИСТИТСЯ ВСЕГДА. Кнопка называется «Проверить человека» — человека, то
+    # есть следующего. Раньше чистились только проверенная и остывшая карточки,
+    # а недособранная сохранялась «чтобы оператор вернулся к своему человеку».
+    # На деле вышло обратное: заказчик нажимал кнопку, ожидая начать заново, и
+    # получал ту же карточку с чужим телефоном и чужой фамилией вперемешку —
+    # «продолжается сбор данных какой-то солянки, нет даже сброса».
+    #
+    # Вернуться к недособранному по-прежнему можно, и проще прежнего: просто
+    # дописать поле сообщением, не трогая кнопку.
+    previous = await container.query_cards.load(user_id, message.chat.id)
+    card = await container.query_cards.wipe(user_id, message.chat.id)
+    # Прежняя карточка УДАЛЯЕТСЯ, а не просто забывается. Забывали — и она
+    # оставалась висеть в чате: заказчик видел несколько одинаковых карточек
+    # подряд и жаловался, что бот «шлёт одно и то же». Карточка в чате должна
+    # быть ровно одна, а новое сообщение нужно затем, чтобы она оказалась внизу,
+    # под тем, что человек только что написал.
+    card.card_message_id = previous.card_message_id
+    await _drop_card_message(message, container, card)
+    container.query_cards.begin_steps(card)
     await show(message, container, card)
 
 
@@ -152,15 +147,24 @@ async def show(
         notice=notice,
         conflict=conflict,
     )
-    if _unchanged(container, card, screen):
-        if not answering:
-            return
-        # Правкой на месте тут не обойтись: Telegram отвечает на одинаковую
-        # правку 400 «message is not modified», и сообщение осталось бы там же,
-        # выше по чату, — то есть для написавшего ничего бы не изменилось.
+    if answering:
+        # ОТВЕТ НА СООБЩЕНИЕ ВСЕГДА ПЕРЕЕЗЖАЕТ ВНИЗ, и это не расточительство.
+        #
+        # Правка на месте выглядит идеально в коде и не работает в чате:
+        # сообщение карточки остаётся там, где было, а человек смотрит вниз, где
+        # его собственный текст. Заказчик прислал это трижды одними словами —
+        # «опять молчание бота на номер», — хотя карточка исправно обновлялась,
+        # просто восемью сообщениями выше.
+        #
+        # Дублей при этом не будет: прежнее сообщение удаляется. В чате
+        # остаётся ровно одна карточка, и она внизу — под тем, что человек
+        # только что написал.
+        #
+        # Правка на месте осталась для нажатий на кнопки: там карточка на
+        # экране, её видно, и переезд был бы дёрганьем.
         await _drop_card_message(message, container, card)
-        card.card_message_id = None
-        container.query_cards.forget_screen(card)
+    elif _unchanged(container, card, screen):
+        return
 
     bot = message.bot
     if bot is not None and card.card_message_id is not None:
@@ -210,6 +214,21 @@ def _starts_new_person(text: str | None) -> bool:
     return classify_fragment(text).kind is FragmentKind.PHONE
 
 
+def _asked_phone(card: Card) -> bool:
+    """Спрошен ли телефон нарочно — кнопкой «Телефон» на карточке."""
+    return card.awaiting_field == Field.PHONE.value
+
+
+def _describes_someone(card: Card) -> bool:
+    """Описан ли в карточке КОНКРЕТНЫЙ человек, а не просто набран номер.
+
+    Именно человек: фамилия, имя, дата рождения, ИНН, паспорт. Телефон и
+    госномер сюда не входят — с них разговор и начинается, и пришедший следом
+    номер не должен стирать сам себя.
+    """
+    return any((card.last_name, card.first_name, card.middle_name, card.birth_date, card.inn))
+
+
 def _pending_conflict(card: Card):  # type: ignore[no-untyped-def]
     """Отложенное ФИО, если вопрос «другой человек или исправление» ещё открыт."""
     from app.domain.identity import NameParseError, parse_fio
@@ -232,13 +251,22 @@ async def absorb(message: Message, container: Container, user_id: int) -> None:
     запрос, оно продолжает предыдущий.
     """
     card = await container.query_cards.load(user_id, message.chat.id)
-    if card.checked_at is not None and _starts_new_person(message.text):
-        # Присланный телефон после законченной проверки — это следующий
-        # должник, а не добавка к прошлому. Дописать номер в проверенную
-        # карточку значит выпустить отчёт про прежнего человека под новым
-        # номером. Остальные поля («дошлите ИНН — перепроверю того же»)
-        # по-прежнему дописываются: телефон здесь единственный ключ, с которого
-        # начинается НОВЫЙ человек.
+    if _starts_new_person(message.text) and _describes_someone(card) and not _asked_phone(card):
+        # Присланный телефон — это СЛЕДУЮЩИЙ должник, а не добавка к прошлому.
+        #
+        # Раньше условие требовало ещё и законченной проверки, и в этом была
+        # дыра: незаконченная карточка не чистилась. Заказчик ввёл номер и
+        # увидел его рядом с фамилией «Абаджян», оставшейся от прошлых попыток,
+        # — «это вообще не тот человек, это мой номер». До отчёта про чужого
+        # человека оттуда один шаг, а отчёт несут в суд.
+        #
+        # Чистится только когда в карточке УЖЕ кто-то описан: телефон, дописанный
+        # к пустой карточке или к своему же номеру, ничего не начинает заново.
+        # И не чистится, когда номер спросили кнопкой «Телефон»: оператор сам
+        # попросил это поле у ЭТОГО человека, стирать его было бы наглостью.
+        # Остальные поля («дошлите ИНН — перепроверю того же») по-прежнему
+        # дописываются: телефон здесь единственный ключ, с которого начинается
+        # новый человек.
         card = await container.query_cards.wipe(user_id, message.chat.id)
         container.query_cards.begin_steps(card)
     applied = container.query_cards.apply(card, message.text or "")
@@ -256,7 +284,7 @@ async def absorb(message: Message, container: Container, user_id: int) -> None:
         # Ответ не подошёл под заданный вопрос. Шаг остаётся заданным, вперёд
         # сценарий не идёт: вопрос, который не получил ответа, обязан
         # задаться ещё раз, а не молча пропасть.
-        await show(message, container, applied.card, notice=applied.notice)
+        await show(message, container, applied.card, notice=applied.notice, answering=True)
         return
     await settle(message, container, applied.card, user_id, notice=applied.notice)
 
@@ -273,6 +301,15 @@ async def settle(
     notice: str | None = None,
 ) -> None:
     """Что делать после того, как в карточку легло новое поле.
+
+    Все ``show`` отсюда идут с ``answering=True``, и это не украшение. В эту
+    функцию попадают ТОЛЬКО из :func:`absorb`, то есть в ответ на набранное
+    человеком сообщение, — а на сообщение бот обязан ответить всегда, даже
+    когда экран не изменился ни на символ. Иначе выходит то, что заказчик
+    видит как «ввёл номер, и ничего не произошло».
+
+    Первый раз это чинилось только в одной ветке absorb, и дефект вернулся
+    через несколько часов другой дорогой: тем же молчанием, но из settle.
 
     Здесь живёт правило, которое важнее порядка шагов: **как только человек
     опознан в выгрузке однозначно — вопросы прекращаются**. Владелица сказала
@@ -295,7 +332,7 @@ async def settle(
     случился бы без нажатия на единственную платящую кнопку.
     """
     if card.pending_ten or card.pending_name:
-        await show(message, container, card, notice=notice)
+        await show(message, container, card, notice=notice, answering=True)
         return
 
     guided = card.guided
@@ -304,7 +341,7 @@ async def settle(
         # догадка. По ней выгрузка не спрашивается: подставленная из неё дата
         # рождения легла бы в карточку поверх той, которую оператор намеренно
         # пропустил.
-        await show(message, container, card, notice=notice)
+        await show(message, container, card, notice=notice, answering=True)
         return
 
     # По одному номеру искать в выгрузке нечем: телефона в ней нет и не будет.
@@ -367,6 +404,7 @@ async def settle(
         message,
         container,
         card,
+        answering=True,
         notice=bridge_note
         or _ambiguous(found, card)
         or _once(container, card, _missed(found, card))
@@ -655,7 +693,9 @@ async def recognised(
 
     # Оговорка к разбору не выбрасывается ради хорошей новости: угаданное поле
     # надо показать даже тогда.
-    await show(message, container, card, notice=f"{notice} {found}" if notice else found)
+    await show(
+        message, container, card, notice=f"{notice} {found}" if notice else found, answering=True
+    )
 
 
 # ---------------------------------------------------------------- прогон

@@ -745,3 +745,153 @@ async def test_a_phone_nobody_has_leads_to_the_surname_question(
     screen = last(sent)
     assert "По номеру телефона никого не нашёл" in screen, "поиск был, а сказано о нём не было"
     assert "✎ Фамилия" in screen, "разговор упёрся в тот же вопрос"
+
+
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        pytest.param(["79851982945", "79851982945"], id="тот же номер дважды"),
+        pytest.param(["Тестов", "Тестов"], id="та же фамилия дважды"),
+        pytest.param(["12.03.1985", "12.03.1985"], id="та же дата дважды"),
+        pytest.param(["   ", "   "], id="пробелы дважды"),
+        pytest.param(["А123ВС77", "А123ВС77"], id="тот же госномер дважды"),
+        pytest.param(["не пойми что", "не пойми что"], id="мусор дважды"),
+        pytest.param(["79851982945", "не пойми что"], id="номер, потом мусор"),
+    ],
+)
+async def test_no_message_is_ever_left_without_an_answer(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, conversation: list[str]
+) -> None:
+    """На КАЖДОЕ сообщение приходит ответ. Без исключений и на любой дороге.
+
+    Дефект возвращался дважды, и оба раза заказчик видел одно: «ввёл номер, и
+    ничего не произошло». Первый раз молчал ранний выход из ``absorb``; его
+    починили — и через несколько часов то же молчание пришло другой дорогой,
+    из ``settle``, где ``show`` звался без ``answering``.
+
+    Поэтому тест перебирает пути, а не случай: разные типы ввода, повтор того
+    же значения, мусор. Экран при этом может не измениться ни на символ —
+    отвечать всё равно обязаны, хотя бы переставив карточку вниз.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+
+    for step, text in enumerate(conversation, start=1):
+        before = len(sent.texts)
+        await feed(dispatcher, bot, message=make_message(text))
+
+        assert len(sent.texts) > before, f"шаг {step}: на «{text}» бот промолчал"
+
+
+async def test_the_search_button_always_starts_a_new_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """«Проверить человека» — значит СЛЕДУЮЩЕГО человека, всегда.
+
+    Раньше чистились только проверенная и остывшая карточки, а недособранная
+    сохранялась «чтобы оператор вернулся к своему человеку». Вышло обратное:
+    заказчик нажимал кнопку, ожидая начать заново, и получал ту же карточку с
+    чужим телефоном и чужой фамилией вперемешку. Дословно: «продолжается сбор
+    данных какой-то солянки, нет даже сброса».
+
+    Вернуться к недособранному по-прежнему можно и проще прежнего: дописать
+    поле сообщением, не трогая кнопку.
+    """
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("Тестов"))
+    assert "Тестов" in last(sent)
+
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+
+    screen = last(sent)
+    assert "Тестов" not in screen, "фамилия прежнего должника осталась в карточке"
+    assert "***-**-45" not in screen, "телефон прежнего должника остался в карточке"
+    assert "✎" in screen, "после сброса бот обязан задать первый вопрос"
+
+
+async def test_the_card_moves_down_to_the_answer_and_leaves_no_copy(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Одна карточка, всегда внизу, без копий.
+
+    Требование менялось, и оба его конца записаны заказчиком дословно:
+    «надо чтобы просто обновлялось одно сообщение» и, тремя правками позже,
+    «опять молчание бота на номер». Второе — про правку на месте: карточка
+    исправно обновлялась, но восемью сообщениями выше, и человек смотрел вниз,
+    где её не было.
+
+    Обе жалобы снимает одно решение: прежнее сообщение удаляется, новое встаёт
+    под тем, что человек написал. Копий не остаётся, и ответ видно.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    sends, deleted = len(sent.sends), len(sent.deleted)
+
+    await feed(dispatcher, bot, message=make_message("Тестов"))
+
+    assert len(sent.sends) > sends, "ответ не появился внизу — его не увидят"
+    assert len(sent.deleted) > deleted, "прежняя карточка осталась копией в чате"
+
+
+async def test_starting_a_new_person_removes_the_previous_card(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """В чате остаётся ровно одна карточка, а не стопка одинаковых.
+
+    Прежняя карточка забывалась, но не удалялась, и висела в переписке. С
+    каждым нажатием «Проверить человека» их становилось больше — заказчик
+    прислал скриншот со словами «несколько раз пришло одно сообщение».
+
+    Новое сообщение при этом нужно: карточка обязана оказаться ВНИЗУ, под тем,
+    что человек только что написал, иначе правка на месте происходит выше по
+    чату и её не видно.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    await feed(dispatcher, bot, message=make_message("Тестов"))
+    deleted = len(sent.deleted)
+
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+
+    assert len(sent.deleted) > deleted, "прежняя карточка осталась висеть в чате"
+
+
+async def test_a_new_phone_does_not_inherit_the_previous_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Номер начинает СЛЕДУЮЩЕГО должника, даже если прошлого не доверили.
+
+    Со скриншота заказчика: она ввела свой номер и увидела его рядом с
+    фамилией «Абаджян», оставшейся от прошлых попыток, — «это вообще не тот
+    человек, это мой номер».
+
+    Раньше карточка чистилась только после ЗАКОНЧЕННОЙ проверки, а
+    незаконченная тащила чужую фамилию к новому номеру. Отсюда один шаг до
+    отчёта про другого человека, а отчёт несут в суд.
+    """
+    await feed(dispatcher, bot, message=make_message("Абаджян"))
+    assert "Абаджян" in last(sent)
+
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+
+    screen = last(sent)
+    assert "Абаджян" not in screen, "чужая фамилия прилипла к новому номеру"
+    assert "***-**-45" in screen, "сам номер до карточки не доехал"
+
+
+async def test_the_phone_button_adds_to_the_same_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """А вот кнопка «Телефон» дописывает номер ТОМУ ЖЕ человеку.
+
+    Обратная сторона правила выше, и без неё оно вредит: оператор набрал ФИО,
+    нарочно нажал «Телефон», прислал номер — и потерял бы всё набранное.
+    Разница в том, кто попросил поле: бот по просьбе оператора или оператор
+    сам прислал номер ни с того ни с сего.
+    """
+    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(dispatcher, bot, callback_query=make_callback("qc:ask:phone"))
+
+    await feed(dispatcher, bot, message=make_message("+7 916 123 45 67"))
+
+    # Ищется по всей переписке: полное ФИО опознаёт должника однозначно, и
+    # последним сообщением уходит отчёт, а не карточка.
+    assert "Тестов" in sent.joined, "нажатие «Телефон» стёрло набранного человека"
+    assert "***-**-67" in sent.joined, "номер не дописался к тому же человеку"
