@@ -217,10 +217,12 @@ class NewDBClient:
         previous: _Progress,
     ) -> tuple[Any, str]:
         """Re-POST the same requestId until the task settles or the budget ends."""
+        last_state: str | None = None
         for _attempt in range(self._settings.newdb_poll_attempts):
             await asyncio.sleep(self._settings.newdb_poll_interval_seconds)
             envelope, raw = await self._post(client, method, payload, retry)
             state = _state_of(envelope)
+            last_state = state
             if state == STATE_COMPLETE:
                 return envelope, raw
             if state == STATE_FAILED:
@@ -236,10 +238,25 @@ class NewDBClient:
                 raise ProviderUnavailableError("upstream_error", progress.failure_message)
             previous = progress
 
+        # Последнее состояние — единственное, что отличает «поставщик думает
+        # дольше нашего потолка» от «задача не двинулась с очереди». Первое
+        # лечится настройкой NEWDB_POLL_ATTEMPTS, второе — разговором с
+        # поставщиком про доступ и баланс, и по одному слову «poll_timeout» их
+        # было не различить: на проде пять источников подряд отвалились так, и
+        # понять причину по логу оказалось нечем.
+        waited = self._settings.newdb_poll_attempts * self._settings.newdb_poll_interval_seconds
         logger.info(
-            "newdb.poll_timeout", method=method, attempts=self._settings.newdb_poll_attempts
+            "newdb.poll_timeout",
+            method=method,
+            attempts=self._settings.newdb_poll_attempts,
+            waited_seconds=round(waited),
+            last_state=last_state,
         )
-        raise ProviderUnavailableError("poll_timeout", "NewDB не успела подготовить результат")
+        raise ProviderUnavailableError(
+            "poll_timeout",
+            f"NewDB не успела подготовить результат за {round(waited)} с "
+            f"(последнее состояние: {last_state or 'неизвестно'})",
+        )
 
     async def _post(
         self,
