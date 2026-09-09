@@ -42,6 +42,7 @@ from app.domain.identity import (
 from app.domain.models import InternalDebtorRecord
 from app.services.query_card import Card
 from app.services.search import SearchService
+from app.utils.masking import mask_passport
 from app.utils.money import format_amount
 
 #: Сколько записей перечислять поимённо, когда их несколько. Больше пяти строк
@@ -153,6 +154,12 @@ def absorb(card: Card, record: InternalDebtorRecord) -> list[str]:
         filled.append("ФИО")
     for column, title, value in (
         ("birth_date", "дату рождения", record.birth_date),
+        # ИНН из выгрузки — самый дорогой из подставляемых полей, и до
+        # 09.09.2026 он не подставлялся вовсе. По нему ищут банкротство, статус
+        # ИП и арбитраж, и без него все трое молчат: «нужен ИНН физлица (12
+        # цифр)». Владелица увидела это на своём же должнике — ввела ФИО
+        # человека, который в выгрузке ЕСТЬ, и получила «ИНН не найден».
+        ("inn", "ИНН", record.inn),
         ("contract_number", "договор", record.contract_number),
         ("address", "адрес", record.address),
         ("plate", "госномер", record.vehicle_plate),
@@ -162,7 +169,30 @@ def absorb(card: Card, record: InternalDebtorRecord) -> list[str]:
             setattr(card, column, value)
             card.skipped = card.skipped - {column}
             filled.append(title)
+    _absorb_passport(card, record)
+    if "паспорт" not in filled and card.passport_masked and record.passport:
+        filled.append("паспорт")
     return filled
+
+
+def _absorb_passport(card: Card, record: InternalDebtorRecord) -> None:
+    """Паспорт из выгрузки — отдельно, потому что у него есть маска.
+
+    Он тоже не подставлялся, и цена та же, что у ИНН, только на шаг длиннее:
+    паспорт открывает мост «паспорт → ИНН», а ИНН открывает три источника. В
+    выгрузке заказчика паспорт есть у большинства должников — то есть три
+    источника молчали там, где всё для них лежало в нашей же строке.
+
+    Сам номер приезжает в записи, только когда развёртывание его хранит
+    (``STORE_SENSITIVE_IDENTIFIERS``); иначе в ней одна маска, и мосту она
+    бесполезна. Подставляется поэтому пара: номер в память карточки, маска — на
+    экран, ровно как при вводе руками.
+    """
+    if card.passport_masked or not record.passport:
+        return
+    card.passport = record.passport
+    card.passport_masked = record.passport_masked or mask_passport(record.passport)
+    card.skipped = card.skipped - {"passport"}
 
 
 def describe(record: InternalDebtorRecord) -> str:

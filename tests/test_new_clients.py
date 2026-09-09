@@ -29,7 +29,7 @@ from app.container import Container
 from app.db.repository import DebtorRepository, PhoneLookupRepository
 from app.domain.enums import MissingInput, ProviderName, ProviderStatus, SearchType
 from app.domain.identity import PersonName, SearchSubject
-from app.domain.models import ProviderResult
+from app.domain.models import InternalDebtorRecord, ProviderResult
 from app.providers.identity_bridge import (
     InnBridgeProvider,
     InnBridgeResult,
@@ -37,6 +37,7 @@ from app.providers.identity_bridge import (
 )
 from app.providers.phone_bridge import PhoneNameProvider, PhoneNameResult
 from app.providers.registry import ProviderRegistry
+from app.services import card_identify
 from app.services.phone_lookups import PhoneLookupService
 from app.services.query_card import Card, QueryCardService, fill_from_bridge
 from app.services.share import ShareKind, ShareLinkService, ShareTarget
@@ -578,3 +579,61 @@ def test_the_promise_stays_when_there_is_no_passport_to_bridge_with(
     )
 
     assert common._progress_note(subject, container) == common.NO_INN_NOTE
+
+
+# --------------------------------------- 6. что уже лежит в выгрузке — не терять
+
+
+def test_the_export_row_hands_over_its_inn_and_passport() -> None:
+    """ИНН и паспорт из строки 1С подставляются в карточку.
+
+    До 09.09.2026 не подставлялись — ``absorb`` знал про ФИО, дату рождения,
+    договор, адрес, госномер и VIN, а про два самых дорогих поля не знал.
+
+    Цена молчаливая и большая. По ИНН ищут банкротство, статус ИП и арбитраж;
+    без него все трое отвечают «нужен ИНН физлица (12 цифр)». Паспорт открывает
+    мост «паспорт → ИНН», то есть те же три источника через шаг. В выгрузке
+    заказчика паспорт есть у большинства должников — значит три раздела отчёта
+    молчали там, где всё для них лежало в нашей же строке.
+
+    Владелица увидела это на своём должнике: ввела ФИО человека, который в
+    выгрузке ЕСТЬ, и получила «ИНН не найден».
+    """
+    card = Card(telegram_user_id=OPERATOR_ID, chat_id=CHAT_ID)
+    record = InternalDebtorRecord(
+        source="internal",
+        fio="Иванова Мария Сергеевна",
+        birth_date=date(1985, 7, 5),
+        inn=INN,
+        passport=PASSPORT,
+        passport_masked="45** ******",
+    )
+
+    filled = card_identify.absorb(card, record)
+
+    assert card.inn == INN, "ИНН из выгрузки не доехал до карточки"
+    assert card.passport == PASSPORT, "паспорт из выгрузки не доехал до карточки"
+    assert card.passport_masked == "45** ******"
+    # Названо вслух: молча подставленное поле неотличимо от угаданного.
+    assert "ИНН" in filled
+    assert "паспорт" in filled
+
+
+def test_what_the_operator_typed_survives_the_export_row() -> None:
+    """Введённое руками сильнее выгрузки — правило то же, что у моста.
+
+    Оператор смотрит в договор, выгрузка — это вчерашний импорт. Расхождение
+    между ними факт, а не опечатка, и прятать его нельзя.
+    """
+    card = Card(telegram_user_id=OPERATOR_ID, chat_id=CHAT_ID)
+    card.inn = "770912345601"
+    card.passport = "9999999999"
+    card.passport_masked = "99** ******"
+    record = InternalDebtorRecord(
+        source="internal", fio="Иванова Мария Сергеевна", inn=INN, passport=PASSPORT
+    )
+
+    card_identify.absorb(card, record)
+
+    assert card.inn == "770912345601"
+    assert card.passport == "9999999999"
