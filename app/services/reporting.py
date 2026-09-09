@@ -1048,7 +1048,9 @@ def _score_block(score: RecoveryScore | None) -> str:
 #: Источники, которые ничего не находят, а делают находимым остальное. Строка
 #: списка у них своя: общая напечатала бы «✓ … — 0 зап.» ровно там, где мост
 #: только что сделал всю проверку возможной.
-BRIDGES: frozenset[ProviderName] = frozenset({ProviderName.INN_BRIDGE, ProviderName.PHONE_BRIDGE})
+BRIDGES: frozenset[ProviderName] = frozenset(
+    {ProviderName.INN_BRIDGE, ProviderName.PHONE_BRIDGE, ProviderName.NAME_BRIDGE}
+)
 
 #: Чем кончился мост: что он дал и чего не дал. Словами про то, что он ищет, —
 #: «ИНН не найден» на телефонном мосту было бы враньём про другой источник.
@@ -1060,6 +1062,10 @@ _BRIDGE_WORDS: dict[ProviderName, tuple[str, str]] = {
     ProviderName.PHONE_BRIDGE: (
         "ФИО по номеру определено, должник найден по имени",
         "имя по этому номеру не определено",
+    ),
+    ProviderName.NAME_BRIDGE: (
+        "паспорт по ФИО и дате рождения найден, по нему добыт ИНН",
+        "паспорт по ФИО и дате рождения не найден",
     ),
 }
 

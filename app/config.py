@@ -235,6 +235,29 @@ class Settings(BaseSettings):
     phone_bridge_auth_name: str = "X-Api-Key"
     phone_bridge_field_map: Path | None = None
 
+    # ------------------------------------- мост «ФИО + дата рождения → паспорт»
+    #
+    # Второй вход в того же поставщика и вторая половина цепочки. Первая ведёт
+    # от телефона к личности; эта — от личности к её документу.
+    #
+    # Зачем он нужен отдельно. Три источника — банкротство, статус ИП и
+    # арбитраж — ищут только по ИНН физлица. ИНН добывается по паспорту (мост
+    # ФНС), а паспорт есть не у всех: в выгрузке заказчика он заполнен не
+    # везде, телефона в ней нет вовсе. Для таких должников цепочка обрывалась
+    # на первом же шаге, и три раздела отчёта молчали навсегда.
+    #
+    # Отдельные настройки, а не переиспользование телефонных: адрес у
+    # поставщика тот же, но путь другой, карта полей другая (у него ``fio`` и
+    # ``dob`` вместо ``full_name`` и ``birth_date``), и включать эти два входа
+    # надо уметь порознь — они стоят разных денег и открывают разное.
+    name_bridge_enabled: bool = False
+    name_bridge_base_url: str = ""
+    name_bridge_path: str = ""
+    name_bridge_api_key: str = ""
+    name_bridge_auth_style: AuthStyle = AuthStyle.BEARER
+    name_bridge_auth_name: str = "X-Api-Key"
+    name_bridge_field_map: Path | None = None
+
     # ---------------------------------------------------------------- import
     max_import_file_bytes: Annotated[int, Field(ge=1024)] = 5 * 1024 * 1024
     max_import_rows: Annotated[int, Field(ge=1)] = 50_000
@@ -327,6 +350,7 @@ class Settings(BaseSettings):
         "fedresurs_base_url",
         "fns_base_url",
         "phone_bridge_base_url",
+        "name_bridge_base_url",
         "inheritance_base_url",
     )
     @classmethod
@@ -493,6 +517,22 @@ class Settings(BaseSettings):
             for key, value in data.items()
             if not (isinstance(value, str) and not value.strip() and key.lower() in numeric)
         }
+
+    @property
+    def name_bridge_configured(self) -> bool:
+        """Мост «ФИО → паспорт» настроен: есть куда идти и чем читать ответ.
+
+        Карта полей обязательна по той же причине, что у телефонного моста, и
+        причина здесь даже острее: по одному имени поставщик отвечает десятками
+        разных людей, и разбирать их без знания, где лежит дата рождения,
+        значит взять паспорт однофамильца.
+        """
+        return bool(
+            self.name_bridge_enabled
+            and self.name_bridge_base_url
+            and self.name_bridge_path
+            and self.name_bridge_field_map is not None
+        )
 
     @property
     def phone_bridge_configured(self) -> bool:

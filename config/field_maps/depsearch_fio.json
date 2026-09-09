@@ -1,0 +1,12 @@
+{
+  "records_path": "results",
+  "fields": {
+    "fio": "fio",
+    "birth_date": "dob",
+    "inn": "inn",
+    "passport": "passport",
+    "passport_info": "passport_info",
+    "snils": "snils",
+    "address": "address"
+  }
+}

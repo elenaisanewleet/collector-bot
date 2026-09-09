@@ -73,6 +73,7 @@ class ProviderName(StrEnum):
     # ищется должник в нашей же таблице. Записей в отчёт не приносит: найденное
     # им имя — ключ поиска, а не установленный факт.
     PHONE_BRIDGE = "phone_bridge"
+    NAME_BRIDGE = "name_bridge"
 
 
 PROVIDER_TITLES: dict[ProviderName, str] = {
@@ -91,6 +92,7 @@ PROVIDER_TITLES: dict[ProviderName, str] = {
     ProviderName.INHERITANCE: "Наследственные дела",
     ProviderName.INN_BRIDGE: "ИНН по паспорту (ФНС)",
     ProviderName.PHONE_BRIDGE: "ФИО по телефону",
+    ProviderName.NAME_BRIDGE: "Паспорт по ФИО и дате рождения",
 }
 
 

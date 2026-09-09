@@ -168,12 +168,19 @@ class SearchService:
         )
         subject = _enrich_from_internal(subject, internal_records, exact=internal_exact)
 
+        # Мост ФИО+дата→паспорт: перед мостом ФНС, потому что добывает ему
+        # вход. Порядок здесь и есть вся цепочка, ради которой мосты писались:
+        # телефон → личность → паспорт → ИНН → банкротство, ИП, арбитраж. У
+        # должника из выгрузки телефона нет, но ФИО и дата рождения есть —
+        # значит цепочка начинается со второго звена и всё равно доходит.
+        subject, name_result = await self._resolve_passport(subject)
+
         # Мост паспорт→ИНН строго после ключа кэша (он считается по вопросу
         # оператора), после внутренней базы (вдруг ИНН уже там — это платный
         # вызов) и строго до внешней волны: три источника ищут только по ИНН.
         subject, bridge_result = await self._resolve_inn(subject)
         provider_results = await self._run_external(subject, context)
-        for extra in (bridge_result, phone_result):
+        for extra in (bridge_result, name_result, phone_result):
             if extra is not None:
                 provider_results = [extra, *provider_results]
 
@@ -290,6 +297,33 @@ class SearchService:
             if value is not None and getattr(subject, field, None) in (None, ""):
                 update[field] = value
         return subject.model_copy(update=update), result
+
+    async def _resolve_passport(
+        self, subject: SearchSubject
+    ) -> tuple[SearchSubject, ProviderResult | None]:
+        """Добыть паспорт по ФИО и дате рождения — вход для моста ФНС.
+
+        Стоит перед ним и после внутренней базы: паспорт часто лежит прямо в
+        строке выгрузки, и покупать его тогда незачем. ``is_needed`` это и
+        проверяет — с паспортом или с готовым ИНН мост не зовётся вовсе.
+
+        Заодно переносятся СНИЛС и ИНН, если они оказались в тех же записях.
+        ИНН здесь дороже всего: с ним мост ФНС не сработает (он тоже проверяет
+        ``is_needed``), и это минус одно платное обращение с каждого должника.
+
+        Дописывается только в ПУСТОЕ — то же правило, что у всех мостов:
+        названное оператором или взятое из своей выгрузки сильнее найденного.
+        """
+        bridge = self._registry.name_bridge
+        if bridge is None or not bridge.is_needed(subject):
+            return subject, None
+        result = await self._guarded_fetch(bridge, subject)
+        update: dict[str, object] = {}
+        for field in ("passport", "passport_issued", "snils", "inn"):
+            value = getattr(result, field, None)
+            if value is not None and getattr(subject, field, None) in (None, ""):
+                update[field] = value
+        return (subject.model_copy(update=update) if update else subject), result
 
     async def _resolve_inn(
         self, subject: SearchSubject

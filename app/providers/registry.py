@@ -28,6 +28,7 @@ from app.providers.internal.composite import CompositeInternalDebtorProvider
 from app.providers.internal.csv_provider import CSVInternalDebtorProvider
 from app.providers.internal.db_provider import DatabaseInternalDebtorProvider
 from app.providers.mock import DemoInnBridgeProvider, build_demo_providers
+from app.providers.name_bridge import PassportByNameProvider, build_name_bridge
 from app.providers.newdb import NewDBFieldMaps
 from app.providers.phone_bridge import PhoneNameProvider, build_phone_bridge
 from app.providers.pledge import NewDBPledgeProvider
@@ -65,16 +66,19 @@ class ProviderRegistry:
         external: Sequence[BaseProvider],
         inn_bridge: InnBridgeProvider | None = None,
         phone_bridge: PhoneNameProvider | None = None,
+        name_bridge: PassportByNameProvider | None = None,
     ) -> None:
         self._internal = internal
         self._external = list(external)
         self._inn_bridge = inn_bridge
         self._phone_bridge = phone_bridge
+        self._name_bridge = name_bridge
         _reject_duplicates(
             [
                 *self._external,
                 *([inn_bridge] if inn_bridge else []),
                 *([phone_bridge] if phone_bridge else []),
+                *([name_bridge] if name_bridge else []),
             ]
         )
 
@@ -85,6 +89,17 @@ class ProviderRegistry:
     @property
     def external(self) -> list[BaseProvider]:
         return list(self._external)
+
+    @property
+    def name_bridge(self) -> PassportByNameProvider | None:
+        """Мост «ФИО + дата рождения → паспорт», если он настроен.
+
+        Именованный слот, а не член ``external``, по той же причине, что у двух
+        других мостов: он идёт ДО внешней волны и до моста ФНС, потому что
+        добывает вход для него, и в ``configured_names`` не входит — покрытия
+        отчёта он не увеличивает.
+        """
+        return self._name_bridge
 
     @property
     def phone_bridge(self) -> PhoneNameProvider | None:
@@ -234,6 +249,7 @@ def build_registry(settings: Settings, database: Database) -> ProviderRegistry:
         external=build_external_providers(settings, database),
         inn_bridge=build_inn_bridge(settings),
         phone_bridge=build_phone_bridge(settings),
+        name_bridge=build_name_bridge(settings),
     )
     bridge = registry.inn_bridge
     logger.info(
