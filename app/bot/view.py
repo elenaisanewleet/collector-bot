@@ -26,7 +26,7 @@ from app.domain.models import DebtorReport
 from app.domain.verdict import FeeBasis, Verdict, VerdictDecision
 from app.services.reporting import DEMO_BANNER, SourceStateCode, source_state
 from app.utils.dates import format_date, format_datetime
-from app.utils.masking import mask_passport, mask_phone, mask_vin
+from app.utils.masking import mask_phone, mask_vin
 from app.utils.money import format_amount
 
 # Полоса прогресса рисуется символами: Telegram правит сообщение на месте, и
@@ -86,8 +86,13 @@ def accepted_line(subject: SearchSubject) -> str | None:
     потерянной цифрой) неотличим от мобильного, и единственное, что спасает от
     молчаливой подмены, — эта строка.
 
-    Паспорт и телефон маскируются: в истории чата им делать нечего. ИНН
-    показывается целиком — он и так поедет в источники и напечатается в отчёте.
+    ДОКУМЕНТЫ ПЕЧАТАЮТСЯ ЦЕЛИКОМ, и это здесь главное. С автопрогоном по
+    номеру телефона карточка не рисуется вовсе — бот сразу уходит в реестры, —
+    и эта строка осталась единственным местом, где владелец видит, ЧТО именно
+    нашлось по номеру: паспорт, дату его выдачи и СНИЛС. Ради них обращение и
+    оплачено, и заявление в суд подают с ними.
+
+    Телефон остаётся маской: его прислал сам оператор, он его и так знает.
     """
     if subject.search_type != SearchType.PERSON.value:
         return None
@@ -99,7 +104,12 @@ def accepted_line(subject: SearchSubject) -> str | None:
     if subject.inn:
         parts.append(f"ИНН {subject.inn}")
     if subject.passport:
-        parts.append(f"паспорт {mask_passport(subject.passport)}")
+        issued = (
+            f", выдан {format_date(subject.passport_issued)}" if subject.passport_issued else ""
+        )
+        parts.append(f"паспорт {subject.passport}{issued}")
+    if subject.snils:
+        parts.append(f"СНИЛС {subject.snils}")
     if subject.phone:
         parts.append(f"телефон {mask_phone(subject.phone)}")
     if subject.vehicle and subject.vehicle.plate:

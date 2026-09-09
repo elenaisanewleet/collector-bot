@@ -1236,10 +1236,11 @@ async def test_a_phone_alone_runs_the_check_from_the_bot(
     dispatcher = dispatcher_for(container)
 
     await feed(dispatcher, bot, message=make_message("79990001122"))
-    sent.texts.clear()
-    await feed(dispatcher, bot, callback_query=make_callback("qc:run"))
 
-    assert sent.joined, "«Проверить» по номеру не ответило ничем"
+    # Кнопку «Проверить» не нажимаем намеренно: с 09.09.2026 прогон идёт сразу
+    # по вводу номера. Требование владелицы дословно — «ссылка на веб-отчёт
+    # должна появиться, то есть сразу же по данным должны запросы дальше идти».
+    assert sent.joined, "ввод номера не ответил ничем"
     assert "нужны фамилия с именем" not in sent.joined, "мост из бота недостижим"
     assert sent.contains("RECOVERY SCORE"), "прогон по одному номеру не дошёл до отчёта"
 

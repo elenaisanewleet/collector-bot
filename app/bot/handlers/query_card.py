@@ -309,7 +309,9 @@ async def settle(
 
     # По одному номеру искать в выгрузке нечем: телефона в ней нет и не будет.
     # Имя добывает мост, и добывает ДО поиска — иначе искать не по чему.
+    had_name = card.name is not None
     bridge_note = await _resolve_name(container, card)
+    resolved_now = not had_name and card.name is not None
 
     found = await card_identify.identify(container.search_service, card)
     if found.only is not None:
@@ -323,6 +325,29 @@ async def settle(
         # платит — свободное ФИО до выгрузки не доходит вовсе, а неоднозначное
         # совпадение уходит в вопрос, а не в прогон.
         await recognised(message, container, card, found.only, user_id, notice=notice)
+        return
+
+    if resolved_now and _runnable_now(container, card):
+        # Личность собрана по номеру, а в выгрузке такого нет — это НОВЫЙ
+        # клиент, и проверка ему нужна ровно так же. Раньше здесь бот
+        # останавливался и показывал форму: автопрогон жил только в ветке
+        # «опознали по выгрузке», то есть работал для старых должников и молчал
+        # для новых — при том, что новых как раз и заводят.
+        #
+        # Требование владелицы дословно: «ссылка на веб-отчёт должна появиться,
+        # то есть сразу же по данным должны запросы дальше идти».
+        #
+        # Правило «платит одна кнопка» не нарушено, а применено как есть: сюда
+        # доходит только ТОЧНЫЙ ключ (см. ранний возврат выше), а платящим
+        # действием для точного ключа его ввод и признан — тем же доводом, что
+        # в ветке опознания. Догадка по-прежнему не платит.
+        await run_card(
+            message,
+            container,
+            card,
+            user_id,
+            extra_notes=[note for note in (notice, _new_client_note(found, card)) if note],
+        )
         return
 
     if guided:
@@ -347,6 +372,25 @@ async def settle(
         or _once(container, card, _missed(found, card))
         or notice,
     )
+
+
+def _runnable_now(container: Container, card: Card) -> bool:
+    """Есть чем проверять и это не повтор уже оплаченного прогона."""
+    if not card.runnable_with(phone_resolves=_phone_resolves(container)):
+        return False
+    return card.last_run_hash != container.query_cards.run_hash(card)
+
+
+def _new_client_note(found: card_identify.Identified, card: Card) -> str | None:
+    """«В вашей базе такого нет» — в отчёт, а не на карточку.
+
+    Карточку при автопрогоне никто не увидит, а новость важная: по ней владелец
+    решает, заводить ли человека. В отчёте она стоит рядом с тем, что про него
+    ответили реестры, — то есть там, где по ней и принимают решение.
+    """
+    if not found.missed or _searched_by(card) is None:
+        return None
+    return card_view.NOT_IN_EXPORT_NEW
 
 
 def _once(container: Container, card: Card, notice: str | None) -> str | None:
@@ -482,6 +526,10 @@ def _missed(found: card_identify.Identified, card: Card) -> str | None:
     key = _searched_by(card)
     if key is None:
         return None
+    if card.name is not None:
+        # Личность уже собрана: «попробуйте фамилию с именем» поверх
+        # заполненной фамилии — совет сделать то, что уже сделано.
+        return card_view.NOT_IN_EXPORT_NEW
     missed = card_view.NOT_IN_EXPORT.format(key=key)
     if card.awaiting_field:
         # Следующей строкой бот сам спросит поле — «попробуйте фамилию с

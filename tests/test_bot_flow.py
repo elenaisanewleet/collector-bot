@@ -308,19 +308,18 @@ async def test_garbage_does_not_touch_the_card_and_costs_nothing(
     assert sent.contains("RECOVERY SCORE")
 
 
-async def test_a_name_alone_runs_and_the_card_names_the_sources(
+async def test_a_name_alone_runs_with_what_it_was_given(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """Полнота не блокирует. Бот идёт с тем, что дали, и называет источники.
+    """Полнота не блокирует: бот идёт с тем, что дали.
 
-    Что именно останется неопрошенным на живых провайдерах, проверяется на них
-    самих (``tests/test_coverage.py``) и на оговорках прогона
-    (``tests/test_query_card.py``): демо-источники ищут по одному ФИО и про
-    обязательную дату у ФССП не знают.
+    Счёта источников на карточке больше нет — его убрала владелица («вообще
+    непонятно, о чём он»). Неопрошенное называет ОТЧЁТ, где это относится к уже
+    потраченным деньгам: см. ``test_the_report_names_the_sources_that_stayed_unqueried``.
     """
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    assert sent.contains("Сейчас спрошу:")
-    assert sent.contains("Прочерк — это «я не спрашивал», а не «не нашли».")
+    assert sent.contains("Фамилия: Тестов")
+    assert not sent.contains("Сейчас спрошу:")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
     assert sent.contains("RECOVERY SCORE")

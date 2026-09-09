@@ -458,7 +458,11 @@ async def test_the_card_never_shows_a_completeness_score(
     text = last(sent)
     assert "из 7" not in text
     assert "%" not in text
-    assert "Прочерк — это «я не спрашивал», а не «не нашли»." in text
+    # И ни одной строки, объясняющей форму саму себе: их убрала владелица.
+    # Разницу «не спрашивали ≠ не найдено» держит отчёт, а не форма ввода.
+    assert "Прочерк" not in text
+    assert "Сейчас спрошу" not in text
+    assert "допишу сюда же" not in text
 
 
 async def test_the_report_names_the_sources_that_stayed_unqueried(
