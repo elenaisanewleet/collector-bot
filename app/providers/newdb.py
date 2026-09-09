@@ -75,7 +75,18 @@ DOB_KEY = "dob"
 
 STATE_COMPLETE = "complete"
 STATE_FAILED = "failed"
-PENDING_STATES = frozenset({"queued", "in_progress", "restart"})
+STATE_QUEUED = "queued"
+PENDING_STATES = frozenset({STATE_QUEUED, "in_progress", "restart"})
+#: Сколько опросов подряд задача имеет право простоять в очереди, НИ РАЗУ не
+#: начав выполняться. Правило снято с прода: пять источников из пяти отвечали
+#: ``queued`` девяносто секунд и не двигались с места — а оператор всё это время
+#: смотрел на полосу. Задача, не начавшаяся за полминуты, не начнётся и за пять:
+#: ждать её значит тратить не свои деньги, а чужое время.
+#:
+#: Считается только «не начиналась вовсе». Задача, дошедшая до ``in_progress``,
+#: получает полный бюджет: она работает, и обрывать её — выбросить уже
+#: оплаченный вызов.
+QUEUE_PATIENCE_POLLS = 10
 
 # ``result.status`` — HTTP-код источника, стоящего за агрегатором, и он лежит
 # РЯДОМ с ``data``, а не внутри неё. Все 29 снятых живьём нормальных ответов
@@ -218,11 +229,22 @@ class NewDBClient:
     ) -> tuple[Any, str]:
         """Re-POST the same requestId until the task settles or the budget ends."""
         last_state: str | None = None
-        for _attempt in range(self._settings.newdb_poll_attempts):
+        started_working = False
+        for attempt in range(self._settings.newdb_poll_attempts):
             await asyncio.sleep(self._settings.newdb_poll_interval_seconds)
             envelope, raw = await self._post(client, method, payload, retry)
             state = _state_of(envelope)
             last_state = state
+            if state != STATE_QUEUED:
+                started_working = True
+            elif not started_working and attempt + 1 >= QUEUE_PATIENCE_POLLS:
+                queued_for = round((attempt + 1) * self._settings.newdb_poll_interval_seconds)
+                logger.info("newdb.never_started", method=method, waited_seconds=queued_for)
+                raise ProviderUnavailableError(
+                    "never_started",
+                    f"Поставщик не взялся за задачу за {queued_for} с — она всё это время "
+                    f"стояла в очереди",
+                )
             if state == STATE_COMPLETE:
                 return envelope, raw
             if state == STATE_FAILED:

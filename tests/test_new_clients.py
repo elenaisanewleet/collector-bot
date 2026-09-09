@@ -19,7 +19,9 @@ from __future__ import annotations
 
 from datetime import date
 
+import httpx
 import pytest
+import respx
 from aiogram import Bot, Dispatcher
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -30,11 +32,13 @@ from app.db.repository import DebtorRepository, PhoneLookupRepository
 from app.domain.enums import MissingInput, ProviderName, ProviderStatus, SearchType
 from app.domain.identity import PersonName, SearchSubject
 from app.domain.models import InternalDebtorRecord, ProviderResult
+from app.providers.base import ProviderUnavailableError
 from app.providers.identity_bridge import (
     InnBridgeProvider,
     InnBridgeResult,
     missing_bridge_fields,
 )
+from app.providers.newdb import QUEUE_PATIENCE_POLLS, NewDBClient
 from app.providers.phone_bridge import PhoneNameProvider, PhoneNameResult
 from app.providers.registry import ProviderRegistry
 from app.services import card_identify
@@ -637,3 +641,72 @@ def test_what_the_operator_typed_survives_the_export_row() -> None:
 
     assert card.inn == "770912345601"
     assert card.passport == "9999999999"
+
+
+# ------------------------------------- 7. задача, за которую не взялись
+
+
+@respx.mock
+async def test_a_task_that_never_leaves_the_queue_is_dropped_early(
+    live_settings: Settings,
+) -> None:
+    """Задача простояла в очереди полминуты — дальше ждать нечего.
+
+    Снято с прода: пять источников из пяти отвечали ``queued`` девяносто секунд
+    и не двигались с места, а оператор всё это время смотрел на полосу. Один
+    прогон занимал шесть-семь минут и заканчивался пятью пустыми разделами.
+
+    Задача, не начавшаяся за полминуты, не начнётся и за пять. Ждать её —
+    тратить не деньги (вызов уже оплачен), а чужое время.
+    """
+    settings = live_settings.model_copy(
+        update={
+            "newdb_api_key": "k",
+            "newdb_base_url": "https://newdb.example.test",
+            "newdb_method_path": "/v2",
+            "newdb_poll_attempts": 50,
+            "newdb_poll_interval_seconds": 0.001,
+            "provider_max_retries": 0,
+        }
+    )
+    calls = respx.post("https://newdb.example.test/v2").mock(
+        return_value=httpx.Response(200, json={"state": "queued", "requestId": "x"})
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        await NewDBClient(settings).call("fssp_person", {"lastname": "Иванов"})
+
+    assert caught.value.code == "never_started"
+    # Сдались на десятом опросе, а не на пятидесятом: разница в пять раз и есть
+    # то время, которое возвращается оператору.
+    assert calls.call_count <= QUEUE_PATIENCE_POLLS + 1, "ждали дольше терпения очереди"
+
+
+@respx.mock
+async def test_a_task_that_started_working_gets_the_whole_budget(
+    live_settings: Settings,
+) -> None:
+    """А начавшую работу задачу не обрывают: вызов уже оплачен.
+
+    Терпение кончается только для тех, кто НЕ НАЧИНАЛСЯ. Дошедшая до
+    ``in_progress`` получает полный бюджет — иначе ранний обрыв выбрасывал бы
+    результат, за который заплачено.
+    """
+    settings = live_settings.model_copy(
+        update={
+            "newdb_api_key": "k",
+            "newdb_base_url": "https://newdb.example.test",
+            "newdb_method_path": "/v2",
+            "newdb_poll_attempts": 15,
+            "newdb_poll_interval_seconds": 0.001,
+            "provider_max_retries": 0,
+        }
+    )
+    respx.post("https://newdb.example.test/v2").mock(
+        return_value=httpx.Response(200, json={"state": "in_progress", "requestId": "x"})
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        await NewDBClient(settings).call("fssp_person", {"lastname": "Иванов"})
+
+    assert caught.value.code == "poll_timeout", "работающую задачу оборвали как незапущенную"
