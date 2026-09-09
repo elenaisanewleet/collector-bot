@@ -121,6 +121,16 @@ class Settings(BaseSettings):
     # Произведение попыток на интервал обязано укладываться в бюджет источника
     # с запасом на HTTP: за этим следит _poll_must_fit_in_budget.
     newdb_poll_attempts: Annotated[int, Field(ge=1, le=60)] = 25
+    # Сколько опросов подряд задача имеет право простоять в очереди, ни разу не
+    # начав выполняться. Настройкой, а не константой, по двум причинам сразу.
+    #
+    # Диагностика. Чтобы отличить «поставщик медленный» от «поставщик не берёт
+    # задачи», нужен один прогон с ДЛИННЫМ терпением — иначе бот сдаётся раньше,
+    # чем опыт успевает ответить.
+    #
+    # И тариф. Порог снят с одного аккаунта в один день; у другого очередь может
+    # быть законно длиннее, и зашитая десятка объявила бы поставщика сломанным.
+    newdb_queue_patience_polls: Annotated[int, Field(ge=1, le=200)] = 10
     newdb_poll_interval_seconds: Annotated[float, Field(ge=0.1, le=30)] = 3.0
     # Row schemas for every NewDB method except fssp_person, keyed by method
     # name. Only fssp_person has been read against a real response; the rest are

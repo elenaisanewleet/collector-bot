@@ -666,6 +666,7 @@ async def test_a_task_that_never_leaves_the_queue_is_dropped_early(
             "newdb_method_path": "/v2",
             "newdb_poll_attempts": 50,
             "newdb_poll_interval_seconds": 0.001,
+            "newdb_queue_patience_polls": QUEUE_PATIENCE_POLLS,
             "provider_max_retries": 0,
         }
     )

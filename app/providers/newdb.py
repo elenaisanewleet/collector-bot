@@ -86,6 +86,10 @@ PENDING_STATES = frozenset({STATE_QUEUED, "in_progress", "restart"})
 #: Считается только «не начиналась вовсе». Задача, дошедшая до ``in_progress``,
 #: получает полный бюджет: она работает, и обрывать её — выбросить уже
 #: оплаченный вызов.
+#:
+#: Умолчание, а не закон: значение живёт в ``NEWDB_QUEUE_PATIENCE_POLLS``.
+#: Порог снят с одного аккаунта в один день, и он же мешает диагностике —
+#: чтобы отличить «медленно» от «не берут», нужен прогон с длинным терпением.
 QUEUE_PATIENCE_POLLS = 10
 
 # ``result.status`` — HTTP-код источника, стоящего за агрегатором, и он лежит
@@ -237,7 +241,7 @@ class NewDBClient:
             last_state = state
             if state != STATE_QUEUED:
                 started_working = True
-            elif not started_working and attempt + 1 >= QUEUE_PATIENCE_POLLS:
+            elif not started_working and attempt + 1 >= self._settings.newdb_queue_patience_polls:
                 queued_for = round((attempt + 1) * self._settings.newdb_poll_interval_seconds)
                 logger.info("newdb.never_started", method=method, waited_seconds=queued_for)
                 raise ProviderUnavailableError(
