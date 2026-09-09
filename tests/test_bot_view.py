@@ -262,9 +262,12 @@ def test_the_demo_banner_stands_above_everything_about_the_person(settings: Sett
     assert lines[0] == DEMO_BANNER
     assert lines[1] == ""
     assert lines[2] == report.subject.display_name
-    # Эха «Принял: …» здесь нет: его уже сказало сообщение о ходе проверки
-    # строкой выше в чате, и повтор через десять секунд ничего не добавлял.
-    assert lines[3] == "7709123456 — это ИНН организации."
+    # Под именем — идентификаторы, и только потом оговорки. Раньше здесь не было
+    # ни того ни другого: считалось, что «Принял: …» из сообщения о ходе
+    # проверки достаточно. Оказалось наоборот — отчёт ПРАВИТ то самое
+    # сообщение, и всё, что в нём стояло, стирается.
+    assert lines[3] == "ИНН 770912345601"
+    assert lines[4] == "7709123456 — это ИНН организации."
     assert not any(line.startswith("Принял: ") for line in lines)
     # И наоборот: вне демо баннера быть не должно ни одной строкой.
     assert DEMO_BANNER not in view.report_card(report, decision)

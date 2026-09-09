@@ -368,10 +368,26 @@ def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
 
 
 def _header(report: DebtorReport) -> str:
+    """Кто проверен и чем он опознан.
+
+    Документы стоят здесь, а не только в чате, потому что отчёт печатают и
+    несут в суд: заявление подают с серией, номером и датой выдачи. ИНН важен
+    отдельно — его добывает мост «паспорт → ИНН» за деньги, и до 09.09.2026 он
+    не попадал ни в одну строку отчёта вовсе.
+    """
     subject = report.subject
     lines = [f"👤 {subject.display_name}"]
     if subject.birth_date:
         lines.append(f"Дата рождения: {format_date(subject.birth_date)}")
+    if subject.inn:
+        lines.append(f"ИНН: {subject.inn}")
+    if subject.passport:
+        issued = (
+            f", выдан {format_date(subject.passport_issued)}" if subject.passport_issued else ""
+        )
+        lines.append(f"Паспорт: {subject.passport}{issued}")
+    if subject.snils:
+        lines.append(f"СНИЛС: {subject.snils}")
     if subject.regions:
         lines.append(f"Регион: {_regions_label(subject.regions)}")
     if subject.vehicle and subject.vehicle.has_unique_identifier:

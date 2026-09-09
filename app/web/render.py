@@ -1375,6 +1375,16 @@ def _subject_line(report: DebtorReport) -> str:
         parts.append(f"р. {format_date(subject.birth_date)}")
     if subject.inn:
         parts.append(f"ИНН {subject.inn}")
+    # Паспорт и СНИЛС — здесь же: страницу печатают и несут в суд, а заявление
+    # подают с серией, номером и датой выдачи. До 09.09.2026 их на странице не
+    # было вовсе, хотя добыты они тем же — уже оплаченным — обращением.
+    if subject.passport:
+        issued = (
+            f", выдан {format_date(subject.passport_issued)}" if subject.passport_issued else ""
+        )
+        parts.append(f"паспорт {subject.passport}{issued}")
+    if subject.snils:
+        parts.append(f"СНИЛС {subject.snils}")
     record = report.internal_record
     if record and record.contract_number:
         parts.append(f"договор {record.contract_number}")

@@ -715,9 +715,17 @@ async def test_the_passport_never_reaches_storage_or_the_report(
 
     bridge_row = next(row for row in rows if row.provider == ProviderName.INN_BRIDGE.value)
     assert bridge_row.raw_response is None
-    for haystack in (stored, subject_json, masked_query, render_report(report)):
+    # Паспорт не попадает в ХРАНИЛИЩЕ — вот что защищает T-23, и это в силе:
+    # ни в сырой ответ, ни в subject_json, ни в маскированный запрос он не
+    # едет при опущенном STORE_SENSITIVE_IDENTIFIERS.
+    for haystack in (stored, subject_json, masked_query):
         for needle in (PASSPORT, SERIA, NUMBER):
             assert needle not in haystack
+    # А в тексте отчёта он теперь есть, и это решение владелицы: заявление в
+    # суд подают с серией и номером. Цена решения названа прямо — при опущенном
+    # флаге второй показ (из кэша) паспорта не покажет, потому что в базе его
+    # нет. На проде флаг поднят, и оба показа совпадают.
+    assert PASSPORT in render_report(report)
 
 
 @respx.mock
@@ -806,15 +814,27 @@ async def test_the_derived_inn_is_stored_while_the_passport_is_not(
 async def test_the_report_never_prints_the_obtained_inn(
     bridge_settings: Settings, database: Database, passport_subject: SearchSubject
 ) -> None:
-    """T-28. Ни полностью, ни маскированно — иначе два показа разойдутся."""
+    """T-28 отменено 09.09.2026: ИНН печатается, и печатать его обязательно.
+
+    Запрет стоял на доводе «иначе два показа разойдутся»: ИНН добывается мостом
+    внутри поиска, и отчёт, восстановленный из кэша, показал бы меньше, чем
+    первый. Довод перестал быть верным, когда ``redact_subject`` начал ХРАНИТЬ
+    ``inn`` в обоих режимах приватности — как раз ради правильности второго
+    показа. С тех пор оба показа совпадают, а запрет остался и прятал поле,
+    ради которого мост и написан.
+
+    Владелица сформулировала это одной фразой: «мы телефон ввели, чтобы в
+    ответе были все поля». ИНН добыт за деньги, по нему проверены банкротство,
+    ИП и арбитраж — не показать его значит заставить искать его отдельно.
+    """
     route(envelope(data=[{"innfiz": INN}]))
     service = _service(bridge_settings, database)
 
     report = await service.search(passport_subject, telegram_user_id=OPERATOR_ID)
     text = render_report(report)
 
-    assert INN not in text
-    assert "27********38" not in text
+    assert INN in text, "добытый ИНН обязан быть в отчёте"
+    assert f"ИНН: {INN}" in text
 
 
 # ---------------------------------------------------------------- отчёт и смета

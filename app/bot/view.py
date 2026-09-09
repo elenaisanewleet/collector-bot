@@ -143,6 +143,38 @@ def accepted_line(subject: SearchSubject) -> str | None:
     return "Принял: " + " · ".join(parts)
 
 
+def identifiers_line(subject: SearchSubject) -> str | None:
+    """Чем этот человек опознан — одной строкой под его именем в отчёте.
+
+    ЗАЧЕМ ОНА В ОТЧЁТЕ, ЕСЛИ ЕСТЬ «ПРИНЯЛ». Затем, что «Принял» к этому моменту
+    уже стёрт: отчёт ПРАВИТ то же самое сообщение (``_edit_or_send``), и всё,
+    что стояло в нём до проверки, исчезает. Паспорт, СНИЛС и дата выдачи жили
+    ровно до конца ожидания, а потом пропадали из чата совсем.
+
+    И главное — ИНН. Его добывает мост «паспорт → ИНН» ВНУТРИ поиска, за
+    деньги, и до сих пор он не попадал никуда: в «Принял» его ещё нет (строка
+    считается до моста), в отчёте не было идентификаторов вовсе. Владелица
+    сказала прямо: «мы телефон ввели, чтобы в ответе были все поля».
+
+    Имени здесь нет: оно стоит строкой выше, отдельно.
+    """
+    if subject.search_type != SearchType.PERSON.value:
+        return None
+    parts: list[str] = []
+    if subject.birth_date:
+        parts.append(f"дата рождения {format_date(subject.birth_date)}")
+    if subject.inn:
+        parts.append(f"ИНН {subject.inn}")
+    if subject.passport:
+        issued = (
+            f", выдан {format_date(subject.passport_issued)}" if subject.passport_issued else ""
+        )
+        parts.append(f"паспорт {subject.passport}{issued}")
+    if subject.snils:
+        parts.append(f"СНИЛС {subject.snils}")
+    return " · ".join(parts) if parts else None
+
+
 def batch_progress(processed: int, total: int, failed: int, *, spent: str | None = None) -> str:
     """Прогресс массовой проверки: сколько сделано и во что это уже обошлось.
 
@@ -188,11 +220,14 @@ def report_card(
         # не должна быть неотличима от настоящей проверки.
         lines.extend((DEMO_BANNER, ""))
     lines.append(report.subject.display_name)
-    # Эха «Принял: ФИО · дата · госномер» здесь больше нет. Оно уже сказано
-    # сообщением о ходе проверки, прямо над этим, — и повтор через десять
-    # секунд ничего не добавлял. Отчёт отвечает на вопрос, а не пересказывает
-    # его: имя должника называет строка выше, а чем именно его нашли, видно на
-    # самой странице отчёта, где под это есть место.
+    # Идентификаторы — под именем. Раньше их здесь не было, с доводом «эхо уже
+    # сказано сообщением о ходе проверки». Довод оказался неверным: отчёт ПРАВИТ
+    # это самое сообщение, и всё, что в нём стояло, стирается. Паспорт и СНИЛС
+    # исчезали из чата, а добытый мостом ИНН не появлялся вовсе — он приходит
+    # позже, чем печаталось эхо.
+    identifiers = identifiers_line(report.subject)
+    if identifiers:
+        lines.append(identifiers)
     lines.extend(notes)
     lines.extend(("", VERDICT_LEAD[decision.verdict], decision.headline, ""))
 
