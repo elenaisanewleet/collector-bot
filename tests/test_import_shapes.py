@@ -190,7 +190,7 @@ async def test_re_importing_with_one_more_column_updates_instead_of_doubling(
     await import_service.import_text("ФИО,Договор,Телефон\nИванов Иван Иванович,ЭВ-1,")
 
     again = await import_service.import_text(
-        "ФИО,Договор,Телефон\nИванов Иван Иванович,ЭВ-1,+79161234567"
+        "ФИО,Договор,Телефон\nИванов Иван Иванович,ЭВ-1,+79990001122"
     )
 
     assert again.created == 0

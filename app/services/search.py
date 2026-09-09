@@ -801,10 +801,17 @@ def redact_subject(subject: SearchSubject, *, store_sensitive: bool) -> dict[str
     :meth:`SearchService._load_cached`, where a report rebuilt without it demotes
     a confirmed bankruptcy to a weak match and drops it. The passport itself is
     still stripped; what survives is the twelve digits it was exchanged for.
+
+    СНИЛС вычёркивается вместе с паспортом и по той же причине: это документ, а
+    не ключ поиска. Ни один источник по нему не ищет, поэтому потерять его при
+    записи ничего не стоит — а сохранённый он превратил бы историю запросов в
+    хранилище чужих документов.
     """
     payload = subject.model_dump(mode="json")
     if not store_sensitive:
         payload.pop("passport", None)
+        payload.pop("snils", None)
+        payload.pop("passport_issued", None)
         payload.pop("phone", None)
     return payload
 

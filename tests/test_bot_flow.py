@@ -131,15 +131,15 @@ async def test_the_card_remembers_the_previous_message(
 ) -> None:
     """Дословный случай из жалобы владелицы.
 
-    «Клочкова Елена Николаевна», затем «24 11 1994» — это ОДИН человек с датой,
+    «Иванова Мария Сергеевна», затем «05 07 1985» — это ОДИН человек с датой,
     а не два запроса, из которых второй ни о ком. Ни одного прогона до кнопки.
     """
-    await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
-    await feed(dispatcher, bot, message=make_message("24 11 1994"))
+    await feed(dispatcher, bot, message=make_message("Иванова Мария Сергеевна"))
+    await feed(dispatcher, bot, message=make_message("05 07 1985"))
 
-    assert sent.contains("Фамилия: Клочкова")
-    assert sent.contains("Отчество: Николаевна")
-    assert sent.contains("Дата рождения: 24.11.1994")
+    assert sent.contains("Фамилия: Иванова")
+    assert sent.contains("Отчество: Сергеевна")
+    assert sent.contains("Дата рождения: 05.07.1985")
     assert not sent.contains("RECOVERY SCORE")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
@@ -208,21 +208,21 @@ async def test_the_phone_has_its_own_button_and_opens_nothing_external(
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:phone"))
     assert sent.contains("✎ Номер или ФИО")
 
-    await feed(dispatcher, bot, message=make_message("+7 916 123 45 67"))
+    await feed(dispatcher, bot, message=make_message("+7 999 000 11 22"))
     # В карточку едет маска, полный номер — только в память процесса.
-    assert sent.contains("+7 (916) ***-**-67")
-    assert not sent.contains("+79161234567")
+    assert sent.contains("+7 (999) ***-**-22")
+    assert not sent.contains("+79990001122")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
     subject = next(iter(container.subject_store._items.values()))[0]
-    assert subject.phone == "+79161234567"
+    assert subject.phone == "+79990001122"
 
 
 async def test_a_phone_alone_is_not_a_subject(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
     """Ни один внешний реестр по телефону не ищет — платить за него нечем."""
-    await feed(dispatcher, bot, message=make_message("+79161234567"))
+    await feed(dispatcher, bot, message=make_message("+79990001122"))
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
 
     assert not sent.contains("RECOVERY SCORE")
@@ -290,10 +290,10 @@ async def test_a_wrong_answer_to_a_named_field_is_not_guessed_elsewhere(
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:inn"))
     sent.texts.clear()
-    await feed(dispatcher, bot, message=make_message("Клочкова"))
+    await feed(dispatcher, bot, message=make_message("Иванова"))
 
     assert sent.contains("на ИНН физлица не похоже")
-    assert not sent.contains("Фамилия: Клочкова")
+    assert not sent.contains("Фамилия: Иванова")
 
 
 async def test_garbage_does_not_touch_the_card_and_costs_nothing(
@@ -308,19 +308,18 @@ async def test_garbage_does_not_touch_the_card_and_costs_nothing(
     assert sent.contains("RECOVERY SCORE")
 
 
-async def test_a_name_alone_runs_and_the_card_names_the_sources(
+async def test_a_name_alone_runs_with_what_it_was_given(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """Полнота не блокирует. Бот идёт с тем, что дали, и называет источники.
+    """Полнота не блокирует: бот идёт с тем, что дали.
 
-    Что именно останется неопрошенным на живых провайдерах, проверяется на них
-    самих (``tests/test_coverage.py``) и на оговорках прогона
-    (``tests/test_query_card.py``): демо-источники ищут по одному ФИО и про
-    обязательную дату у ФССП не знают.
+    Счёта источников на карточке больше нет — его убрала владелица («вообще
+    непонятно, о чём он»). Неопрошенное называет ОТЧЁТ, где это относится к уже
+    потраченным деньгам: см. ``test_the_report_names_the_sources_that_stayed_unqueried``.
     """
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
-    assert sent.contains("Сейчас спрошу:")
-    assert sent.contains("Прочерк — это «я не спрашивал», а не «не нашли».")
+    assert sent.contains("Фамилия: Тестов")
+    assert not sent.contains("Сейчас спрошу:")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
     assert sent.contains("RECOVERY SCORE")
@@ -359,11 +358,13 @@ async def test_ambiguous_ten_digits_ask_instead_of_guessing(
     )
 
     assert sent.contains("паспорт или телефон")
-    assert not sent.contains("Паспорт: 92** ******")
+    assert not sent.contains("Паспорт: 9204384710")
     assert not sent.contains("RECOVERY SCORE")
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:ten:p"))
-    assert sent.contains("92** ******")
+    # Ответили «паспорт» — номер встаёт в карточку целиком: маску владелица
+    # отменила («нам надо наоборот сохранять эти номера»).
+    assert sent.contains("Паспорт: 9204384710")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
     subject = next(iter(container.subject_store._items.values()))[0]
@@ -385,13 +386,13 @@ async def test_a_different_surname_is_never_merged_silently(
 ) -> None:
     """Слияние двух должников в одного — самая дорогая ошибка карточки."""
     await feed(dispatcher, bot, message=make_message("Петров Пётр Петрович"))
-    await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
+    await feed(dispatcher, bot, message=make_message("Иванова Мария Сергеевна"))
 
     assert sent.contains("это другой человек или исправление?")
     assert sent.contains("Фамилия: Петров")
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:new"))
-    assert sent.contains("Фамилия: Клочкова")
+    assert sent.contains("Фамилия: Иванова")
 
 
 async def test_the_card_survives_a_restart(
@@ -551,14 +552,22 @@ async def test_vin_search_runs(dispatcher: Dispatcher, bot: Bot, sent: SentMessa
     assert sent.contains("RECOVERY SCORE")
 
 
-async def test_passport_search_masks_the_number(
+async def test_passport_search_shows_the_number_it_was_given(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
+    """Паспорт печатается целиком — маску владелица отменила.
+
+    Раньше здесь стояла обратная проверка: номера в чате быть не должно. Она
+    закрепляла обещание «номер не сохраняю и сообщение удалю», которое бот
+    давал перед вводом. Обещание снято дословным указанием — «надо убрать это,
+    нам надо наоборот сохранять эти номера», — и продукт под ним изменился: бот
+    закрыт, принадлежит одному владельцу и добывает документы ровно затем,
+    чтобы тот подал с ними в суд.
+    """
     await feed(dispatcher, bot, callback_query=make_callback("menu:passport"))
     await feed(dispatcher, bot, message=make_message("4509123456"))
 
-    assert not sent.contains("4509123456")
-    assert sent.contains("45** ******")
+    assert sent.contains("4509123456")
 
 
 # ------------------------------------------------- паспорт: только после отчёта
@@ -613,13 +622,17 @@ async def test_the_passport_button_is_hidden_when_it_would_lie(
     assert not sent.contains("Узнать ИНН по паспорту")
 
 
-async def test_the_passport_button_masks_the_number_and_feeds_the_bridge(
+async def test_the_passport_button_shows_the_number_and_feeds_the_bridge(
     bot: Bot, sent: SentMessages, container: Container
 ) -> None:
-    """Нажали кнопку — паспорт спрашивается, удаляется из чата и едет в мост.
+    """Нажали кнопку — паспорт спрашивается, встаёт в карточку и едет в мост.
 
     В демо мост детерминированно выдаёт ИНН профиля, поэтому его строка
     появляется в блоке ИСТОЧНИКИ.
+
+    Раньше здесь же проверялось, что бот удаляет сообщение оператора и печатает
+    маску. Удаление отменено владелицей: «нам надо наоборот сохранять эти
+    номера».
     """
     from app.db.repository import SearchRepository
 
@@ -630,12 +643,13 @@ async def test_the_passport_button_masks_the_number_and_feeds_the_bridge(
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:passport"))
 
     assert sent.contains("✎ Паспорт")
-    assert sent.contains("Номер не сохраняю")
-    assert sent.contains("сообщение удалю")
+    # Обещаний про хранение экран больше не даёт: их отменила владелица, а
+    # оговорка, не меняющая поведение человека, — лишний текст на экране.
+    assert not sent.contains("Номер не сохраняю")
+    assert not sent.contains("сообщение удалю")
 
     await feed(dispatcher, bot, message=make_message("4509123456"))
-    assert not sent.contains("4509123456")
-    assert sent.contains("45** ******")
+    assert sent.contains("4509123456")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
     assert sent.contains("✓ ИНН по паспорту (ФНС) — ИНН получен")

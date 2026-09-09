@@ -38,6 +38,10 @@ class ShareKind(StrEnum):
     # Справочник должников целиком. Отдельный вид, а не «очередь без прогона»:
     # за ним вся база, а не результат одной проверки, и срок жизни у него свой.
     BASE = "base"
+    # Журнал проверок по номеру телефона: кого пробили и кого из них в базе
+    # нет. Отдельный вид по той же причине, что и справочник, — за ним не один
+    # отчёт, а список людей, и гасить его надо отдельно от остального.
+    LOOKUPS = "lookups"
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +144,7 @@ class ShareLinkService:
         один человек, а за ссылкой на прогон — вся выгрузка целиком. Радиус
         поражения отличается на три порядка, значит и обращение должно.
         """
-        if kind in (ShareKind.QUEUE, ShareKind.BASE):
+        if kind in (ShareKind.QUEUE, ShareKind.BASE, ShareKind.LOOKUPS):
             return self._settings.share_queue_ttl_hours
         return self._settings.share_link_ttl_hours
 
@@ -198,7 +202,12 @@ class ShareLinkService:
         return base64.urlsafe_b64encode(digest).decode().rstrip("=")[:32]
 
     def url_for(self, token: str, kind: ShareKind) -> str:
-        prefix = {ShareKind.REPORT: "r", ShareKind.QUEUE: "q", ShareKind.BASE: "b"}[kind]
+        prefix = {
+            ShareKind.REPORT: "r",
+            ShareKind.QUEUE: "q",
+            ShareKind.BASE: "b",
+            ShareKind.LOOKUPS: "n",
+        }[kind]
         return f"{self._settings.web_public_url}/{prefix}/{token}"
 
     def export_urls(self, url: str, kind: ShareKind) -> tuple[str, str]:

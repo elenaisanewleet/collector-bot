@@ -4,7 +4,7 @@
 
 **Присланное дописывается, а не запускает проверку.** Любой текст вне чужого
 сценария попадает в :meth:`QueryCardService.apply` и ложится в поле карточки.
-«Клочкова Елена Николаевна», потом «24 11 1994» — это один человек с датой, а не
+«Иванова Мария Сергеевна», потом «24 11 1994» — это один человек с датой, а не
 два запроса, из которых второй ни о ком. Платит ровно одна кнопка — «Проверить».
 
 **Ни одного состояния FSM.** Карточка помнит всё в своей строке БД, а свободный
@@ -32,6 +32,7 @@ from contextlib import suppress
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.bot import card_view
 from app.bot.card_view import Screen
@@ -47,12 +48,12 @@ from app.bot.report_actions import (
 )
 from app.bot.view import missing_reason
 from app.container import Container
-from app.domain.enums import PROVIDER_TITLES, Region, SearchType
+from app.domain.enums import PROVIDER_TITLES, ProviderStatus, Region, SearchType
 from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport, InternalDebtorRecord
 from app.logging_setup import get_logger
 from app.services import card_identify, coverage
-from app.services.query_card import Card
+from app.services.query_card import Card, fill_from_bridge
 from app.utils.dates import utcnow
 
 logger = get_logger(__name__)
@@ -80,30 +81,25 @@ async def start_person_card(message: Message, container: Container, user_id: int
     кнопкой и вводом стоял ровно поперёк него. Остальные шесть типов никуда не
     делись, они за «Другие способы поиска».
     """
-    card = await container.query_cards.load(user_id, message.chat.id)
-    if card.checked_at is not None or card.stale:
-        # Проверенная карточка чистится. Второй должник подряд — обычный
-        # рабочий случай: оператор жмёт ту же кнопку и вводит следующий телефон.
-        # До этой правки он получал карточку ПРЕДЫДУЩЕГО человека, новый номер
-        # ложился рядом с чужой фамилией, и отчёт выходил про прошлого должника,
-        # подписанный телефоном нового, — с чужим долгом и чужой пошлиной.
-        # Условие ``blank`` этот случай не ловит: у проверенной заполнено всё.
-        #
-        # Остывшая — по той же причине, только беда другая. Недособранная
-        # карточка переживала и перезапуск бота, и сутки простоя: человек жал
-        # «Проверить человека» и получал экран с чужим телефоном, который бот
-        # уже забыл, и с «пропустили» в трёх полях, которых он не пропускал.
-        # Выглядит это поломкой, и справедливо.
-        card = await container.query_cards.wipe(user_id, message.chat.id)
-    # Начинают — значит карточка обязана быть видна прямо сейчас, даже если её
-    # сообщение уже уехало вверх чата.
-    container.query_cards.forget_screen(card)
-    card.card_message_id = None
-    if card.blank:
-        # Пустая карточка — это начало разговора, и начинается он вопросами по
-        # одному полю. Недособранная не трогается: оператор вернулся к своему
-        # человеку, а не начал нового.
-        container.query_cards.begin_steps(card)
+    # ЧИСТИТСЯ ВСЕГДА. Кнопка называется «Проверить человека» — человека, то
+    # есть следующего. Раньше чистились только проверенная и остывшая карточки,
+    # а недособранная сохранялась «чтобы оператор вернулся к своему человеку».
+    # На деле вышло обратное: заказчик нажимал кнопку, ожидая начать заново, и
+    # получал ту же карточку с чужим телефоном и чужой фамилией вперемешку —
+    # «продолжается сбор данных какой-то солянки, нет даже сброса».
+    #
+    # Вернуться к недособранному по-прежнему можно, и проще прежнего: просто
+    # дописать поле сообщением, не трогая кнопку.
+    previous = await container.query_cards.load(user_id, message.chat.id)
+    card = await container.query_cards.wipe(user_id, message.chat.id)
+    # Прежняя карточка УДАЛЯЕТСЯ, а не просто забывается. Забывали — и она
+    # оставалась висеть в чате: заказчик видел несколько одинаковых карточек
+    # подряд и жаловался, что бот «шлёт одно и то же». Карточка в чате должна
+    # быть ровно одна, а новое сообщение нужно затем, чтобы она оказалась внизу,
+    # под тем, что человек только что написал.
+    card.card_message_id = previous.card_message_id
+    await _drop_card_message(message, container, card)
+    container.query_cards.begin_steps(card)
     await show(message, container, card)
 
 
@@ -151,15 +147,24 @@ async def show(
         notice=notice,
         conflict=conflict,
     )
-    if _unchanged(container, card, screen):
-        if not answering:
-            return
-        # Правкой на месте тут не обойтись: Telegram отвечает на одинаковую
-        # правку 400 «message is not modified», и сообщение осталось бы там же,
-        # выше по чату, — то есть для написавшего ничего бы не изменилось.
+    if answering:
+        # ОТВЕТ НА СООБЩЕНИЕ ВСЕГДА ПЕРЕЕЗЖАЕТ ВНИЗ, и это не расточительство.
+        #
+        # Правка на месте выглядит идеально в коде и не работает в чате:
+        # сообщение карточки остаётся там, где было, а человек смотрит вниз, где
+        # его собственный текст. Заказчик прислал это трижды одними словами —
+        # «опять молчание бота на номер», — хотя карточка исправно обновлялась,
+        # просто восемью сообщениями выше.
+        #
+        # Дублей при этом не будет: прежнее сообщение удаляется. В чате
+        # остаётся ровно одна карточка, и она внизу — под тем, что человек
+        # только что написал.
+        #
+        # Правка на месте осталась для нажатий на кнопки: там карточка на
+        # экране, её видно, и переезд был бы дёрганьем.
         await _drop_card_message(message, container, card)
-        card.card_message_id = None
-        container.query_cards.forget_screen(card)
+    elif _unchanged(container, card, screen):
+        return
 
     bot = message.bot
     if bot is not None and card.card_message_id is not None:
@@ -209,6 +214,21 @@ def _starts_new_person(text: str | None) -> bool:
     return classify_fragment(text).kind is FragmentKind.PHONE
 
 
+def _asked_phone(card: Card) -> bool:
+    """Спрошен ли телефон нарочно — кнопкой «Телефон» на карточке."""
+    return card.awaiting_field == Field.PHONE.value
+
+
+def _describes_someone(card: Card) -> bool:
+    """Описан ли в карточке КОНКРЕТНЫЙ человек, а не просто набран номер.
+
+    Именно человек: фамилия, имя, дата рождения, ИНН, паспорт. Телефон и
+    госномер сюда не входят — с них разговор и начинается, и пришедший следом
+    номер не должен стирать сам себя.
+    """
+    return any((card.last_name, card.first_name, card.middle_name, card.birth_date, card.inn))
+
+
 def _pending_conflict(card: Card):  # type: ignore[no-untyped-def]
     """Отложенное ФИО, если вопрос «другой человек или исправление» ещё открыт."""
     from app.domain.identity import NameParseError, parse_fio
@@ -231,21 +251,25 @@ async def absorb(message: Message, container: Container, user_id: int) -> None:
     запрос, оно продолжает предыдущий.
     """
     card = await container.query_cards.load(user_id, message.chat.id)
-    if card.checked_at is not None and _starts_new_person(message.text):
-        # Присланный телефон после законченной проверки — это следующий
-        # должник, а не добавка к прошлому. Дописать номер в проверенную
-        # карточку значит выпустить отчёт про прежнего человека под новым
-        # номером. Остальные поля («дошлите ИНН — перепроверю того же»)
-        # по-прежнему дописываются: телефон здесь единственный ключ, с которого
-        # начинается НОВЫЙ человек.
+    if _starts_new_person(message.text) and _describes_someone(card) and not _asked_phone(card):
+        # Присланный телефон — это СЛЕДУЮЩИЙ должник, а не добавка к прошлому.
+        #
+        # Раньше условие требовало ещё и законченной проверки, и в этом была
+        # дыра: незаконченная карточка не чистилась. Заказчик ввёл номер и
+        # увидел его рядом с фамилией «Абаджян», оставшейся от прошлых попыток,
+        # — «это вообще не тот человек, это мой номер». До отчёта про чужого
+        # человека оттуда один шаг, а отчёт несут в суд.
+        #
+        # Чистится только когда в карточке УЖЕ кто-то описан: телефон, дописанный
+        # к пустой карточке или к своему же номеру, ничего не начинает заново.
+        # И не чистится, когда номер спросили кнопкой «Телефон»: оператор сам
+        # попросил это поле у ЭТОГО человека, стирать его было бы наглостью.
+        # Остальные поля («дошлите ИНН — перепроверю того же») по-прежнему
+        # дописываются: телефон здесь единственный ключ, с которого начинается
+        # новый человек.
         card = await container.query_cards.wipe(user_id, message.chat.id)
         container.query_cards.begin_steps(card)
     applied = container.query_cards.apply(card, message.text or "")
-    if applied.delete_message:
-        # Паспорт: убираем сообщение оператора, чтобы номер не остался в
-        # истории чата. Best-effort — в группе на это нужны права админа.
-        with suppress(Exception):
-            await message.delete()
     if not applied.changed and applied.notice is None:
         # Присланное ничего не изменило: тот же номер второй раз, то же имя.
         # Раньше здесь стоял молчаливый выход, и он же был виден заказчику как
@@ -260,7 +284,7 @@ async def absorb(message: Message, container: Container, user_id: int) -> None:
         # Ответ не подошёл под заданный вопрос. Шаг остаётся заданным, вперёд
         # сценарий не идёт: вопрос, который не получил ответа, обязан
         # задаться ещё раз, а не молча пропасть.
-        await show(message, container, applied.card, notice=applied.notice)
+        await show(message, container, applied.card, notice=applied.notice, answering=True)
         return
     await settle(message, container, applied.card, user_id, notice=applied.notice)
 
@@ -277,6 +301,15 @@ async def settle(
     notice: str | None = None,
 ) -> None:
     """Что делать после того, как в карточку легло новое поле.
+
+    Все ``show`` отсюда идут с ``answering=True``, и это не украшение. В эту
+    функцию попадают ТОЛЬКО из :func:`absorb`, то есть в ответ на набранное
+    человеком сообщение, — а на сообщение бот обязан ответить всегда, даже
+    когда экран не изменился ни на символ. Иначе выходит то, что заказчик
+    видит как «ввёл номер, и ничего не произошло».
+
+    Первый раз это чинилось только в одной ветке absorb, и дефект вернулся
+    через несколько часов другой дорогой: тем же молчанием, но из settle.
 
     Здесь живёт правило, которое важнее порядка шагов: **как только человек
     опознан в выгрузке однозначно — вопросы прекращаются**. Владелица сказала
@@ -299,7 +332,7 @@ async def settle(
     случился бы без нажатия на единственную платящую кнопку.
     """
     if card.pending_ten or card.pending_name:
-        await show(message, container, card, notice=notice)
+        await show(message, container, card, notice=notice, answering=True)
         return
 
     guided = card.guided
@@ -308,12 +341,14 @@ async def settle(
         # догадка. По ней выгрузка не спрашивается: подставленная из неё дата
         # рождения легла бы в карточку поверх той, которую оператор намеренно
         # пропустил.
-        await show(message, container, card, notice=notice)
+        await show(message, container, card, notice=notice, answering=True)
         return
 
     # По одному номеру искать в выгрузке нечем: телефона в ней нет и не будет.
     # Имя добывает мост, и добывает ДО поиска — иначе искать не по чему.
+    had_name = card.name is not None
     bridge_note = await _resolve_name(container, card)
+    resolved_now = not had_name and card.name is not None
 
     found = await card_identify.identify(container.search_service, card)
     if found.only is not None:
@@ -327,6 +362,29 @@ async def settle(
         # платит — свободное ФИО до выгрузки не доходит вовсе, а неоднозначное
         # совпадение уходит в вопрос, а не в прогон.
         await recognised(message, container, card, found.only, user_id, notice=notice)
+        return
+
+    if resolved_now and _runnable_now(container, card):
+        # Личность собрана по номеру, а в выгрузке такого нет — это НОВЫЙ
+        # клиент, и проверка ему нужна ровно так же. Раньше здесь бот
+        # останавливался и показывал форму: автопрогон жил только в ветке
+        # «опознали по выгрузке», то есть работал для старых должников и молчал
+        # для новых — при том, что новых как раз и заводят.
+        #
+        # Требование владелицы дословно: «ссылка на веб-отчёт должна появиться,
+        # то есть сразу же по данным должны запросы дальше идти».
+        #
+        # Правило «платит одна кнопка» не нарушено, а применено как есть: сюда
+        # доходит только ТОЧНЫЙ ключ (см. ранний возврат выше), а платящим
+        # действием для точного ключа его ввод и признан — тем же доводом, что
+        # в ветке опознания. Догадка по-прежнему не платит.
+        await run_card(
+            message,
+            container,
+            card,
+            user_id,
+            extra_notes=[note for note in (notice, _new_client_note(found, card)) if note],
+        )
         return
 
     if guided:
@@ -346,11 +404,31 @@ async def settle(
         message,
         container,
         card,
+        answering=True,
         notice=bridge_note
         or _ambiguous(found, card)
         or _once(container, card, _missed(found, card))
         or notice,
     )
+
+
+def _runnable_now(container: Container, card: Card) -> bool:
+    """Есть чем проверять и это не повтор уже оплаченного прогона."""
+    if not card.runnable_with(phone_resolves=_phone_resolves(container)):
+        return False
+    return card.last_run_hash != container.query_cards.run_hash(card)
+
+
+def _new_client_note(found: card_identify.Identified, card: Card) -> str | None:
+    """«В вашей базе такого нет» — в отчёт, а не на карточку.
+
+    Карточку при автопрогоне никто не увидит, а новость важная: по ней владелец
+    решает, заводить ли человека. В отчёте она стоит рядом с тем, что про него
+    ответили реестры, — то есть там, где по ней и принимают решение.
+    """
+    if not found.missed or _searched_by(card) is None:
+        return None
+    return card_view.NOT_IN_EXPORT_NEW
 
 
 def _once(container: Container, card: Card, notice: str | None) -> str | None:
@@ -399,16 +477,74 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
     result = await bridge.fetch(subject)
     name = getattr(result, "name", None)
     if name is None:
-        # Ручка молчит или никого не знает. Разница для оператора одна: дальше
-        # он вводит фамилию. Одной строкой, без объяснений про источники.
-        return card_view.NAME_NOT_RESOLVED
-    card.last_name = name.last_name
-    card.first_name = name.first_name
-    card.middle_name = name.middle_name
+        # Почему не вышло — говорится словами, разными для разных причин.
+        # Оператору это меняет следующее действие (повторить или набирать
+        # фамилию), а нам даёт единственный способ увидеть с прода, что
+        # сломалось: до этого «не определилось» значило и «источник упал», и
+        # «мост не настроен», и «честно никого нет».
+        logger.info(
+            "phone_bridge.no_name",
+            user_id=card.telegram_user_id,
+            status=result.status.value,
+            error_code=result.error_code,
+        )
+        return _why_no_name(result.status)
+
+    passport = getattr(result, "passport", None)
+    snils = getattr(result, "snils", None)
+    inn = getattr(result, "inn", None)
     birth = getattr(result, "birth_date", None)
-    if birth is not None and card.birth_date is None:
-        card.birth_date = birth
+    issued = getattr(result, "passport_issued", None)
+    # Переносится ВСЁ, что пришло одним ответом, а не только имя с датой. Раньше
+    # здесь стояли четыре строки про ФИО и дату, и паспорт со СНИЛСом из того же
+    # оплаченного ответа терялись молча: карточка их не показывала, отчёт не
+    # получал, владелец шёл искать документы руками. Правила переноса — в
+    # :func:`~app.services.query_card.fill_from_bridge`.
+    fill_from_bridge(
+        card,
+        name=name,
+        birth_date=birth,
+        inn=inn,
+        passport=passport,
+        snils=snils,
+        passport_issued=issued,
+    )
+    # Журнал находок. Пишется здесь, а не при показе страницы, потому что
+    # отметка «новый клиент» — замер СВОЕГО дня: следующий импорт выгрузки
+    # изменит ответ, и посчитанный задним числом он соврал бы молча.
+    #
+    # Падение журнала не должно ронять ответ на номер: человек ждёт карточку, а
+    # не запись в таблицу. Ошибка уходит в лог и остаётся там.
+    try:
+        await container.phone_lookups.record(
+            telegram_user_id=card.telegram_user_id,
+            phone=card.phone,
+            name=name,
+            birth_date=birth,
+            inn=inn,
+            passport=passport,
+            snils=snils,
+            passport_issued=issued,
+        )
+    except SQLAlchemyError:
+        logger.exception("phone_lookup.record_failed", user_id=card.telegram_user_id)
     return None
+
+
+def _why_no_name(status: ProviderStatus) -> str:
+    """Что сказать оператору, когда имя по номеру не определилось.
+
+    Три исхода и три разных следующих действия. ``NO_RESULTS`` — источник
+    спросили, и он никого не знает: набирать фамилию. ``UNAVAILABLE``/``ERROR``
+    — источник не ответил: повтор через минуту может сработать, и отправлять
+    человека печатать руками рано. ``NOT_CONFIGURED`` — мост не настроен, и это
+    не про должника вовсе, а про развёртывание.
+    """
+    if status is ProviderStatus.NO_RESULTS:
+        return card_view.NAME_NOT_FOUND
+    if status is ProviderStatus.NOT_CONFIGURED:
+        return card_view.NAME_LOOKUP_OFF
+    return card_view.NAME_SOURCE_SILENT
 
 
 def _missed(found: card_identify.Identified, card: Card) -> str | None:
@@ -428,6 +564,10 @@ def _missed(found: card_identify.Identified, card: Card) -> str | None:
     key = _searched_by(card)
     if key is None:
         return None
+    if card.name is not None:
+        # Личность уже собрана: «попробуйте фамилию с именем» поверх
+        # заполненной фамилии — совет сделать то, что уже сделано.
+        return card_view.NOT_IN_EXPORT_NEW
     missed = card_view.NOT_IN_EXPORT.format(key=key)
     if card.awaiting_field:
         # Следующей строкой бот сам спросит поле — «попробуйте фамилию с
@@ -545,7 +685,7 @@ async def recognised(
 
     runnable = card.runnable_with(phone_resolves=_phone_resolves(container))
     if autorun and runnable and card.last_run_hash != container.query_cards.run_hash(card):
-        # Оговорка к разбору («„Клочкова“ записал в фамилию») не теряется:
+        # Оговорка к разбору («„Иванова“ записал в фамилию») не теряется:
         # она едет в отчёт, где по этому полю только что прошёл платный запрос.
         # А «нашёл того-то» не едет — это и есть отчёт.
         await run_card(message, container, card, user_id, extra_notes=[notice] if notice else [])
@@ -553,7 +693,9 @@ async def recognised(
 
     # Оговорка к разбору не выбрасывается ради хорошей новости: угаданное поле
     # надо показать даже тогда.
-    await show(message, container, card, notice=f"{notice} {found}" if notice else found)
+    await show(
+        message, container, card, notice=f"{notice} {found}" if notice else found, answering=True
+    )
 
 
 # ---------------------------------------------------------------- прогон
@@ -592,7 +734,7 @@ async def run_card(
     """Проверить то, что собрано, и показать отчёт.
 
     ``extra_notes`` — оговорки, которые иначе остались бы на карточке, а
-    карточка при автопрогоне не рисуется. Терять их нельзя: «„Клочкова“ записал
+    карточка при автопрогоне не рисуется. Терять их нельзя: «„Иванова“ записал
     в фамилию» относится к полю, по которому сейчас пройдёт платный запрос.
     """
     # Один телефон — законный субъект, когда мост умеет перевести его в ФИО:

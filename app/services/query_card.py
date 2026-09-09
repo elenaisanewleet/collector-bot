@@ -17,13 +17,19 @@ VIN, адрес, договор, паспорт, импорт — привяза
 забрала бы себе весь текст и сняла бы этот фильтр. Поэтому «какое поле мы ждём»
 — колонка в таблице, а не ``State``, и порядок роутеров не меняется вовсе.
 
-**Паспорт и телефон в базу не едут.** В ``query_cards`` их колонок нет ни под
-каким флагом — только маски. Сами номера лежат час в памяти процесса
-(:class:`CardSecrets`), ровно как паспорт в ``SubjectStore``. Карточка — черновик
-на несколько минут; платить за него отменой действующей политики приватности
-нечем. После перезапуска карточка честно пишет «сам номер не храню, пришлите
-заново»: это не прочерк и не молчание, разница между «не спрашивали» и «было, но
-не сохраняю» видна.
+**Паспорт и СНИЛС хранятся при поднятом ``STORE_SENSITIVE_IDENTIFIERS``** — то
+же правило, что у ``debtors``: маска всегда, документ при флаге. Раньше их не
+хранили ни под каким флагом; отменила это владелица («нам надо наоборот
+сохранять эти номера»), и довод против устарел вместе с продуктом: бот теперь
+документы не принимает, а НАХОДИТ и платит за это. Черновик, теряющий
+оплаченное при перезапуске, заставляет платить дважды.
+
+**Телефон в базу не едет** ни под каким флагом — только маска. Его оператор
+вводит сам и помнит, а ``phone_hash`` в ``debtors`` считается без соли.
+
+При опущенном флаге после перезапуска карточка честно пишет «сам номер не храню,
+пришлите заново»: разница между «не спрашивали» и «было, но не сохранилось»
+видна.
 
 **Пустое поле — это «мы не спрашивали», а не «мы не нашли».** Главный инвариант
 проекта в применении к карточке. Отсюда же запрет на «заполнено 4 из 7» и
@@ -52,6 +58,7 @@ from app.bot.identifiers import (
     parse_query,
     spills_beyond,
 )
+from app.config import Settings
 from app.db.repository import QueryCardRepository
 from app.db.session import Database
 from app.domain.enums import SearchType
@@ -65,7 +72,7 @@ from app.domain.identity import (
 )
 from app.utils.dates import utcnow
 from app.utils.hashing import stable_hash
-from app.utils.masking import mask_passport, mask_phone
+from app.utils.masking import mask_passport, mask_phone, mask_snils
 
 #: Сколько живут паспорт и телефон в памяти процесса. Тот же час, что у
 #: ``SubjectStore``, и по той же причине: дольше держать чужие идентификаторы
@@ -83,6 +90,8 @@ FIELD_ORDER: tuple[str, ...] = (
     "birth_date",
     "inn",
     "passport",
+    "passport_issued",
+    "snils",
     "plate",
     "vin",
     "contract_number",
@@ -93,7 +102,7 @@ FIELD_ORDER: tuple[str, ...] = (
 #: Семь пустых строк подряд читаются как шкала полноты, а это ровно то
 #: впечатление, которое карточка создавать не должна.
 OPTIONAL_ROWS: frozenset[str] = frozenset(
-    {"passport", "plate", "vin", "contract_number", "address"}
+    {"passport", "passport_issued", "snils", "plate", "vin", "contract_number", "address"}
 )
 
 FIELD_TITLES: dict[str, str] = {
@@ -104,6 +113,8 @@ FIELD_TITLES: dict[str, str] = {
     "phone": "Телефон",
     "inn": "ИНН",
     "passport": "Паспорт",
+    "passport_issued": "Паспорт выдан",
+    "snils": "СНИЛС",
     "plate": "Госномер",
     "vin": "VIN",
     "contract_number": "Договор",
@@ -155,6 +166,12 @@ class Card:
     inn: str | None = None
     phone_masked: str | None = None
     passport_masked: str | None = None
+    snils_masked: str | None = None
+    #: Дата выдачи паспорта. В базу едет как есть, а не маской, и это не
+    #: послабление: сама по себе дата не опознаёт никого — опознаёт номер, а он
+    #: по-прежнему живёт только в памяти. Ради маски над датой пришлось бы
+    #: заводить формат, который ничего не скрывает.
+    passport_issued: date | None = None
     plate: str | None = None
     vin: str | None = None
     contract_number: str | None = None
@@ -178,6 +195,7 @@ class Card:
     #: Живут только в памяти процесса.
     phone: str | None = None
     passport: str | None = None
+    snils: str | None = None
     #: Десять цифр с девятки, ждущие ответа «паспорт или телефон». Тоже только
     #: в памяти: половину времени это паспорт.
     pending_ten: str | None = None
@@ -310,6 +328,8 @@ class Card:
             phone=self.phone,
             inn=self.inn,
             passport=self.passport,
+            snils=self.snils,
+            passport_issued=self.passport_issued,
             vehicle=vehicle,
             contract_number=self.contract_number,
             address=self.address,
@@ -320,14 +340,36 @@ class Card:
         return getattr(self, name, None)
 
     def shown(self, name: str) -> str | None:
-        """Что печатать в строке поля. Секреты — только масками."""
+        """Что печатать в строке поля.
+
+        ДОКУМЕНТЫ ПЕЧАТАЮТСЯ ЦЕЛИКОМ. Раньше здесь стояла маска, и держалась
+        она на обещании, которое бот давал перед вводом паспорта: «номер не
+        сохраняю и сообщение удалю». Обещание владелица отменила дословно —
+        «надо убрать это, нам надо наоборот сохранять эти номера», — и вместе с
+        ним отпало основание для маски. Бот закрыт, принадлежит одному
+        человеку, а документы добывает ровно затем, чтобы тот подал с ними в
+        суд: заявление подаётся с серией и номером, не с их тенью.
+
+        Маска показывается ровно в одном случае — когда самого документа нет, а
+        она осталась. Так бывает после перезапуска, если развёртывание не
+        хранит документы (``STORE_SENSITIVE_IDENTIFIERS`` опущен): карточка
+        честно говорит «было, но не сохранилось», и это не то же самое, что «не
+        спрашивали».
+
+        Телефон — всегда маской, и он тут особый: его прислал сам оператор, он
+        его и так знает, а строка карточки от полного номера длиннее ровно на
+        ничего.
+        """
         match name:
             case "phone":
                 return self.phone_masked
             case "passport":
-                return self.passport_masked
-            case "birth_date":
-                return self.birth_date.strftime("%d.%m.%Y") if self.birth_date else None
+                return self.passport or self.passport_masked
+            case "snils":
+                return self.snils or self.snils_masked
+            case "birth_date" | "passport_issued":
+                value = self.value(name)
+                return value.strftime("%d.%m.%Y") if isinstance(value, date) else None
             case _:
                 value = self.value(name)
                 return str(value) if value else None
@@ -338,6 +380,8 @@ class Card:
             return bool(self.phone_masked) and not self.phone
         if name == "passport":
             return bool(self.passport_masked) and not self.passport
+        if name == "snils":
+            return bool(self.snils_masked) and not self.snils
         return False
 
     def to_columns(self) -> dict[str, Any]:
@@ -349,7 +393,11 @@ class Card:
             "birth_date": self.birth_date,
             "inn": self.inn,
             "phone_masked": self.phone_masked,
+            "passport": self.passport,
             "passport_masked": self.passport_masked,
+            "snils": self.snils,
+            "snils_masked": self.snils_masked,
+            "passport_issued": self.passport_issued,
             "plate": self.plate,
             "vin": self.vin,
             "contract_number": self.contract_number,
@@ -431,8 +479,6 @@ class Applied:
     notice: str | None = None
     changed: bool = False
     conflict: PersonName | None = None
-    #: Что попросить удалить из чата: сообщение с паспортом.
-    delete_message: bool = False
     #: Присланное не подошло под названное поле, вопрос остаётся заданным.
     #: Ведомый сценарий по такому вводу вперёд не идёт: шаг, который не
     #: получил ответа, обязан задаться ещё раз, а не молча пропасть.
@@ -443,6 +489,7 @@ class Applied:
 class _Secrets:
     phone: str | None = None
     passport: str | None = None
+    snils: str | None = None
     pending_ten: str | None = None
     #: ФИО, присланное поверх другой фамилии и ждущее ответа «новый человек или
     #: исправление». Не секрет, но такой же незакрытый вопрос: пережить
@@ -510,8 +557,9 @@ class QueryCardService:
     удалялась бы и прыгала вниз чата.
     """
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, settings: Settings) -> None:
         self._database = database
+        self._settings = settings
         self._secrets = CardSecrets()
         self._screens: dict[tuple[int, int], _Screen] = {}
 
@@ -537,7 +585,11 @@ class QueryCardService:
                 birth_date=row.birth_date,
                 inn=row.inn,
                 phone_masked=row.phone_masked,
+                passport=row.passport,
                 passport_masked=row.passport_masked,
+                snils=row.snils,
+                snils_masked=row.snils_masked,
+                passport_issued=row.passport_issued,
                 plate=row.plate,
                 vin=row.vin,
                 contract_number=row.contract_number,
@@ -552,7 +604,10 @@ class QueryCardService:
             )
         secrets = self._secrets.get(card.key)
         card.phone = secrets.phone
-        card.passport = secrets.passport
+        # Память свежее базы и старше её: при опущенном флаге в базе документа
+        # нет вовсе, а в памяти он ещё живой. Пустая память базу не затирает.
+        card.passport = secrets.passport or card.passport
+        card.snils = secrets.snils or card.snils
         card.pending_ten = secrets.pending_ten
         card.pending_name = secrets.pending_name
         return card
@@ -563,14 +618,20 @@ class QueryCardService:
             _Secrets(
                 phone=card.phone,
                 passport=card.passport,
+                snils=card.snils,
                 pending_ten=card.pending_ten,
                 pending_name=card.pending_name,
             ),
         )
+        columns = card.to_columns()
+        if not self._settings.store_sensitive_identifiers:
+            # Флаг опущен — в базу едут только маски. Решение развёртывания, а
+            # не умолчание кода: снаружи это видно по тому, что после
+            # перезапуска карточка просит прислать номер заново.
+            columns["passport"] = None
+            columns["snils"] = None
         async with self._database.session() as session:
-            await QueryCardRepository(session).save(
-                card.telegram_user_id, card.chat_id, card.to_columns()
-            )
+            await QueryCardRepository(session).save(card.telegram_user_id, card.chat_id, columns)
 
     async def wipe(self, telegram_user_id: int, chat_id: int) -> Card:
         """Очистить карточку целиком, включая секреты.
@@ -619,7 +680,7 @@ class QueryCardService:
         Порядок разбора: если поле названо кнопкой — читаем текст как это поле и
         только как это поле; иначе решает форма записи. Гадание сведено к одному
         случаю — одинокому слову буквами, — и даже оно показывается вслух:
-        «„Клочкова“ записал в фамилию».
+        «„Иванова“ записал в фамилию».
         """
         if not raw.strip():
             # Пустое сообщение не правит ничего. Иначе ``edit_text`` уехал бы с
@@ -672,8 +733,8 @@ class QueryCardService:
         """Кнопку не нажимали. Строка может нести сразу несколько полей.
 
         Здесь работает полный :func:`parse_query`, а не разбор одного фрагмента:
-        типичный ввод — строка из 1С целиком, «Клочкова Елена Николаевна
-        24.11.1994 770912345601», и разложить её надо всю за одно сообщение.
+        типичный ввод — строка из 1С целиком, «Иванова Мария Сергеевна
+        05.07.1985 770912345601», и разложить её надо всю за одно сообщение.
         """
         parsed = parse_query(raw)
         applied = Applied(card=card)
@@ -837,7 +898,7 @@ class QueryCardService:
         if not digits:
             return Applied(card=card, changed=True)
         if as_passport:
-            return _merge(Applied(card=card, delete_message=True), _set_passport(card, digits))
+            return _set_passport(card, digits)
         return _set_phone(card, f"+7{digits}")
 
     def _resolve_ten_by_text(self, card: Card, raw: str) -> Applied:
@@ -898,7 +959,6 @@ def _merge(first: Applied, second: Applied) -> Applied:
         notice=first.notice or second.notice,
         changed=first.changed or second.changed,
         conflict=first.conflict or second.conflict,
-        delete_message=first.delete_message or second.delete_message,
         rejected=first.rejected or second.rejected,
     )
 
@@ -921,18 +981,35 @@ def _set_phone(card: Card, phone: str) -> Applied:
 
 
 def _set_passport(card: Card, passport: str) -> Applied:
-    """Паспорт: в карточку маска, в память номер, сообщение оператора — удалить.
+    """Паспорт: и в память, и маской в карточку.
 
-    Удаление best-effort: в личке Telegram разрешает его 48 часов, в группе
-    нужны права администратора. Не получилось — номер остаётся в истории чата,
-    и это ровно тот случай, где падать нельзя, а молчать можно.
+    Раньше отсюда уходило поручение удалить сообщение оператора, а карточка
+    печатала маску: бот обещал «номер не сохраняю и сообщение удалю» и обещание
+    держал. Владелица это отменила дословно — «надо убрать это, нам надо
+    наоборот сохранять эти номера», — и она права: бот закрыт, принадлежит
+    одному человеку и добывает документы ровно затем, чтобы тот подал с ними в
+    суд. Удалять сообщение с номером, который через минуту сам же покажешь на
+    странице, — это не приватность, а неудобство.
+
+    Маска остаётся рядом с номером, а не вместо него: по ней карточка после
+    перезапуска отличает «было, но не сохранилось» от «не спрашивали».
     """
     if card.passport == passport and card.passport_masked:
         return Applied(card=card)
     card.passport = passport
     card.passport_masked = mask_passport(passport)
     card.skipped = card.skipped - {"passport"}
-    return Applied(card=card, changed=True, delete_message=True)
+    return Applied(card=card, changed=True)
+
+
+def _set_snils(card: Card, snils: str) -> Applied:
+    """СНИЛС: и в память, и маской в карточку. То же, что у паспорта."""
+    if card.snils == snils and card.snils_masked:
+        return Applied(card=card)
+    card.snils = snils
+    card.snils_masked = mask_snils(snils)
+    card.skipped = card.skipped - {"snils"}
+    return Applied(card=card, changed=True)
 
 
 def _set_name(card: Card, name: PersonName, *, overwrite: bool = False) -> Applied:
@@ -986,7 +1063,7 @@ def _place_words(card: Card, words: list[str]) -> Applied:
     Карточка заполнена частично — слова дописываются в пустые слоты. Отсюда
     единственное исключение по форме слова: два слова поверх одной фамилии
     читаются как «имя и отчество», только если второе на отчество и похоже.
-    «Иванов Иван» поверх «Клочкова» — это другой человек, а не имя Иванов.
+    «Иванов Иван» поверх «Иванова» — это другой человек, а не имя Иванов.
     """
     if len(words) == 1:
         return _place_name_word(card, capitalize_name(words[0]))
@@ -1064,8 +1141,8 @@ def _contradicts(card: Card, name: PersonName) -> bool:
     «новый человек или исправление опечатки» из текста неразрешимо, а цена
     ошибки — отчёт, где производства одного приписаны другому.
 
-    Совпадение фамилии считается перезаписью и проходит молча: «Клочкова Елена»
-    поверх «Клочкова Е.» — это уточнение, а не второй человек.
+    Совпадение фамилии считается перезаписью и проходит молча: «Иванова Мария»
+    поверх «Иванова М.» — это уточнение, а не второй человек.
     """
     return bool(card.last_name) and card.last_name != name.last_name
 
@@ -1078,7 +1155,7 @@ def _place_name_word(card: Card, word: str, *, asked: bool = False) -> Applied:
     ставится сразу в отчество: «Николаевна» в графе «Фамилия» это ошибка,
     заметная глазом, и чинить её оператору дороже, чем нам угадать.
 
-    Догадка **показывается**, а не прячется: строка «„Клочкова“ записал в
+    Догадка **показывается**, а не прячется: строка «„Иванова“ записал в
     фамилию. Не туда — нажмите „Исправить ФИО“» стоит под карточкой. Спрятанная
     догадка и есть тот самый молчаливый разбор, от которого лечим.
     """
@@ -1114,6 +1191,47 @@ _FILLED_NOTICE = "Дописал: {}. Не туда — нажмите «Исп�
 _TOO_MANY_WORDS = TOO_MANY_NAME_WORDS
 
 
+def fill_from_bridge(
+    card: Card,
+    *,
+    name: PersonName,
+    birth_date: date | None = None,
+    inn: str | None = None,
+    passport: str | None = None,
+    snils: str | None = None,
+    passport_issued: date | None = None,
+) -> None:
+    """Положить в карточку всё, что мост поднял по номеру телефона.
+
+    Раньше отсюда переносились только ФИО и дата рождения, а паспорт, ИНН и
+    СНИЛС из того же — уже оплаченного — ответа молча терялись: карточка их не
+    показывала, отчёт не получал, а владелец шёл искать те же документы руками.
+    Это и был вопрос «почему паспорт не доезжает»: он доезжал до провайдера и
+    не доезжал до карточки.
+
+    Перенос происходит ТОЛЬКО в пустые поля. Введённое оператором старше
+    найденного: он держит договор в руках, а мост собирает личность из чужих
+    находок, объединённых одним номером телефона, — и номером пользуются и
+    родственники, и прежние владельцы номера. Спор между ними всегда решается
+    в пользу человека.
+
+    Имя — исключение и ставится целиком: мост зовут только тогда, когда имени в
+    карточке нет вовсе (см. ``_resolve_name``), так что затирать здесь нечего.
+
+    """
+    _set_name(card, name)
+    if birth_date is not None and card.birth_date is None:
+        card.birth_date = birth_date
+    if inn and not card.inn:
+        card.inn = inn
+    if passport and not card.passport_masked:
+        _set_passport(card, passport)
+    if snils and not card.snils_masked:
+        _set_snils(card, snils)
+    if passport_issued is not None and card.passport_issued is None:
+        card.passport_issued = passport_issued
+
+
 __all__ = [
     "FIELD_ORDER",
     "FIELD_TITLES",
@@ -1122,4 +1240,5 @@ __all__ = [
     "Card",
     "CardSecrets",
     "QueryCardService",
+    "fill_from_bridge",
 ]

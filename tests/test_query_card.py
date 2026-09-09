@@ -1,7 +1,8 @@
 """Накопительная карточка запроса: память между сообщениями.
 
 Первый тест здесь — дословная жалоба владелицы, и он же главный: «написала
-клочкова елена николаевна а потом 24 11 1994 и мне пишут а это к чему вообще».
+иванова мария сергеевна а потом 05 07 1985 и мне пишут а это к чему вообще».
+(ФИО и дата в цитате заменены вымышленными: они были настоящими.)
 Остальные сторожат то, чем за эту память заплачено: приватность (паспорт и
 телефон в базу не едут), деньги (платит одна кнопка, и дважды за одно и то же
 она не платит) и честность (карточка не создаёт впечатления полноты).
@@ -70,19 +71,19 @@ async def card_of(container: Container) -> QueryCard | None:
 async def test_the_owners_complaint_word_for_word(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
-    """«Клочкова Елена Николаевна», потом «24 11 1994» — один человек с датой.
+    """«Иванова Мария Сергеевна», потом «05 07 1985» — один человек с датой.
 
     Ни одного «а это к чему», ни одного прогона до кнопки, ровно один прогон
     после неё.
     """
-    await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
-    assert "Фамилия: Клочкова" in last(sent)
-    assert "Имя: Елена" in last(sent)
-    assert "Отчество: Николаевна" in last(sent)
+    await feed(dispatcher, bot, message=make_message("Иванова Мария Сергеевна"))
+    assert "Фамилия: Иванова" in last(sent)
+    assert "Имя: Мария" in last(sent)
+    assert "Отчество: Сергеевна" in last(sent)
 
-    await feed(dispatcher, bot, message=make_message("24 11 1994"))
-    assert "Дата рождения: 24.11.1994" in last(sent)
-    assert "Фамилия: Клочкова" in last(sent)
+    await feed(dispatcher, bot, message=make_message("05 07 1985"))
+    assert "Дата рождения: 05.07.1985" in last(sent)
+    assert "Фамилия: Иванова" in last(sent)
     assert not sent.contains("Не нашёл в строке")
     assert not sent.contains("RECOVERY SCORE")
 
@@ -111,30 +112,30 @@ async def test_the_name_can_arrive_one_word_at_a_time(
 async def test_a_surname_then_the_rest_is_one_person(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """«Клочкова», затем «Елена Николаевна» — имя и отчество, а не новое ФИО.
+    """«Иванова», затем «Мария Сергеевна» — имя и отчество, а не новое ФИО.
 
-    Сам :func:`parse_fio` так не умеет и уметь не должен: «Елена Николаевна» он
+    Сам :func:`parse_fio` так не умеет и уметь не должен: «Мария Сергеевна» он
     законно читает фамилией с именем, потому что не знает, что фамилия уже
     есть. Знает карточка — она и решает.
     """
-    await feed(dispatcher, bot, message=make_message("Клочкова"))
-    await feed(dispatcher, bot, message=make_message("Елена Николаевна"))
+    await feed(dispatcher, bot, message=make_message("Иванова"))
+    await feed(dispatcher, bot, message=make_message("Мария Сергеевна"))
 
-    assert "Фамилия: Клочкова" in last(sent)
-    assert "Имя: Елена" in last(sent)
-    assert "Отчество: Николаевна" in last(sent)
+    assert "Фамилия: Иванова" in last(sent)
+    assert "Имя: Мария" in last(sent)
+    assert "Отчество: Сергеевна" in last(sent)
     assert "другой человек или исправление" not in last(sent)
 
 
 async def test_two_words_without_a_patronymic_are_a_different_person(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
-    """«Иванов Иван» поверх «Клочкова» — это другой должник, а не имя Иванов.
+    """«Иванов Иван» поверх «Иванова» — это другой должник, а не имя Иванов.
 
-    Граница проходит по форме второго слова, и она названа вслух: «Николаевна»
+    Граница проходит по форме второго слова, и она названа вслух: «Сергеевна»
     дописывает начатое имя, «Иван» начинает новое.
     """
-    await feed(dispatcher, bot, message=make_message("Клочкова"))
+    await feed(dispatcher, bot, message=make_message("Иванова"))
     await feed(dispatcher, bot, message=make_message("Иванов Иван"))
 
     assert "другой человек или исправление" in last(sent)
@@ -145,7 +146,7 @@ async def test_the_conflict_question_does_not_lock_the_card(
 ) -> None:
     """Модальный экран здесь был бы ловушкой: думать можно, работать нельзя."""
     await feed(dispatcher, bot, message=make_message("Петров Пётр Петрович"))
-    await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
+    await feed(dispatcher, bot, message=make_message("Иванова Мария Сергеевна"))
 
     assert "другой человек или исправление" in last(sent)
     assert "Проверить" in buttons(sent)
@@ -156,7 +157,7 @@ async def test_a_guess_is_shown_not_hidden(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages
 ) -> None:
     """Спрятанная догадка и есть тот молчаливый разбор, от которого лечим."""
-    await feed(dispatcher, bot, message=make_message("Клочкова"))
+    await feed(dispatcher, bot, message=make_message("Иванова"))
     assert "записал в фамилию" in last(sent)
 
 
@@ -165,7 +166,7 @@ async def test_a_named_field_is_never_guessed_into_another_one(
 ) -> None:
     """Нажали «+ ИНН» — значит присланное читается ИНН и только ИНН."""
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:inn"))
-    await feed(dispatcher, bot, message=make_message("Клочкова"))
+    await feed(dispatcher, bot, message=make_message("Иванова"))
 
     assert "на ИНН физлица не похоже" in last(sent)
     row = await card_of(container)
@@ -252,7 +253,7 @@ async def test_even_a_blank_message_gets_an_answer(
     ("line", "expected_row"),
     [
         ("(916) 000-00-00", "Телефон: +7 (916) ***-**-00"),
-        ("4515 384710", "Паспорт: 45** ******"),
+        ("4515 384710", "Паспорт: 4515384710"),
     ],
     ids=["телефон по форме записи", "паспорт по форме записи"],
 )
@@ -280,27 +281,54 @@ async def test_ten_joined_digits_are_asked_about_not_guessed(
 # ---------------------------------------------------------------- приватность
 
 
-def test_the_table_has_no_column_for_a_passport_or_a_phone() -> None:
-    """Ни под каким флагом. В базу едут только необратимые маски."""
+def test_the_table_stores_documents_but_never_the_phone() -> None:
+    """Паспорт и СНИЛС — да, телефон — нет, и это две разные причины.
+
+    Документы хранятся с 08.09.2026 по прямому указанию владелицы («нам надо
+    наоборот сохранять эти номера») и по общему правилу базы: сама запись
+    происходит только при поднятом ``STORE_SENSITIVE_IDENTIFIERS``, а маска
+    рядом остаётся — по ней карточка отличает «было, но не сохранилось» от «не
+    спрашивали».
+
+    Телефона нет ни под каким флагом, и это не забыли: оператор вводит его сам
+    и помнит, хранить нечего.
+    """
     columns = {column.name for column in Base.metadata.tables["query_cards"].columns}
-    assert "passport" not in columns
+    assert {"passport", "snils"} <= columns
     assert "phone" not in columns
-    assert {"passport_masked", "phone_masked"} <= columns
+    assert {"passport_masked", "snils_masked", "phone_masked"} <= columns
 
 
-async def test_a_passport_is_masked_deleted_and_never_stored(
+async def test_a_passport_is_shown_kept_in_memory_and_left_out_of_history(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
+    """Паспорт виден целиком, маска рядом, в историю запросов не едет.
+
+    Три разных правила, и они не спорят.
+
+    ВИДЕН — потому что владелица отменила обещание «номер не сохраняю и
+    сообщение удалю»: бот закрыт, принадлежит ей одной и добывает документы
+    ровно затем, чтобы подать с ними в суд.
+
+    МАСКА РЯДОМ — потому что при опущенном ``STORE_SENSITIVE_IDENTIFIERS``
+    (умолчание, и в этом тесте тоже) сам номер в базу не едет, и после
+    перезапуска карточка обязана сказать «было, но не сохранилось», а не
+    показать прочерк.
+
+    В ИСТОРИЮ НЕ ЕДЕТ — ``redact_subject`` вычёркивает паспорт из
+    ``subject_json``. История это список «кто что искал», и превращать её в
+    хранилище документов не нужно никому.
+    """
     await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич 12.03.1985"))
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:passport"))
     await feed(dispatcher, bot, message=make_message("4509123456"))
 
-    assert "Паспорт: 45** ******" in last(sent)
-    assert not sent.contains("4509123456")
+    assert "Паспорт: 4509123456" in last(sent)
 
     row = await card_of(container)
     assert row is not None
     assert row.passport_masked == "45** ******"
+    assert row.passport is None, "флаг опущен — самого номера в базе быть не должно"
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
     async with container.database.session() as session:
@@ -321,7 +349,7 @@ async def test_a_forgotten_secret_says_so_instead_of_showing_a_dash(
     assert "+7 (916) ***-**-67" in last(sent)
 
     # «Перезапуск»: сервис пересоздан, память процесса пуста, база — нет.
-    container.query_cards = QueryCardService(container.database)
+    container.query_cards = QueryCardService(container.database, container.settings)
     restarted = setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)
 
     # Карточку открывают отменой вопроса: оговорка живёт в списке полей, а
@@ -430,7 +458,11 @@ async def test_the_card_never_shows_a_completeness_score(
     text = last(sent)
     assert "из 7" not in text
     assert "%" not in text
-    assert "Прочерк — это «я не спрашивал», а не «не нашли»." in text
+    # И ни одной строки, объясняющей форму саму себе: их убрала владелица.
+    # Разницу «не спрашивали ≠ не найдено» держит отчёт, а не форма ввода.
+    assert "Прочерк" not in text
+    assert "Сейчас спрошу" not in text
+    assert "допишу сюда же" not in text
 
 
 async def test_the_report_names_the_sources_that_stayed_unqueried(
@@ -475,7 +507,7 @@ async def test_a_different_surname_is_never_merged_silently(
 ) -> None:
     """Молчаливое слияние двух должников — самая дорогая ошибка карточки."""
     await feed(dispatcher, bot, message=make_message("Петров Пётр Петрович"))
-    await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
+    await feed(dispatcher, bot, message=make_message("Иванова Мария Сергеевна"))
 
     assert "другой человек или исправление?" in last(sent)
     assert "Петров Пётр Петрович" in last(sent)
@@ -484,19 +516,19 @@ async def test_a_different_surname_is_never_merged_silently(
     await feed(dispatcher, bot, callback_query=make_callback("qc:keep"))
     row = await card_of(container)
     assert row is not None
-    assert row.last_name == "Клочкова"
+    assert row.last_name == "Иванова"
 
 
 async def test_a_new_person_starts_from_a_clean_card(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
     await feed(dispatcher, bot, message=make_message("Петров Пётр Петрович 01.02.1979"))
-    await feed(dispatcher, bot, message=make_message("Клочкова Елена Николаевна"))
+    await feed(dispatcher, bot, message=make_message("Иванова Мария Сергеевна"))
     await feed(dispatcher, bot, callback_query=make_callback("qc:new"))
 
     row = await card_of(container)
     assert row is not None
-    assert row.last_name == "Клочкова"
+    assert row.last_name == "Иванова"
     # Дата прежнего должника не осталась висеть на новом.
     assert row.birth_date is None
 
@@ -510,7 +542,7 @@ async def test_a_new_person_starts_from_a_clean_card(
         ("menu:vehicle_plate", "О123АА777", "Авто — не подключено"),
         ("menu:contract", "EV-20481", "НАШИ ДАННЫЕ"),
         ("menu:address", "Москва", "ФИО, если известно"),
-        ("menu:passport", "4509123456", "45** ******"),
+        ("menu:passport", "4509123456", "4509123456"),
     ],
     ids=["госномер", "договор", "адрес", "паспорт"],
 )
@@ -626,7 +658,7 @@ async def test_the_miss_is_reported_once_not_over_every_question(
     правда ново.
     """
     await feed(dispatcher, bot, message=make_message("Проверить человека"))
-    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("79990001122"))
 
     assert "никого не нашёл" in last(sent)
 
@@ -708,8 +740,158 @@ async def test_a_phone_nobody_has_leads_to_the_surname_question(
     навсегда — с номером, по которому и не могло найтись.
     """
     await feed(dispatcher, bot, message=make_message("Проверить человека"))
-    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("79990001122"))
 
     screen = last(sent)
     assert "По номеру телефона никого не нашёл" in screen, "поиск был, а сказано о нём не было"
     assert "✎ Фамилия" in screen, "разговор упёрся в тот же вопрос"
+
+
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        pytest.param(["79851982945", "79851982945"], id="тот же номер дважды"),
+        pytest.param(["Тестов", "Тестов"], id="та же фамилия дважды"),
+        pytest.param(["12.03.1985", "12.03.1985"], id="та же дата дважды"),
+        pytest.param(["   ", "   "], id="пробелы дважды"),
+        pytest.param(["А123ВС77", "А123ВС77"], id="тот же госномер дважды"),
+        pytest.param(["не пойми что", "не пойми что"], id="мусор дважды"),
+        pytest.param(["79851982945", "не пойми что"], id="номер, потом мусор"),
+    ],
+)
+async def test_no_message_is_ever_left_without_an_answer(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, conversation: list[str]
+) -> None:
+    """На КАЖДОЕ сообщение приходит ответ. Без исключений и на любой дороге.
+
+    Дефект возвращался дважды, и оба раза заказчик видел одно: «ввёл номер, и
+    ничего не произошло». Первый раз молчал ранний выход из ``absorb``; его
+    починили — и через несколько часов то же молчание пришло другой дорогой,
+    из ``settle``, где ``show`` звался без ``answering``.
+
+    Поэтому тест перебирает пути, а не случай: разные типы ввода, повтор того
+    же значения, мусор. Экран при этом может не измениться ни на символ —
+    отвечать всё равно обязаны, хотя бы переставив карточку вниз.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+
+    for step, text in enumerate(conversation, start=1):
+        before = len(sent.texts)
+        await feed(dispatcher, bot, message=make_message(text))
+
+        assert len(sent.texts) > before, f"шаг {step}: на «{text}» бот промолчал"
+
+
+async def test_the_search_button_always_starts_a_new_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """«Проверить человека» — значит СЛЕДУЮЩЕГО человека, всегда.
+
+    Раньше чистились только проверенная и остывшая карточки, а недособранная
+    сохранялась «чтобы оператор вернулся к своему человеку». Вышло обратное:
+    заказчик нажимал кнопку, ожидая начать заново, и получал ту же карточку с
+    чужим телефоном и чужой фамилией вперемешку. Дословно: «продолжается сбор
+    данных какой-то солянки, нет даже сброса».
+
+    Вернуться к недособранному по-прежнему можно и проще прежнего: дописать
+    поле сообщением, не трогая кнопку.
+    """
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+    await feed(dispatcher, bot, message=make_message("Тестов"))
+    assert "Тестов" in last(sent)
+
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+
+    screen = last(sent)
+    assert "Тестов" not in screen, "фамилия прежнего должника осталась в карточке"
+    assert "***-**-45" not in screen, "телефон прежнего должника остался в карточке"
+    assert "✎" in screen, "после сброса бот обязан задать первый вопрос"
+
+
+async def test_the_card_moves_down_to_the_answer_and_leaves_no_copy(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Одна карточка, всегда внизу, без копий.
+
+    Требование менялось, и оба его конца записаны заказчиком дословно:
+    «надо чтобы просто обновлялось одно сообщение» и, тремя правками позже,
+    «опять молчание бота на номер». Второе — про правку на месте: карточка
+    исправно обновлялась, но восемью сообщениями выше, и человек смотрел вниз,
+    где её не было.
+
+    Обе жалобы снимает одно решение: прежнее сообщение удаляется, новое встаёт
+    под тем, что человек написал. Копий не остаётся, и ответ видно.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    sends, deleted = len(sent.sends), len(sent.deleted)
+
+    await feed(dispatcher, bot, message=make_message("Тестов"))
+
+    assert len(sent.sends) > sends, "ответ не появился внизу — его не увидят"
+    assert len(sent.deleted) > deleted, "прежняя карточка осталась копией в чате"
+
+
+async def test_starting_a_new_person_removes_the_previous_card(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """В чате остаётся ровно одна карточка, а не стопка одинаковых.
+
+    Прежняя карточка забывалась, но не удалялась, и висела в переписке. С
+    каждым нажатием «Проверить человека» их становилось больше — заказчик
+    прислал скриншот со словами «несколько раз пришло одно сообщение».
+
+    Новое сообщение при этом нужно: карточка обязана оказаться ВНИЗУ, под тем,
+    что человек только что написал, иначе правка на месте происходит выше по
+    чату и её не видно.
+    """
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+    await feed(dispatcher, bot, message=make_message("Тестов"))
+    deleted = len(sent.deleted)
+
+    await feed(dispatcher, bot, message=make_message("Проверить человека"))
+
+    assert len(sent.deleted) > deleted, "прежняя карточка осталась висеть в чате"
+
+
+async def test_a_new_phone_does_not_inherit_the_previous_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Номер начинает СЛЕДУЮЩЕГО должника, даже если прошлого не доверили.
+
+    Со скриншота заказчика: она ввела свой номер и увидела его рядом с
+    фамилией «Абаджян», оставшейся от прошлых попыток, — «это вообще не тот
+    человек, это мой номер».
+
+    Раньше карточка чистилась только после ЗАКОНЧЕННОЙ проверки, а
+    незаконченная тащила чужую фамилию к новому номеру. Отсюда один шаг до
+    отчёта про другого человека, а отчёт несут в суд.
+    """
+    await feed(dispatcher, bot, message=make_message("Абаджян"))
+    assert "Абаджян" in last(sent)
+
+    await feed(dispatcher, bot, message=make_message("79851982945"))
+
+    screen = last(sent)
+    assert "Абаджян" not in screen, "чужая фамилия прилипла к новому номеру"
+    assert "***-**-45" in screen, "сам номер до карточки не доехал"
+
+
+async def test_the_phone_button_adds_to_the_same_person(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """А вот кнопка «Телефон» дописывает номер ТОМУ ЖЕ человеку.
+
+    Обратная сторона правила выше, и без неё оно вредит: оператор набрал ФИО,
+    нарочно нажал «Телефон», прислал номер — и потерял бы всё набранное.
+    Разница в том, кто попросил поле: бот по просьбе оператора или оператор
+    сам прислал номер ни с того ни с сего.
+    """
+    await feed(dispatcher, bot, message=make_message("Тестов Андрей Сергеевич"))
+    await feed(dispatcher, bot, callback_query=make_callback("qc:ask:phone"))
+
+    await feed(dispatcher, bot, message=make_message("+7 916 123 45 67"))
+
+    # Ищется по всей переписке: полное ФИО опознаёт должника однозначно, и
+    # последним сообщением уходит отчёт, а не карточка.
+    assert "Тестов" in sent.joined, "нажатие «Телефон» стёрло набранного человека"
+    assert "***-**-67" in sent.joined, "номер не дописался к тому же человеку"

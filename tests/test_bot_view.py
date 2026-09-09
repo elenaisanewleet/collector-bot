@@ -197,16 +197,28 @@ def test_the_echo_repeats_what_was_understood() -> None:
     assert "770912345601" in line
 
 
-def test_the_echo_masks_the_passport_and_the_phone() -> None:
-    """В истории чата серии паспорта и номеру телефона делать нечего."""
-    subject = person(passport="4509123456", phone="+79161234567")
+def test_the_echo_shows_the_documents_and_masks_the_phone() -> None:
+    """Документы — целиком, телефон — маской, и это две разные причины.
+
+    Документы печатаются потому, что с автопрогоном по номеру карточка не
+    рисуется вовсе: эта строка осталась единственным местом, где владелец
+    видит, ЧТО нашлось по номеру. Ради паспорта и СНИЛСа обращение и оплачено,
+    и заявление подают с ними.
+
+    Телефон остаётся маской по другой причине: его прислал сам оператор, он его
+    знает наизусть, и печатать его обратно незачем.
+    """
+    subject = person(passport="4509123456", phone="+79990001122").model_copy(
+        update={"snils": "11223344595", "passport_issued": date(2015, 1, 29)}
+    )
 
     line = view.accepted_line(subject)
 
     assert line is not None
-    assert "4509123456" not in line
-    assert "+79161234567" not in line
-    assert "45** ******" in line
+    assert "паспорт 4509123456" in line
+    assert "выдан 29.01.2015" in line
+    assert "СНИЛС 11223344595" in line
+    assert "+79990001122" not in line
 
 
 def test_the_echo_is_empty_when_nothing_was_parsed() -> None:

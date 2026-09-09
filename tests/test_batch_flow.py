@@ -437,6 +437,7 @@ def refusing_container(container: Container) -> Container:
         # вторую сборку приложения.
         access_service=container.access_service,
         query_cards=container.query_cards,
+        phone_lookups=container.phone_lookups,
     )
 
 

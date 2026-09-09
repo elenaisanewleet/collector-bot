@@ -183,7 +183,24 @@ class BaseListing(NamedTuple):
     amount: Decimal
 
 
-def main_menu(*, owner: bool, base: BaseListing | None = None) -> InlineKeyboardMarkup:
+class ClientsListing(NamedTuple):
+    """Ссылка на страницу проверок по номеру и сколько там новых клиентов.
+
+    Два числа, а не одно: «двенадцать проверок» и «из них три новых» — разные
+    новости, и ради второй страницу и открывают.
+    """
+
+    url: str
+    total: int
+    fresh: int
+
+
+def main_menu(
+    *,
+    owner: bool,
+    base: BaseListing | None = None,
+    clients: ClientsListing | None = None,
+) -> InlineKeyboardMarkup:
     """Главное меню: пять рядов у владельца, три у остальных.
 
     Порядок — по частоте, а не по мощности. Первой стоит проверка одного
@@ -215,6 +232,16 @@ def main_menu(*, owner: bool, base: BaseListing | None = None) -> InlineKeyboard
         buttons.append(
             [InlineKeyboardButton(text=f"Вся база — {base.total} {noun}{money}", url=base.url)]
         )
+    if clients is not None:
+        # Стоит сразу под базой и тоже URL-кнопкой: это два ответа на один
+        # вопрос «кто у меня есть» — в базе те, кого завели, здесь те, кого
+        # пробили по номеру и ещё не завели.
+        fresh = (
+            f" — {clients.fresh} {pluralize_ru(clients.fresh, 'новый', 'новых', 'новых')}"
+            if clients.fresh
+            else ""
+        )
+        buttons.append([InlineKeyboardButton(text=f"Проверки по номеру{fresh}", url=clients.url)])
     if owner:
         buttons.append(
             [
