@@ -292,7 +292,9 @@ class SearchService:
         # арбитраж: они ищут только по ИНН. С готовым ИНН мост «паспорт → ИНН»
         # не сработает вовсе — он проверяет is_needed, — и это минус одно
         # платное обращение с каждого должника.
-        for field in ("birth_date", "inn", "passport"):
+        # Адрес здесь дороже прочего: он единственный открывает ЕГРН, который
+        # ищет объект по адресу и без него молчит совсем.
+        for field in ("birth_date", "inn", "passport", "passport_issued", "snils", "address"):
             value = getattr(result, field, None)
             if value is not None and getattr(subject, field, None) in (None, ""):
                 update[field] = value
@@ -319,7 +321,7 @@ class SearchService:
             return subject, None
         result = await self._guarded_fetch(bridge, subject)
         update: dict[str, object] = {}
-        for field in ("passport", "passport_issued", "snils", "inn"):
+        for field in ("passport", "passport_issued", "snils", "inn", "address"):
             value = getattr(result, field, None)
             if value is not None and getattr(subject, field, None) in (None, ""):
                 update[field] = value

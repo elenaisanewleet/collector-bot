@@ -108,6 +108,10 @@ class PhoneNameResult(ProviderResult):
     #: ``Any``, а не ``date``, по той же причине, что и ``birth_date``:
     #: ``ProviderResult`` не знает про домен.
     passport_issued: Any = None
+    #: Адрес. Единственное поле здесь, которое открывает ещё один источник:
+    #: ЕГРН ищет объект по адресу, и без адреса он молчит. Требование к адресу
+    #: жёсткое — см. :func:`_pick_address`.
+    address: str | None = None
 
 
 class PhoneNameProvider(BaseProvider):
@@ -258,6 +262,7 @@ def _read_rows(
         passport=passport,
         snils=_pick(kin, _read_snils, "snils"),
         passport_issued=_issue_date(kin, passport),
+        address=_pick_address(kin),
         note=f"ФИО определено по номеру {mask_phone(phone)}",
     )
 
@@ -337,6 +342,51 @@ def _marks(row: RecordDict) -> dict[str, object]:
         if raw is not None and (value := read(raw)) is not None:
             found[kind] = value
     return found
+
+
+#: Адрес годится для ЕГРН, только если доходит до помещения. Проверено живьём:
+#: по адресу до дома Росреестр отвечает ошибкой, и вызов всё равно оплачен.
+#: Список полей — все, под которыми поставщик присылает адрес.
+_ADDRESS_KEYS = (
+    "address",
+    "address_reg",
+    "permanent_registration_address",
+    "actual_residence_address",
+    "address_fact",
+    "residence",
+)
+_PREMISES = re.compile(r"(?:кв|квартира|помещ\w*|пом\.?|оф(?:ис)?)\.?\s*№?\s*\d", re.IGNORECASE)
+
+
+def _pick_address(kin: list[RecordDict]) -> str | None:
+    """Адрес нашего человека — с квартирой, если он вообще есть.
+
+    Правило владелицы было «берём первый адрес», и на трёх живых ответах
+    первый действительно оказался верным по улице. Но для ЕГРН этого мало:
+    Росреестр по адресу до дома отвечает ошибкой, а вызов всё равно оплачен —
+    и ни у одного из трёх номеров первый адрес до квартиры не доходил.
+
+    Поэтому сначала ищется адрес с квартирой, и только если такого нет —
+    первый попавшийся. Второй годится показать в карточке, но не для ЕГРН;
+    отсеет его сам провайдер, бесплатно (см. ``property._query_for``).
+
+    Ищется только среди РОДНИ — записей, не противоречащих опорной. Адрес
+    чужого человека из той же выдачи отправил бы платный запрос в Росреестр
+    про чужую квартиру.
+    """
+    fallback: str | None = None
+    for row in kin:
+        raw = _first(row, *_ADDRESS_KEYS)
+        if not raw:
+            continue
+        text = " ".join(str(raw).split())
+        if len(text) < 10:
+            continue
+        if _PREMISES.search(text):
+            return text
+        if fallback is None:
+            fallback = text
+    return fallback
 
 
 def _read_fio_mark(raw: object) -> str | None:

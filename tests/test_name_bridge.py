@@ -40,7 +40,7 @@ def field_map(tmp_path: Path) -> Path:
     path.write_text(
         '{"records_path": "results", "fields": {"fio": "fio", "birth_date": "dob",'
         ' "inn": "inn", "passport": "passport", "passport_info": "passport_info",'
-        ' "snils": "snils"}}',
+        ' "snils": "snils", "address": "address"}}',
         encoding="utf-8",
     )
     return path
@@ -267,3 +267,82 @@ async def test_without_a_birth_date_the_bridge_spends_nothing(settings: Settings
     assert result.status is ProviderStatus.ERROR
     assert MissingInput.BIRTH_DATE.value in result.missing_input
     assert calls.call_count == 0, "мост сходил к поставщику без даты рождения"
+
+
+# ---------------------------------------------------------------- адрес
+
+
+@respx.mock
+async def test_the_address_with_a_flat_wins_over_the_first_one(settings: Settings) -> None:
+    """Для ЕГРН годится только адрес до квартиры — он и берётся.
+
+    Правило владелицы было «берём первый адрес», и по улице первый на трёх
+    живых ответах действительно оказывался верным. Но Росреестр по адресу до
+    дома отвечает ошибкой, а вызов всё равно оплачен — и ни у одного из трёх
+    номеров первый адрес до квартиры не доходил. Квартира появлялась во втором,
+    на той же улице.
+    """
+    respx.get(url__startswith=BASE).mock(
+        return_value=answer(
+            {
+                "fio": "Иванов Иван Иванович",
+                "dob": "15.03.1985",
+                "address": "г. Москва, ул. Тестовая, д. 8",
+            },
+            {
+                "fio": "Иванов Иван Иванович",
+                "dob": "15.03.1985",
+                "address": "г. Москва, ул. Тестовая, д. 8, кв. 42",
+            },
+        )
+    )
+
+    result = await fetch(settings, subject())
+
+    assert result.address is not None
+    assert "кв. 42" in result.address, "взят адрес до дома, а ЕГРН его не примет"
+
+
+@respx.mock
+async def test_a_house_level_address_is_still_better_than_nothing(settings: Settings) -> None:
+    """Квартиры нет нигде — отдаём что есть: в карточке адрес полезен и так.
+
+    В ЕГРН он не уедет: провайдер отсеет его сам и бесплатно
+    (``property._query_for``). А оператору он говорит, где человек живёт.
+    """
+    respx.get(url__startswith=BASE).mock(
+        return_value=answer(
+            {
+                "fio": "Иванов Иван Иванович",
+                "dob": "15.03.1985",
+                "address": "г. Москва, ул. Тестовая, д. 8",
+            }
+        )
+    )
+
+    result = await fetch(settings, subject())
+
+    assert result.address == "г. Москва, ул. Тестовая, д. 8"
+
+
+@respx.mock
+async def test_a_strangers_address_never_reaches_rosreestr(settings: Settings) -> None:
+    """Адрес человека с другой датой рождения не берётся даже с квартирой.
+
+    Иначе платный запрос в Росреестр ушёл бы про чужую квартиру, и в отчёте
+    про вашего должника оказался бы чужой объект недвижимости.
+    """
+    respx.get(url__startswith=BASE).mock(
+        return_value=answer(
+            {
+                "fio": "Иванов Иван Иванович",
+                "dob": "15.03.1984",
+                "address": "г. Москва, ул. Чужая, д. 1, кв. 1",
+            },
+            {"fio": "Иванов Иван Иванович", "dob": "15.03.1985", "passport": OUR_PASSPORT},
+        )
+    )
+
+    result = await fetch(settings, subject())
+
+    assert result.address is None, "уехал адрес человека с другой датой рождения"

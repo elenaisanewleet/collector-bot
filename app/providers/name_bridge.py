@@ -85,6 +85,9 @@ class PassportByNameResult(ProviderResult):
     #: ИНН, если он оказался в тех же записях. Тогда мост ФНС не понадобится
     #: вовсе — это минус одно платное обращение.
     inn: str | None = None
+    #: Адрес. Открывает ещё один источник: ЕГРН ищет объект по адресу и без
+    #: него молчит. Требование к адресу жёсткое — см. :func:`_pick_address`.
+    address: str | None = None
 
 
 class PassportByNameProvider(BaseProvider):
@@ -205,6 +208,7 @@ def _read_rows(
         passport_issued=_issue_date(ours, passport),
         snils=_pick(ours, _read_snils, "snils"),
         inn=_pick(ours, _individual_inn, "inn", "innfiz"),
+        address=_pick_address(ours),
         note=(
             "Паспорт найден по ФИО и дате рождения"
             if passport
@@ -273,6 +277,42 @@ def _issue_date(rows: list[RecordDict], passport: str | None) -> date | None:
         if found is not None and (parsed := parse_date(found.group(0))) is not None:
             return parsed
     return None
+
+
+#: Поля, под которыми поставщик присылает адрес.
+_ADDRESS_KEYS = (
+    "address",
+    "address_reg",
+    "permanent_registration_address",
+    "actual_residence_address",
+    "address_fact",
+    "residence",
+)
+#: Адрес годится для ЕГРН, только если доходит до помещения: по адресу до дома
+#: Росреестр отвечает ошибкой, а вызов всё равно оплачен.
+_PREMISES = re.compile(r"(?:кв|квартира|помещ\w*|пом\.?|оф(?:ис)?)\.?\s*№?\s*\d", re.IGNORECASE)
+
+
+def _pick_address(rows: list[RecordDict]) -> str | None:
+    """Адрес с квартирой, если он есть; иначе первый попавшийся.
+
+    То же правило, что в телефонном мосте, и по той же причине: адрес до дома
+    ЕГРН не примет, а показать его в карточке всё равно полезно. Отсеет
+    негодный сам провайдер и бесплатно.
+    """
+    fallback: str | None = None
+    for row in rows:
+        raw = _first(row, *_ADDRESS_KEYS)
+        if not raw:
+            continue
+        text = " ".join(str(raw).split())
+        if len(text) < 10:
+            continue
+        if _PREMISES.search(text):
+            return text
+        if fallback is None:
+            fallback = text
+    return fallback
 
 
 def _read_passport(raw: object) -> str | None:
