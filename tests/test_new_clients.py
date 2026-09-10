@@ -47,6 +47,7 @@ from app.services.phone_lookups import PhoneLookupService
 from app.services.query_card import Card, QueryCardService, fill_from_bridge
 from app.services.share import ShareKind, ShareLinkService, ShareTarget
 from app.web.app import build_app
+from app.web.render_lookups import PAGE_TITLE
 
 from .bot_harness import (
     CHAT_ID,
@@ -385,6 +386,104 @@ async def test_the_new_clients_page_shows_the_documents_and_the_mark(
     # Персональные данные не индексируются и не кэшируются — как и везде.
     assert "noindex" in response.headers["X-Robots-Tag"]
     assert "no-store" in response.headers["Cache-Control"]
+
+
+async def test_the_name_opens_the_report_that_the_check_produced(bridged: Container) -> None:
+    """Строка списка перестала быть тупиком.
+
+    Человека нашли по номеру, проверку оплатили и провели — а вернуться к её
+    результату со страницы было нельзя: «перейти по ФИО я не могу, хотя мы
+    формировали отчёт». Отчёт при этом никуда не девался, к нему просто не было
+    двери из веб-интерфейса.
+
+    Ссылка производная от ссылки на список — тот же приём, что у карточки
+    должника: переслать одну проверку можно, а получить из неё весь список
+    нельзя.
+    """
+    lookup = await bridged.phone_lookups.record(
+        telegram_user_id=OPERATOR_ID,
+        phone=PHONE,
+        name=FOUND,
+        birth_date=date(1985, 7, 5),
+    )
+    outcome = await bridged.search_service.search_detailed(
+        SearchSubject(search_type=SearchType.PERSON.value, name=FOUND, birth_date=date(1985, 7, 5)),
+        telegram_user_id=OPERATOR_ID,
+    )
+    assert outcome.request_id is not None
+    async with bridged.database.session() as session:
+        await PhoneLookupRepository(session).attach_report(
+            phone_masked=lookup.phone_masked or "",
+            last_name=FOUND.last_name,
+            search_request_id=outcome.request_id,
+        )
+        await session.commit()
+
+    url = await bridged.share_service.issue(
+        ShareTarget(ShareKind.LOOKUPS, 0), telegram_user_id=OPERATOR_ID
+    )
+    assert url is not None
+
+    async with TestClient(TestServer(build_app(bridged))) as client:
+        listing = await client.get(_path(url))
+        body = await listing.text()
+        href = body.split('<a href="/l/', maxsplit=1)[1].split('"', maxsplit=1)[0]
+        report = await client.get(f"/l/{href}")
+        report_body = await report.text()
+
+    assert report.status == 200
+    assert "Иванова Мария Сергеевна" in report_body
+
+
+async def test_a_lookup_without_a_report_is_not_a_dead_link(bridged: Container) -> None:
+    """Находка без проверки остаётся текстом, а не ссылкой в никуда.
+
+    Так выглядят все записи, сделанные до появления этой связи, и те, у кого
+    личность собрали, а прогон не запускали. Ссылка на 404 хуже её отсутствия:
+    по ней нажмут и решат, что отчёт потерян.
+    """
+    await bridged.phone_lookups.record(
+        telegram_user_id=OPERATOR_ID, phone=PHONE, name=FOUND, birth_date=date(1985, 7, 5)
+    )
+    url = await bridged.share_service.issue(
+        ShareTarget(ShareKind.LOOKUPS, 0), telegram_user_id=OPERATOR_ID
+    )
+    assert url is not None
+
+    async with TestClient(TestServer(build_app(bridged))) as client:
+        body = await (await client.get(_path(url))).text()
+
+    assert "Иванова Мария Сергеевна" in body
+    assert '<a href="/l/' not in body
+
+
+async def test_the_two_pages_link_to_each_other(bridged: Container) -> None:
+    """Две страницы одного сайта, а не два файла за двумя ссылками.
+
+    «Я хотела, чтобы это было не отдельной страницей, а как отдельной страницей
+    в сайте». Довод простой: ссылки живут в чате, теряются поодиночке, и
+    владелец, потерявший одну, теряет половину продукта.
+    """
+    await bridged.phone_lookups.record(
+        telegram_user_id=OPERATOR_ID, phone=PHONE, name=FOUND, birth_date=date(1985, 7, 5)
+    )
+
+    lookups_url = await bridged.share_service.issue(
+        ShareTarget(ShareKind.LOOKUPS, 0), telegram_user_id=OPERATOR_ID
+    )
+    base_url = await bridged.share_service.issue(
+        ShareTarget(ShareKind.BASE, 0), telegram_user_id=OPERATOR_ID
+    )
+    assert lookups_url is not None and base_url is not None
+
+    async with TestClient(TestServer(build_app(bridged))) as client:
+        lookups_body = await (await client.get(_path(lookups_url))).text()
+        base_body = await (await client.get(_path(base_url))).text()
+
+    assert "Вся база" in lookups_body, "со страницы проверок не уйти в справочник"
+    assert PAGE_TITLE in base_body, "из справочника не уйти на страницу проверок"
+    # Текущая страница подписью, а не ссылкой на саму себя.
+    assert f"<span>{PAGE_TITLE}</span>" in lookups_body
 
 
 async def test_a_base_token_does_not_open_the_new_clients_page(bridged: Container) -> None:

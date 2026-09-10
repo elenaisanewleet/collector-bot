@@ -906,6 +906,37 @@ class PhoneLookupRepository:
         )
         return list((await self._session.scalars(stmt)).all())
 
+    async def attach_report(
+        self, *, phone_masked: str, last_name: str, search_request_id: int
+    ) -> bool:
+        """Привязать отчёт к самой свежей находке этого человека.
+
+        Привязка по маске номера И фамилии, а не по идентификатору находки:
+        отчёт рождается на несколько шагов позже записи и в другом слое, и
+        тащить идентификатор через полпродукта пришлось бы ради одной ссылки.
+        Пара «номер + фамилия» здесь однозначна — запись сделана секундами
+        раньше в этом же разговоре.
+
+        ``search_request_id is None`` в условии не для красоты: повторная
+        проверка того же человека не должна переписывать ссылку у прошлой
+        находки, иначе строка списка начала бы показывать чужой день.
+        """
+        stmt = (
+            select(PhoneLookup)
+            .where(
+                PhoneLookup.phone_masked == phone_masked,
+                PhoneLookup.last_name == last_name,
+                PhoneLookup.search_request_id.is_(None),
+            )
+            .order_by(PhoneLookup.created_at.desc(), PhoneLookup.id.desc())
+            .limit(1)
+        )
+        lookup = await self._session.scalar(stmt)
+        if lookup is None:
+            return False
+        lookup.search_request_id = search_request_id
+        return True
+
     async def count(self) -> int:
         return await self._session.scalar(select(func.count()).select_from(PhoneLookup)) or 0
 

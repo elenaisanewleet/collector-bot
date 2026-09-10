@@ -197,11 +197,36 @@ window.addEventListener('beforeprint', function () {
 </script>"""
 
 
-def navigation(brand: str, items: Sequence[tuple[str, str]], meta: Sequence[str] = ()) -> str:
+def navigation(
+    brand: str,
+    items: Sequence[tuple[str, str]],
+    meta: Sequence[str] = (),
+    pages: Sequence[tuple[str, str]] = (),
+) -> str:
+    """Боковая навигация: сначала страницы сайта, потом якоря этой страницы.
+
+    ``pages`` — соседние страницы за своими ссылками; пустой адрес значит «это
+    текущая», и она печатается не ссылкой, а подписью. Появились они по прямой
+    просьбе: «я хотела, чтобы это было не отдельной страницей, а как отдельной
+    страницей в сайте». Две страницы за двумя не связанными между собой
+    ссылками — это не сайт, а два файла, и, потеряв одну ссылку, владелец теряет
+    половину продукта.
+
+    Разделены и стоят выше якорей намеренно: «куда перейти» и «куда
+    промотать» — разные вопросы, и смешанные в один список они читаются как
+    один.
+    """
+    tabs = "".join(
+        (f'<a href="{e(url)}">{e(title)}</a>' if url else f"<span>{e(title)}</span>")
+        for url, title in pages
+    )
+    head = f'<div class="pages">{tabs}</div>' if tabs else ""
     links = "".join(f'<li><a href="#{e(anchor)}">{e(title)}</a></li>' for anchor, title in items)
     note = "".join(f"<div>{e(line)}</div>" for line in meta)
     body = f"<ol>{links}</ol>" if links else ""
-    return f'<nav><div class="brand">{e(brand)}</div>{body}<div class="meta">{note}</div></nav>'
+    return (
+        f'<nav><div class="brand">{e(brand)}</div>{head}{body}<div class="meta">{note}</div></nav>'
+    )
 
 
 def section(anchor: str, title: str, body: str, *, state: SourceState | None = None) -> str:

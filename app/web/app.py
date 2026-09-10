@@ -36,7 +36,7 @@ from app.logging_setup import get_logger
 from app.services.deeplink import CHECK_PAYLOAD_PREFIX
 from app.services.export import queue_to_csv
 from app.services.reporting import render_report
-from app.services.share import ShareKind
+from app.services.share import ShareKind, ShareTarget
 from app.utils.dates import utcnow
 from app.web.render import ExportLinks, render_message_page, render_report_page
 from app.web.render_base import FeeRules, render_base_page, render_person_page
@@ -83,6 +83,7 @@ def build_app(container: Container) -> web.Application:
             web.get("/b/{token}", handle_base),
             web.get("/p/{token}", handle_person),
             web.get("/n/{token}", handle_lookups),
+            web.get("/l/{token}", handle_lookup_report),
         ]
     )
     return app
@@ -133,6 +134,7 @@ async def handle_base(request: web.Request) -> web.Response:
         person_urls={row.id: f"/p/{share.person_token(link, row.id)}" for row in debtors},
         demo_mode=container.settings.app_mode is AppMode.DEMO,
         print_mode="print" in request.query,
+        lookups_url=await _sibling_url(container, link, ShareKind.LOOKUPS),
     )
     return web.Response(text=html, content_type="text/html", headers=PRIVATE_HEADERS)
 
@@ -150,10 +152,67 @@ async def handle_lookups(request: web.Request) -> web.Response:
     if link is None:
         return _not_found(container)
     lookups = await container.phone_lookups.recent(limit=container.settings.batch_max_debtors)
+    share = container.share_service
     html = render_lookups_page(
         lookups,
         app_name=container.settings.app_name,
         demo_mode=container.settings.app_mode is AppMode.DEMO,
+        print_mode="print" in request.query,
+        base_url=await _sibling_url(container, link, ShareKind.BASE),
+        report_urls={
+            row.id: f"/l/{share.person_token(link, row.search_request_id)}"
+            for row in lookups
+            if row.search_request_id is not None
+        },
+    )
+    return web.Response(text=html, content_type="text/html", headers=PRIVATE_HEADERS)
+
+
+async def _sibling_url(container: Container, link: ShareLink, kind: ShareKind) -> str:
+    """Адрес соседней страницы сайта — или пустая строка.
+
+    Ссылка выписывается на того же человека, что открыл текущую: обе страницы
+    закрыты по владельцу, и выдать соседнюю кому-то ещё эта функция не может.
+    ``issue`` переиспользует живую ссылку, если она есть, поэтому открытие
+    страницы не плодит токенов.
+
+    Пустая строка, когда веб-ссылки выключены. Вкладка тогда просто не
+    печатается: мёртвая ссылка в навигации хуже её отсутствия.
+    """
+    url = await container.share_service.issue(
+        ShareTarget(kind, 0), telegram_user_id=link.telegram_user_id
+    )
+    return url or ""
+
+
+async def handle_lookup_report(request: web.Request) -> web.Response:
+    """Отчёт проверки, открытый со страницы находок.
+
+    Токен производный от ссылки на список — тот же приём, что у карточки
+    должника: переслать одну проверку можно, а получить из неё весь список
+    нельзя, и гаснет она вместе с общей ссылкой.
+
+    Отдельный обработчик, а не ``/r/{token}``: там токен адресует ВЫПИСАННУЮ
+    ссылку на отчёт, со своим сроком жизни и своим отзывом. Здесь ссылки нет
+    вовсе — есть подпись, и проверять надо её.
+    """
+    container = request.app[CONTAINER_KEY]
+    parsed = container.share_service.read_person_token(request.match_info["token"])
+    if parsed is None:
+        return _not_found(container)
+    link_id, request_id = parsed
+    async with container.database.session() as session:
+        link = await ShareLinkRepository(session).get_active(link_id)
+    if link is None or link.kind != ShareKind.LOOKUPS.value:
+        return _not_found(container)
+    report = await container.search_service.load_report(request_id)
+    if report is None:
+        return _not_found(container)
+    html = render_report_page(
+        report,
+        container.verdict_engine.decide(report),
+        app_name=container.settings.app_name,
+        demo_mode=container.settings.is_demo,
         print_mode="print" in request.query,
     )
     return web.Response(text=html, content_type="text/html", headers=PRIVATE_HEADERS)

@@ -94,6 +94,13 @@ nav a{display:block;padding:var(--s-1) var(--s-2);border-radius:4px;color:var(--
   text-decoration:none}
 nav a:hover{background:var(--surface-2);color:var(--accent)}
 @media(max-width:860px){nav a{padding:10px 12px;background:var(--surface-2)}}
+nav .pages{display:flex;flex-direction:column;gap:2px;margin-bottom:var(--s-3);
+  padding-bottom:var(--s-3);border-bottom:1px solid var(--line)}
+@media(max-width:860px){nav .pages{flex-direction:row;flex-wrap:wrap;gap:var(--s-2);
+  border-bottom:0;padding-bottom:0}}
+nav .pages a,nav .pages span{display:block;padding:var(--s-1) var(--s-2);border-radius:4px;
+  font-weight:600;text-decoration:none}
+nav .pages span{color:var(--ink-1);background:var(--surface-2)}
 nav .meta{margin-top:var(--s-4);color:var(--ink-3);font-size:var(--t-2xs);line-height:1.5}
 @media(max-width:860px){nav .meta{margin-top:var(--s-3)}}
 

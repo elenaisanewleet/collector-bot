@@ -25,7 +25,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 
 from app.db.models import PhoneLookup
@@ -47,6 +47,14 @@ _HEADERS = (
     "В базе",
 )
 
+#: Как страница называется везде — в боковой навигации, в заголовке раздела и в
+#: подписи вкладки. Одной строкой, потому что три разных названия одного и того
+#: же места превращают сайт в набор страниц.
+#:
+#: «Проверки не из базы», а не «по номеру»: слово «номер» описывает, КАК сюда
+#: попали, а владельцу нужно, ЧТО здесь лежит — люди, которых в выгрузке ещё нет.
+PAGE_TITLE = "Проверки не из базы"
+
 EMPTY_NOTE = (
     "Здесь появятся все, кого вы пробьёте по номеру телефона. "
     "Отправьте боту номер — строка добавится сама."
@@ -67,6 +75,8 @@ def render_lookups_page(
     app_name: str,
     demo_mode: bool = False,
     print_mode: bool = False,
+    base_url: str = "",
+    report_urls: Mapping[int, str] | None = None,
 ) -> str:
     from app.web.render import demo_banner
 
@@ -74,16 +84,20 @@ def render_lookups_page(
     if demo_mode:
         parts.append(demo_banner())
     parts.append(_hero(lookups))
-    parts.append(_table(lookups))
+    parts.append(_table(lookups, report_urls or {}))
     parts.append(f"<footer>{e(_footer(lookups))}</footer>")
 
-    nav = navigation(app_name, [("lookups", "Проверки по номеру")])
+    nav = navigation(
+        app_name,
+        [("lookups", PAGE_TITLE)],
+        pages=[(base_url, "Вся база"), ("", PAGE_TITLE)],
+    )
     body = _STYLE + "".join(parts)
     if print_mode:
         body += print_footer(app_name, utcnow())
     else:
         body += _SCRIPT
-    return document(title=f"{app_name} — новые клиенты", nav=nav, body=body)
+    return document(title=f"{app_name} — {PAGE_TITLE.lower()}", nav=nav, body=body)
 
 
 def _hero(lookups: Sequence[PhoneLookup]) -> str:
@@ -144,9 +158,9 @@ def _day(value: date | None) -> str:
     return value.strftime("%d.%m.%Y") if value else "—"
 
 
-def _table(lookups: Sequence[PhoneLookup]) -> str:
+def _table(lookups: Sequence[PhoneLookup], report_urls: Mapping[int, str]) -> str:
     if not lookups:
-        return section("lookups", "Проверки по номеру", f'<p class="hint">{e(EMPTY_NOTE)}</p>')
+        return section("lookups", PAGE_TITLE, f'<p class="hint">{e(EMPTY_NOTE)}</p>')
 
     cells: list[tuple[str, ...]] = []
     attrs: list[str] = []
@@ -164,7 +178,7 @@ def _table(lookups: Sequence[PhoneLookup]) -> str:
         cells.append(
             (
                 cell(format_datetime(lookup.created_at), label="Когда"),
-                raw_cell(f"<b>{e(lookup.fio or '—')}</b>", label="ФИО"),
+                raw_cell(_name_cell(lookup, report_urls), label="ФИО"),
                 cell(birth, label="Дата рождения"),
                 cell(phone or "—", label="Телефон"),
                 # Копируется одним нажатием: страницу открывают затем, чтобы
@@ -188,7 +202,25 @@ def _table(lookups: Sequence[PhoneLookup]) -> str:
 
     body = f'<div id="lookups-table">{table(_HEADERS, cells, row_attrs=attrs)}</div>'
     notes = f'<p class="hint">{e(NEW_NOTE)}</p><p class="hint">{e(DOC_NOTE)}</p>'
-    return section("lookups", "Проверки по номеру", body + notes)
+    return section("lookups", PAGE_TITLE, body + notes)
+
+
+def _name_cell(lookup: PhoneLookup, report_urls: Mapping[int, str]) -> str:
+    """ФИО — ссылкой на отчёт этой проверки, если он есть.
+
+    До сих пор строка была тупиком: человека нашли по номеру, проверку оплатили
+    и провели, а вернуться к её результату со страницы было нельзя — «перейти по
+    ФИО я не могу, хотя мы формировали отчёт».
+
+    Ссылки нет, когда отчёта нет: находка старше этой правки или личность
+    собрали, а проверку не запускали. Мёртвая ссылка на 404 хуже её
+    отсутствия — по ней нажмут и решат, что отчёт потерян.
+    """
+    name = e(lookup.fio or "—")
+    url = report_urls.get(lookup.id)
+    if not url:
+        return f"<b>{name}</b>"
+    return f'<b><a href="{e(url)}">{name}</a></b>'
 
 
 def _footer(lookups: Sequence[PhoneLookup]) -> str:

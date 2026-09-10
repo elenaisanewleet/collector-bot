@@ -439,6 +439,15 @@ class PhoneLookup(Base):
     snils_masked: Mapped[str | None] = mapped_column(String(32))
     passport_issued: Mapped[date | None] = mapped_column(Date)
     base_matches: Mapped[int] = mapped_column(Integer, default=0)
+    # Отчёт, которым закончилась эта находка. Без него строка списка была
+    # тупиком: человека нашли, проверку оплатили и провели, а вернуться к её
+    # результату из веб-интерфейса было нельзя — «перейти по ФИО я не могу,
+    # хотя мы формировали отчёт».
+    #
+    # Идентификатор запроса, а не ссылка: ссылки живут ограниченный срок и
+    # отзываются, а запрос лежит в истории. Адрес страницы собирается из него
+    # при показе, подписью от ссылки на сам список.
+    search_request_id: Mapped[int | None] = mapped_column(Integer, index=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
 
     @property

@@ -113,6 +113,12 @@ def _classify(amount: Decimal | None, rules: FeeRules) -> tuple[_Kind, Decimal |
     return (_ORDER if amount <= rules.court_order_max else _CLAIM), fee
 
 
+#: Как называется соседняя страница. Импортируется, а не переписывается: два
+#: разных названия одного места — самый дешёвый способ превратить сайт обратно в
+#: набор страниц, и заметит это только владелец.
+LOOKUPS_TITLE = "Проверки не из базы"
+
+
 def render_base_page(
     debtors: Sequence[Debtor],
     *,
@@ -121,6 +127,7 @@ def render_base_page(
     person_urls: dict[int, str] | None = None,
     demo_mode: bool = False,
     print_mode: bool = False,
+    lookups_url: str = "",
 ) -> str:
     from app.web.render import demo_banner
 
@@ -133,7 +140,11 @@ def render_base_page(
     parts.append(_table(rows, person_urls or {}))
     parts.append(f"<footer>{e(_footer(debtors))}</footer>")
 
-    nav = navigation(app_name, [("base", "Должники")])
+    nav = navigation(
+        app_name,
+        [("base", "Должники")],
+        pages=[("", "Вся база"), (lookups_url, LOOKUPS_TITLE)],
+    )
     body = _STYLE + "".join(parts)
     if print_mode:
         body += print_footer(app_name, utcnow())

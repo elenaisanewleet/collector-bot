@@ -14,6 +14,7 @@ from datetime import timedelta
 
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.bot import report_actions, view
 from app.container import Container
@@ -138,6 +139,19 @@ async def run_and_send_report(
         url = await container.share_service.issue(
             ShareTarget(ShareKind.REPORT, outcome.request_id), telegram_user_id=user_id
         )
+        # Находку по номеру связываем с её отчётом здесь, на общем пути платной
+        # проверки: сюда сходятся все способы запустить прогон, и связь не
+        # разъедется с девятым из них. Падение журнала не должно ронять ответ —
+        # человек ждёт карточку, а не строку в таблице.
+        if subject.phone and subject.name:
+            try:
+                await container.phone_lookups.attach_report(
+                    phone=subject.phone,
+                    last_name=subject.name.last_name,
+                    search_request_id=outcome.request_id,
+                )
+            except SQLAlchemyError:
+                logger.exception("phone_lookup.attach_failed", user_id=user_id)
 
     # Токен кладётся под ТОТ субъект, с которым прошёл прогон, — с ИНН, если его
     # добыл мост. Иначе «Обновить» и предложения под карточкой рассуждали бы о

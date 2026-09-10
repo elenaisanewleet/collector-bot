@@ -88,6 +88,26 @@ class PhoneLookupService:
         )
         return lookup
 
+    async def attach_report(self, *, phone: str, last_name: str, search_request_id: int) -> None:
+        """Запомнить, каким отчётом закончилась находка по этому номеру.
+
+        Вызывается из общего пути платной проверки, а не из ветки моста: отчёт
+        рождается несколькими шагами позже записи находки и в другом слое.
+        Связать их идентификатором значило бы протащить его через полпродукта
+        ради одной ссылки; пары «номер + фамилия» здесь достаточно — запись
+        сделана секундами раньше в этом же разговоре.
+
+        Молчит, когда привязывать не к чему: проверок без находки по номеру
+        большинство (должник из выгрузки, поиск по ФИО), и «не нашлось» тут
+        обычный ход дела, а не сбой.
+        """
+        async with self._database.session() as session:
+            await PhoneLookupRepository(session).attach_report(
+                phone_masked=mask_phone(phone) or "",
+                last_name=last_name,
+                search_request_id=search_request_id,
+            )
+
     async def recent(self, *, limit: int) -> list[PhoneLookup]:
         async with self._database.session() as session:
             return await PhoneLookupRepository(session).recent(limit=limit)
