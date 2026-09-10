@@ -16,11 +16,13 @@ https://newdb.net/swagger/openapi.json:
 *   ``POST {NEWDB_BASE_URL}/v2`` with ``X-API-KEY``; the body is
     ``{"params": {...}, "requestId": "..."}`` and ``method`` lives *inside*
     ``params``.
-*   The call is asynchronous. The envelope carries ``state``: ``queued``,
-    ``in_progress`` and ``restart`` mean keep waiting; ``complete`` and
-    ``failed`` are terminal. Polling is a repeat POST to the same endpoint with
-    the same ``requestId``, which keeps the token out of query strings and
-    therefore out of access logs.
+*   The call is asynchronous. The envelope carries ``state``, and the whole
+    vocabulary the OpenAPI document declares is ``queued``, ``in_progress``,
+    ``restart``, ``complete``, ``failed``, ``timeout`` and ``error``. The first
+    three plus ``timeout`` mean keep waiting; the other three are terminal.
+    Polling is a repeat POST to the same endpoint with the same ``requestId`` —
+    documented as *not* starting a second, separately billed task — which also
+    keeps the token out of query strings and therefore out of access logs.
 *   Rows arrive at ``results.<method>.result.data``.
 *   **A rejected or missing token comes back as HTTP 200 with
     ``state: "failed"``**, not as 401/403. Read naively that is an empty result
@@ -76,7 +78,22 @@ DOB_KEY = "dob"
 STATE_COMPLETE = "complete"
 STATE_FAILED = "failed"
 STATE_QUEUED = "queued"
-PENDING_STATES = frozenset({STATE_QUEUED, "in_progress", "restart"})
+#: Не прошла валидация запроса, либо сломалась сама служба поставщика. Своё
+#: состояние — но не своя беда: детализация лежит там же, где у ``failed``, в
+#: ``errors_info``, поэтому и разбирается тем же :func:`_failure_error`.
+STATE_ERROR = "error"
+TERMINAL_FAILURE_STATES = frozenset({STATE_FAILED, STATE_ERROR})
+#: Поставщик перестал ЖДАТЬ — он не перестал считать. Так отвечает синхронный
+#: ``/v2/run``, когда ожидание превысило его собственный таймаут: задача жива,
+#: её ``requestId`` по-прежнему адресует её, и следующий опрос возьмёт результат.
+#: Поэтому ``timeout`` стоит среди ожидающих: считать его отказом значило бы
+#: выбросить уже оплаченный вызов ровно в тот момент, когда он почти готов.
+STATE_TIMEOUT = "timeout"
+#: ``timeout`` и ``error`` объявлены в OpenAPI-документе поставщика, но этот код
+#: их не знал, и разбирались они последней ветвью — «Ответ NewDB не содержит
+#: поля state». То есть про ответ, в котором ``state`` есть, оператору
+#: сообщалось, что поля нет: диагностика, ведущая искать поломку не там.
+PENDING_STATES = frozenset({STATE_QUEUED, "in_progress", "restart", STATE_TIMEOUT})
 #: Сколько опросов подряд задача имеет право простоять в очереди, НИ РАЗУ не
 #: начав выполняться. Правило снято с прода: пять источников из пяти отвечали
 #: ``queued`` девяносто секунд и не двигались с места — а оператор всё это время
@@ -214,13 +231,11 @@ class NewDBClient:
         state = _state_of(envelope)
         if state == STATE_COMPLETE:
             return envelope, raw
-        if state == STATE_FAILED:
+        if state in TERMINAL_FAILURE_STATES:
             raise _failure_error(envelope)
         if state not in PENDING_STATES:
             # An envelope with no recognizable state is not an empty result.
-            raise ProviderUnavailableError(
-                "unexpected_schema", "Ответ NewDB не содержит поля state"
-            )
+            raise _unknown_state_error(state)
         return await self._poll(client, method, payload, retry, _progress_of(envelope, method))
 
     async def _poll(
@@ -251,8 +266,15 @@ class NewDBClient:
                 )
             if state == STATE_COMPLETE:
                 return envelope, raw
-            if state == STATE_FAILED:
+            if state in TERMINAL_FAILURE_STATES:
                 raise _failure_error(envelope)
+            if state not in PENDING_STATES:
+                # Незнакомое состояние не станет ``complete`` от того, что его
+                # опросят ещё двадцать четыре раза. Раньше опрос доходил до
+                # конца бюджета и сообщал ``poll_timeout`` — «источник не успел
+                # подготовить ответ» о поставщике, который ответил сразу, просто
+                # не теми словами.
+                raise _unknown_state_error(state)
 
             progress = _progress_of(envelope, method)
             if progress.stalled_after(previous):
@@ -364,6 +386,27 @@ def _progress_of(envelope: Any, method: str) -> _Progress:
         updated_at=as_text(dig(envelope, f"results.{method}.dateupdated")),
         result_status=_result_status(envelope, method),
         result_error=as_text(dig(node, "error")),
+    )
+
+
+def _unknown_state_error(state: str) -> ProviderUnavailableError:
+    """Состояние, которого этот код не знает, — не пустой результат.
+
+    Две беды, которые до сих пор печатались одной строкой. Отсутствующее
+    ``state`` — сломанный конверт, и про него нужно сказать именно это.
+    Присутствующее, но незнакомое — наш словарь, отставший от поставщика: так
+    пришли бы ``timeout`` и ``error``, объявленные в его же OpenAPI-документе, и
+    оператор читал бы «Ответ NewDB не содержит поля state» про ответ, где это
+    поле есть.
+
+    Значение печатается целиком: это служебный токен (``queued``, ``restart``),
+    персональных данных в нём нет, а без него непонятно, что добавлять в
+    словарь.
+    """
+    if not state:
+        return ProviderUnavailableError("unexpected_schema", "Ответ NewDB не содержит поля state")
+    return ProviderUnavailableError(
+        "unknown_state", f"NewDB ответила состоянием {state!r}, которого мы не знаем"
     )
 
 

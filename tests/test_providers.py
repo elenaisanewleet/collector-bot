@@ -462,6 +462,136 @@ async def test_fssp_poll_budget_exhaustion_is_unavailable(
     assert result.records == []
 
 
+@respx.mock
+async def test_vendor_timeout_is_a_task_still_running_not_a_dead_one(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """``timeout`` у этого поставщика значит «я перестал ждать», а не «всё».
+
+    Так отвечает синхронный вариант метода, когда его собственное ожидание
+    кончилось раньше задачи: задача жива, её ``requestId`` по-прежнему её
+    адресует, и следующий опрос забирает результат. Прочитать это состояние
+    как отказ значило бы выбросить уже оплаченный вызов ровно тогда, когда он
+    почти готов, — и написать в отчёте «не проверено» про производства, которые
+    источник в ту же секунду дописывал.
+
+    Состояния не было в словаре вовсе, и разбиралось оно последней ветвью —
+    ``unexpected_schema`` с текстом «Ответ NewDB не содержит поля state». Про
+    ответ, в котором ``state`` есть.
+    """
+    route = respx.post(NEWDB_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=newdb_envelope("timeout")),
+            httpx.Response(200, json=newdb_envelope(data=[PROCEEDING_ROW])),
+        ]
+    )
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.SUCCESS
+    assert len(result.records) == 1
+    # Тот же requestId: дождались своей задачи, а не завели вторую за деньги.
+    ids = {json.loads(call.request.content)["requestId"] for call in route.calls}
+    assert len(ids) == 1
+
+
+@respx.mock
+async def test_error_state_is_a_refusal_with_the_vendor_reason_kept(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """``error`` — обратная сторона ``timeout``: терминальный отказ.
+
+    Детализация лежит там же, где у ``failed`` — в ``errors_info``, — и потому
+    разбирается тем же кодом: оператор читает «запрос не прошёл проверку», а не
+    «схема ответа неожиданная». Разница не косметическая: первое чинится в
+    запросе, второе отправляет искать поломку в карте полей.
+    """
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=newdb_envelope(
+                "error",
+                errors_info=[{"error": "dob is not valid", "error_code": 400}],
+            ),
+        )
+    )
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.ERROR
+    assert result.error_code == "bad_request"
+    assert "dob is not valid" in (result.error_message or "")
+    assert result.records == []
+
+
+@respx.mock
+async def test_an_unknown_state_names_itself_and_does_not_wait(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """Незнакомое состояние — это отставший словарь, и так и надо сказать.
+
+    Ни ждать его, ни валить на схему: опрос до конца бюджета сообщал бы
+    ``poll_timeout`` («источник не успел подготовить ответ») про поставщика,
+    который ответил сразу, просто не теми словами. Само слово печатается —
+    служебный токен, персональных данных в нём нет, а без него непонятно, что
+    добавлять в словарь.
+    """
+    route = respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=newdb_envelope("materialized"))
+    )
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "unknown_state"
+    assert "materialized" in (result.error_message or "")
+    assert route.call_count == 1, "незнакомое состояние опрашивали, как будто оно дозреет"
+    assert result.records == []
+
+
+@respx.mock
+async def test_an_envelope_without_a_state_still_says_the_field_is_missing(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """А сломанный конверт остаётся сломанным конвертом.
+
+    Разделение имеет смысл, только если вторая половина не потерялась: ответ
+    без ``state`` — не отставший словарь, а тело не той формы, и код должен
+    остаться ``unexpected_schema``.
+    """
+    envelope = newdb_envelope()
+    del envelope["state"]
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=envelope))
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.error_code == "unexpected_schema"
+    assert result.records == []
+
+
+@respx.mock
+async def test_a_state_that_goes_unknown_mid_poll_is_not_a_timeout(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """Второй опрос — то же правило, что и первый ответ.
+
+    Ветвь разбора состояний была одна на первый ответ и другая на опрос, и
+    вторая незнакомых состояний не знала вовсе: она докручивала бюджет и
+    сообщала ``poll_timeout``. Живьём это и есть частый случай — задача
+    встаёт в очередь, а расходится на следующем шаге.
+    """
+    respx.post(NEWDB_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=newdb_envelope("queued")),
+            httpx.Response(200, json=newdb_envelope("materialized")),
+        ]
+    )
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert result.error_code == "unknown_state"
+
+
 # ---------------------------------------------------------------- ФССП failures
 
 
