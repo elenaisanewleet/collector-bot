@@ -133,7 +133,7 @@ def help_text(container: Container, *, owner: bool) -> str:
         UNCHECKED_NOTE,
         f"{LIMITS_HEADER}\n{LIMITS}",
         LINKS_NOTE,
-        commands_help(owner=owner),
+        commands_help(owner=owner, batch=container.settings.batch_enabled),
     ]
     return "\n\n".join(blocks)
 

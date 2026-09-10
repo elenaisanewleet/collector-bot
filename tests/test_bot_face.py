@@ -422,7 +422,7 @@ def test_menu_offers_the_reading_screens() -> None:
     """
     from app.bot.keyboards import MENU_MORE, main_menu, more_menu
 
-    rows = main_menu(owner=True).inline_keyboard
+    rows = main_menu(owner=True, batch=True).inline_keyboard
     main = [button.callback_data for row in rows for button in row]
 
     # Первый ряд — один, и это то, что нажимают каждый день.

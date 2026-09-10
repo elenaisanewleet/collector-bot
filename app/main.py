@@ -191,7 +191,8 @@ async def publish_commands(bot: Bot, settings: Settings | None = None) -> None:
     for owner_id in sorted(settings.owner_user_ids) if settings else ():
         try:
             await bot.set_my_commands(
-                owner_telegram_commands(), scope=BotCommandScopeChat(chat_id=owner_id)
+                owner_telegram_commands(batch=settings.batch_enabled if settings else False),
+                scope=BotCommandScopeChat(chat_id=owner_id),
             )
         except TelegramAPIError as exc:
             logger.warning("commands.owner_publish_failed", owner_id=owner_id, detail=str(exc))

@@ -65,6 +65,12 @@ def settings(tmp_path: Path) -> Settings:
         # выгрузка очереди открыты только владельцу, и стенд обязан изображать
         # того, кто ими пользуется. Кому этого не надо — ``unowned_container``.
         owner_telegram_user_ids="111",
+        # Прогон по всей базе на проде выключен (BATCH_ENABLED=false): одно
+        # нажатие тратит деньги за всю выгрузку, а владелец у продукта не
+        # технический. Стенд его включает, потому что тесты этой фичи должны
+        # проверять её, а не выключатель; за сам выключатель отвечают
+        # отдельные тесты в test_batch_flow.py.
+        batch_enabled=True,
         database_url="sqlite+aiosqlite:///:memory:",
         internal_csv_path=DEMO_CSV,
         cache_ttl_hours=24,

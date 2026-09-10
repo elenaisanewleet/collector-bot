@@ -200,6 +200,7 @@ def main_menu(
     owner: bool,
     base: BaseListing | None = None,
     clients: ClientsListing | None = None,
+    batch: bool = False,
 ) -> InlineKeyboardMarkup:
     """Главное меню: пять рядов у владельца, три у остальных.
 
@@ -221,6 +222,11 @@ def main_menu(
 
     ``owner`` без значения по умолчанию: забытый аргумент должен ломаться на
     mypy, а не показывать чужую кнопку живому человеку.
+
+    ``batch`` — наоборот, по умолчанию ВЫКЛЮЧЕН, и по той же логике наоборот.
+    Забытый ``owner`` показывает лишнюю кнопку, забытый ``batch`` — прячет; из
+    двух ошибок кнопка «Проверить всю базу», потраченная случайным нажатием на
+    всю выгрузку, дороже, чем её отсутствие.
     """
     buttons = [[_menu_button("Проверить человека", SearchType.PERSON)]]
     if base is not None:
@@ -243,16 +249,17 @@ def main_menu(
         )
         buttons.append([InlineKeyboardButton(text=f"Проверки по номеру{fresh}", url=clients.url)])
     if owner:
-        buttons.append(
-            [
+        owner_row = [
+            InlineKeyboardButton(text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import")
+        ]
+        if batch:
+            owner_row.insert(
+                0,
                 InlineKeyboardButton(
                     text="Проверить всю базу", callback_data=f"{BATCH_PREFIX}:start"
                 ),
-                InlineKeyboardButton(
-                    text="Загрузить выгрузку", callback_data=f"{MENU_PREFIX}:import"
-                ),
-            ]
-        )
+            )
+        buttons.append(owner_row)
     buttons.append(
         [
             InlineKeyboardButton(text="История проверок", callback_data=f"{MENU_PREFIX}:history"),

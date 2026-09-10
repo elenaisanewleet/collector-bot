@@ -338,11 +338,36 @@ def test_the_menu_hides_what_an_employee_cannot_press() -> None:
 
 def test_the_menu_keeps_everything_for_the_owner() -> None:
     payloads = [
-        button.callback_data for row in main_menu(owner=True).inline_keyboard for button in row
+        button.callback_data
+        for row in main_menu(owner=True, batch=True).inline_keyboard
+        for button in row
     ]
 
     assert "batch:start" in payloads
-    assert "batch:start" in payloads
+    assert "menu:import" in payloads
+
+
+def test_the_batch_button_needs_the_switch_as_well_as_the_owner() -> None:
+    """Владелец — не единственное условие, и второе условие про деньги.
+
+    Права и цена — разные вопросы. ``owner`` отвечает «кому можно», а
+    ``BATCH_ENABLED`` — «сколько стоит одно нажатие»: прогон опрашивает платные
+    источники по каждому должнику выгрузки. Владелица попросила убрать кнопку
+    прямо: «чтобы владелец не нажал её и не ушёл в какой-то лимит».
+
+    Проверяется именно владелец с опущенным выключателем: перепутать два
+    условия легко, и тогда кнопка вернулась бы тому единственному человеку,
+    от которого её и прятали.
+    """
+    payloads = [
+        button.callback_data
+        for row in main_menu(owner=True, batch=False).inline_keyboard
+        for button in row
+    ]
+
+    assert "batch:start" not in payloads
+    # Закрыт прогон, а не меню владельца: загрузка выгрузки на месте.
+    assert "menu:import" in payloads
 
 
 def test_the_bottom_keyboard_drops_the_batch_button_for_an_employee() -> None:

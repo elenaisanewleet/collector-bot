@@ -55,7 +55,7 @@ OWNER_COMMANDS: tuple[tuple[str, str], ...] = (
 )
 
 
-def commands_for(*, owner: bool) -> tuple[tuple[str, str], ...]:
+def commands_for(*, owner: bool, batch: bool = False) -> tuple[tuple[str, str], ...]:
     """Что показать этому человеку — и в каком порядке.
 
     Владельческие команды встают сразу за ``/start``, а не в хвост: прогон по
@@ -65,7 +65,19 @@ def commands_for(*, owner: bool) -> tuple[tuple[str, str], ...]:
     if not owner:
         return BOT_COMMANDS
     head, *tail = BOT_COMMANDS
-    return (head, *OWNER_COMMANDS, *tail)
+    owner_commands = OWNER_COMMANDS if batch else _without_batch(OWNER_COMMANDS)
+    return (head, *owner_commands, *tail)
+
+
+def _without_batch(commands: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+    """Убрать прогон из синего меню, когда он выключен настройкой.
+
+    По тому же правилу, по которому владельческие команды не показываются
+    сотруднику: команда в меню, на которую бот отвечает «нельзя» или «выключено»,
+    — обещание, которого он не держит. А эта конкретная команда стоит первой
+    строкой и тратит деньги за всю выгрузку.
+    """
+    return tuple(item for item in commands if item[0] != "batch")
 
 
 #: Описание бота — пустой чат до кнопки «Начать». Лимит Telegram 512 знаков.
@@ -89,15 +101,18 @@ def telegram_commands() -> list[BotCommand]:
     return [BotCommand(command=name, description=title) for name, title in BOT_COMMANDS]
 
 
-def owner_telegram_commands() -> list[BotCommand]:
+def owner_telegram_commands(*, batch: bool = False) -> list[BotCommand]:
     """Общий список плюс то, что видит только владелец."""
-    return [BotCommand(command=name, description=title) for name, title in commands_for(owner=True)]
+    return [
+        BotCommand(command=name, description=title)
+        for name, title in commands_for(owner=True, batch=batch)
+    ]
 
 
-def commands_help(*, owner: bool) -> str:
+def commands_help(*, owner: bool, batch: bool = False) -> str:
     """Тот же список для справки в чате."""
     lines = ["КОМАНДЫ"]
-    lines.extend(f"/{name} — {title}" for name, title in commands_for(owner=owner))
+    lines.extend(f"/{name} — {title}" for name, title in commands_for(owner=owner, batch=batch))
     return "\n".join(lines)
 
 

@@ -154,6 +154,7 @@ async def menu_markup(container: Container, user_id: int) -> InlineKeyboardMarku
         owner=container.access_service.is_owner(user_id),
         base=await base_listing(container, user_id),
         clients=await clients_listing(container, user_id),
+        batch=container.settings.batch_enabled,
     )
 
 
