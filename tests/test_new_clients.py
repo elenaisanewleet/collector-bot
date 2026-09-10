@@ -38,7 +38,7 @@ from app.providers.identity_bridge import (
     InnBridgeResult,
     missing_bridge_fields,
 )
-from app.providers.newdb import QUEUE_PATIENCE_POLLS, NewDBClient
+from app.providers.newdb import NewDBClient
 from app.providers.phone_bridge import PhoneNameProvider, PhoneNameResult
 from app.providers.registry import ProviderRegistry
 from app.services import card_identify
@@ -65,6 +65,13 @@ def last(sent: SentMessages) -> str:
 
 PUBLIC_URL = "https://reports.example.test"
 PHONE = "+79990001122"
+
+#: Самый долгий ответ NewDB из журнала, который их поддержка прислала по нашему
+#: аккаунту 10.09.2026: 37 запросов, завершённых 37, медиана 79.3 с, P95 174.4 с,
+#: максимум 207.45 с (``passport_fns``). Число живёт здесь, а не в коде, потому
+#: что это НАБЛЮДЕНИЕ, а не настройка: им проверяется, что умолчание бюджета
+#: опроса перекрывает то, что поставщик действительно себе позволяет.
+VENDOR_SLOWEST_SECONDS = 207.45
 
 FOUND = PersonName(last_name="Иванова", first_name="Мария", middle_name="Сергеевна")
 #: Контрольная сумма сходится — иначе :func:`normalize_snils` его отвергнет, и
@@ -644,74 +651,115 @@ def test_what_the_operator_typed_survives_the_export_row() -> None:
     assert card.passport == "9999999999"
 
 
-# ------------------------------------- 7. задача, за которую не взялись
+# ------------------------------------- 7. очередь поставщика — это работа
 
 
 @respx.mock
-async def test_a_task_that_never_leaves_the_queue_is_dropped_early(
+async def test_a_long_queue_is_waited_out_because_that_is_how_the_vendor_works(
     live_settings: Settings,
 ) -> None:
-    """Задача простояла в очереди полминуты — дальше ждать нечего.
+    """Задача, простоявшая в очереди минуту, доводится до ответа.
 
-    Снято с прода: пять источников из пяти отвечали ``queued`` девяносто секунд
-    и не двигались с места, а оператор всё это время смотрел на полосу. Один
-    прогон занимал шесть-семь минут и заканчивался пятью пустыми разделами.
+    Здесь стоял обратный тест. Он утверждал, что задача, не начавшаяся за
+    полминуты, не начнётся и за пять, и проверял, что бот бросает её на десятом
+    опросе. Наблюдение, из которого он вырос, было настоящим — пять источников
+    отвечали ``queued`` девяносто секунд, — а вывод из него неверным.
 
-    Задача, не начавшаяся за полминуты, не начнётся и за пять. Ждать её —
-    тратить не деньги (вызов уже оплачен), а чужое время.
+    10.09.2026 поддержка NewDB прислала журнал по нашему аккаунту: тридцать
+    семь запросов, ЗАВЕРШЁННЫХ тридцать семь, ни одного незавершённого. Медиана
+    79 с, P95 174 с, максимум 207 с. То есть те девяносто секунд в очереди были
+    нормальной работой поставщика: он считал и в итоге ответил на каждый запрос,
+    а бот успевал сдаться раньше — и списывал на поставщика отказ брать работу.
+
+    Цена ошибки двойная: вызов оплачен и выброшен, а в отчёте вместо найденных
+    производств стояло «не проверено». Поэтому очередь теперь ждут, пока не
+    кончится бюджет опроса, и ждут молча.
     """
     settings = live_settings.model_copy(
         update={
             "newdb_api_key": "k",
             "newdb_base_url": "https://newdb.example.test",
             "newdb_method_path": "/v2",
-            "newdb_poll_attempts": 50,
+            "newdb_poll_attempts": 30,
             "newdb_poll_interval_seconds": 0.001,
-            "newdb_queue_patience_polls": QUEUE_PATIENCE_POLLS,
             "provider_max_retries": 0,
         }
     )
-    calls = respx.post("https://newdb.example.test/v2").mock(
+    queued = httpx.Response(200, json={"state": "queued", "requestId": "x"})
+    done = httpx.Response(
+        200,
+        json={
+            "state": "complete",
+            "requestId": "x",
+            "results": {"fssp_person": {"result": {"status": 200, "data": [{"a": 1}]}}},
+        },
+    )
+    # Двадцать опросов в очереди — вдвое больше прежнего порога — и только
+    # потом ответ.
+    calls = respx.post("https://newdb.example.test/v2").mock(side_effect=[queued] * 20 + [done])
+
+    response = await NewDBClient(settings).call("fssp_person", {"lastname": "Иванов"})
+
+    assert response.rows == [{"a": 1}], "очередь прочитали как отказ и выбросили ответ"
+    assert calls.call_count == 21
+
+
+@respx.mock
+async def test_the_budget_still_ends_and_names_the_state_it_ended_on(
+    live_settings: Settings,
+) -> None:
+    """Терпение не бесконечно, и по его исходу видно, о чём спрашивать вендора.
+
+    Обрыв по очереди убран — но различать «поставщик думает дольше нашего
+    потолка» и «задача так и не двинулась» по-прежнему нужно, иначе разговор с
+    поддержкой начинается с догадок. Это делает не отдельный код отказа, а
+    последнее состояние в тексте: с ним видно, что вопрос про очередь, а не про
+    ключ или баланс.
+    """
+    settings = live_settings.model_copy(
+        update={
+            "newdb_api_key": "k",
+            "newdb_base_url": "https://newdb.example.test",
+            "newdb_method_path": "/v2",
+            "newdb_poll_attempts": 3,
+            "newdb_poll_interval_seconds": 0.001,
+            "provider_max_retries": 0,
+        }
+    )
+    respx.post("https://newdb.example.test/v2").mock(
         return_value=httpx.Response(200, json={"state": "queued", "requestId": "x"})
     )
 
     with pytest.raises(ProviderUnavailableError) as caught:
         await NewDBClient(settings).call("fssp_person", {"lastname": "Иванов"})
 
-    assert caught.value.code == "never_started"
-    # Сдались на десятом опросе, а не на пятидесятом: разница в пять раз и есть
-    # то время, которое возвращается оператору.
-    assert calls.call_count <= QUEUE_PATIENCE_POLLS + 1, "ждали дольше терпения очереди"
+    assert caught.value.code == "poll_timeout"
+    assert "queued" in str(caught.value)
 
 
-@respx.mock
-async def test_a_task_that_started_working_gets_the_whole_budget(
-    live_settings: Settings,
-) -> None:
-    """А начавшую работу задачу не обрывают: вызов уже оплачен.
+def test_the_shipped_poll_budget_covers_what_the_vendor_measured() -> None:
+    """Умолчание обязано перекрывать тайминги, которые поставщик сам прислал.
 
-    Терпение кончается только для тех, кто НЕ НАЧИНАЛСЯ. Дошедшая до
-    ``in_progress`` получает полный бюджет — иначе ранний обрыв выбрасывал бы
-    результат, за который заплачено.
+    Максимум из его журнала — 207.5 с, P95 — 174.4 с, медиана — 79.3 с. Прежние
+    25 × 3 = 75 с не дотягивали ДАЖЕ ДО МЕДИАНЫ: в половине случаев бот сдавался
+    раньше, чем источник впервые успевал ответить. Это и выглядело как «шесть
+    источников молчат», и починить это настройкой на сервере нельзя — сервер
+    берёт умолчание отсюда.
+
+    Тест сравнивает не с красивым числом, а с измеренным максимумом: если
+    кто-нибудь снова урежет бюджет «чтобы бот отвечал быстрее», он увидит, чем
+    именно платит.
     """
-    settings = live_settings.model_copy(
-        update={
-            "newdb_api_key": "k",
-            "newdb_base_url": "https://newdb.example.test",
-            "newdb_method_path": "/v2",
-            "newdb_poll_attempts": 15,
-            "newdb_poll_interval_seconds": 0.001,
-            "provider_max_retries": 0,
-        }
-    )
-    respx.post("https://newdb.example.test/v2").mock(
-        return_value=httpx.Response(200, json={"state": "in_progress", "requestId": "x"})
-    )
+    settings = Settings()
+    budget = settings.newdb_poll_attempts * settings.newdb_poll_interval_seconds
 
-    with pytest.raises(ProviderUnavailableError) as caught:
-        await NewDBClient(settings).call("fssp_person", {"lastname": "Иванов"})
-
-    assert caught.value.code == "poll_timeout", "работающую задачу оборвали как незапущенную"
+    assert budget >= VENDOR_SLOWEST_SECONDS, (
+        f"бюджет опроса {budget:g} с меньше самого долгого ответа поставщика "
+        f"({VENDOR_SLOWEST_SECONDS:g} с) — часть оплаченных вызовов будет выброшена"
+    )
+    # Потолок на источник целиком обязан быть выше опроса вместе с HTTP, иначе
+    # медианный запрос обрывается дважды.
+    assert settings.provider_budget_seconds >= budget + settings.request_timeout_seconds
 
 
 # ------------------------------------- 8. отчёт по клику со страницы базы
