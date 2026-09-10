@@ -9,7 +9,9 @@ from datetime import date, timedelta
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
+from pydantic import ValidationError
 
+from app.config import Settings
 from app.container import Container
 from app.db.repository import AuditRepository, ShareLinkRepository
 from app.domain.enums import (
@@ -207,20 +209,53 @@ async def test_revoke_all_closes_every_live_link(web_container: Container) -> No
     assert (await web_container.share_service.revoke_all(telegram_user_id=OPERATOR_ID)).revoked == 2
 
 
-async def test_queue_link_expires_sooner_than_a_report_link(web_container: Container) -> None:
-    """За ссылкой на очередь стоит вся выгрузка, а не один человек."""
-    settings = web_container.settings
-    assert settings.share_queue_ttl_hours < settings.share_link_ttl_hours
+def test_no_link_outlives_a_month() -> None:
+    """Срок жизни ссылки ограничен, и ограничен потолком, а не дисциплиной.
+
+    Здесь стояло обратное требование: ссылка на список обязана гаснуть РАНЬШЕ
+    ссылки на отчёт, потому что за ней вся выгрузка, а не один человек. Довод
+    верный, но цену платил не тот, кто рисковал: двенадцать часов означали, что
+    страница базы и страница проверок протухали к следующему утру, и владелец
+    каждый день начинал с поиска новой ссылки в переписке.
+
+    Владелица сняла это прямо: «давай уберём срок или сделаем его 30 дней».
+    Убрать нельзя — адрес открывается без пароля и живёт в пересланных
+    сообщениях, — а тридцать дней стали и умолчанием, и ПОТОЛКОМ: настройка не
+    примет большего, сколько бы ни написали в .env. Проверяется именно потолок:
+    умолчание правится одной строкой, а граница держит правило.
+    """
+    month = 24 * 30
+    assert Settings(_env_file=None).share_link_ttl_hours == month
+    assert Settings(_env_file=None).share_queue_ttl_hours == month
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, share_link_ttl_hours=month + 1)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, share_queue_ttl_hours=month + 1)
+
+
+async def test_the_two_ttls_stay_separate_knobs(web_container: Container) -> None:
+    """Сроки сравнялись, но не слились: список по-прежнему можно укоротить.
+
+    Разница в радиусе поражения никуда не делась — за ссылкой на список стоит
+    вся выгрузка. Просто платить за неё сроком оказалось дорого, а закрыт список
+    и без того: он выдаётся только владельцу. Настройки остались раздельными,
+    чтобы развёртывание, которому эта разница важна, могло вернуть её себе.
+    """
+    container = web_container
+    container.share_service._settings = container.settings.model_copy(
+        update={"share_queue_ttl_hours": 1}
+    )
 
     for kind, target_id in ((ShareKind.REPORT, 1), (ShareKind.QUEUE, 2)):
         assert (
-            await web_container.share_service.issue(
+            await container.share_service.issue(
                 ShareTarget(kind, target_id), telegram_user_id=OPERATOR_ID
             )
             is not None
         )
 
-    async with web_container.database.session() as session:
+    async with container.database.session() as session:
         repo = ShareLinkRepository(session)
         report_link = await repo.find_for_target(ShareKind.REPORT.value, 1)
         queue_link = await repo.find_for_target(ShareKind.QUEUE.value, 2)
