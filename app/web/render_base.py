@@ -49,6 +49,11 @@ __all__ = ["FeeRules", "render_base_page", "render_person_page"]
 
 _HEADERS = ("Должник", "Долг", "Пошлина", "Как подавать", "Машины", "Адрес")
 
+CHECK_LABEL = "Проверить по реестрам"
+#: Почему кнопка уводит со страницы. Сказать это обязательно: человек нажал
+#: «Проверить» и оказался в Telegram — без объяснения это выглядит поломкой.
+CHECK_NOTE = "Откроется бот и сразу начнёт проверку — ФССП, банкротство, залоги и остальные."
+
 SEARCH_NOTE = (
     "Поиск идёт по всей строке: фамилия, госномер, улица, номер записи — что помните, то и вводите."
 )
@@ -406,6 +411,7 @@ def render_person_page(
     app_name: str,
     rules: FeeRules,
     back_url: str = "",
+    check_url: str = "",
     demo_mode: bool = False,
     print_mode: bool = False,
 ) -> str:
@@ -422,6 +428,13 @@ def render_person_page(
     Порядок разделов — ответом вперёд. Раньше страница начиналась с ФИО и
     даты рождения, то есть с того, что читатель уже знал: он сюда за этим
     именем и кликнул. Решение и его цена стояли внизу, за таблицей полей.
+
+    ``check_url`` — ссылка «Проверить», ведущая В БОТА, а не запускающая
+    проверку со страницы. Разница принципиальная и она про деньги: страница
+    живёт за токеном, который пересылают, и она не знает, кто её открыл. Кнопка,
+    бьющая в источники прямо отсюда, означала бы, что каждый, кому досталась
+    ссылка, тратит баланс владельца кликами. В боте же человек опознан, квота
+    считается на него, и отказать незнакомцу есть чем.
     """
     from app.web.render import demo_banner
 
@@ -431,7 +444,7 @@ def render_person_page(
     parts: list[str] = []
     if demo_mode:
         parts.append(demo_banner())
-    parts.append(_person_hero(debtor, kind, fee, back_url))
+    parts.append(_person_hero(debtor, kind, fee, back_url, check_url))
     parts.append(_person_money(debtor, kind, fee, rules))
     parts.append(_person_facts(debtor))
 
@@ -445,9 +458,19 @@ def render_person_page(
     return document(title=f"{app_name} — должник", nav=nav, body=body)
 
 
-def _person_hero(debtor: Debtor, kind: _Kind, fee: Decimal | None, back_url: str) -> str:
+def _person_hero(
+    debtor: Debtor, kind: _Kind, fee: Decimal | None, back_url: str, check_url: str = ""
+) -> str:
     """Шапка: имя и сразу ответ — как подавать и во что это обойдётся."""
     back = f'<p class="hint"><a href="{e(back_url)}">← ко всему списку</a></p>' if back_url else ""
+    # Кнопка ведёт в бота: проверка стоит денег, и платить за неё должен тот,
+    # кого бот опознал, а не всякий, кому переслали ссылку.
+    check = (
+        f'<div class="actions"><a href="{e(check_url)}">{e(CHECK_LABEL)}</a></div>'
+        f'<p class="hint">{e(CHECK_NOTE)}</p>'
+        if check_url
+        else ""
+    )
     born = debtor.birth_date.strftime("%d.%m.%Y") if debtor.birth_date else "—"
     amount = _amount(debtor)
     shown = format_amount(amount) if amount is not None else "—"
@@ -466,6 +489,7 @@ def _person_hero(debtor: Debtor, kind: _Kind, fee: Decimal | None, back_url: str
         f'<p class="lead"><span class="pill k-{kind.key}">{e(kind.title)}</span></p>'
         f'<div class="nums">{figures}</div>'
         f'<p class="hint">Дата рождения: {e(born)}</p>'
+        f"{check}"
         f"{back}"
         "</header>"
     )

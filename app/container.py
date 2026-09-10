@@ -40,6 +40,14 @@ class Container:
     access_service: AccessService
     query_cards: QueryCardService
     phone_lookups: PhoneLookupService
+    #: Имя бота в Telegram, без «@». Узнаётся при старте у самого Telegram, а не
+    #: задаётся настройкой: настройка разъедется с ботом при первом же
+    #: переименовании, и ссылка «Проверить» со страницы поведёт в никуда.
+    #:
+    #: Пустая строка — законное состояние: веб поднимается и в тестах, где
+    #: Telegram не спрашивают вовсе. Кнопки «Проверить» тогда просто нет, и это
+    #: честнее мёртвой ссылки.
+    bot_username: str = ""
 
     async def dispose(self) -> None:
         await self.database.dispose()

@@ -33,6 +33,7 @@ from app.db.models import Debtor, ShareLink
 from app.db.repository import DebtorRepository, ShareLinkRepository
 from app.domain.verdict import VERDICT_TITLES
 from app.logging_setup import get_logger
+from app.services.deeplink import CHECK_PAYLOAD_PREFIX
 from app.services.export import queue_to_csv
 from app.services.reporting import render_report
 from app.services.share import ShareKind
@@ -182,10 +183,26 @@ async def handle_person(request: web.Request) -> web.Response:
         app_name=container.settings.app_name,
         rules=_fee_rules(container),
         back_url=container.share_service.url_for(link.token, ShareKind.BASE),
+        check_url=_check_url(container, debtor_id),
         demo_mode=container.settings.app_mode is AppMode.DEMO,
         print_mode="print" in request.query,
     )
     return web.Response(text=html, content_type="text/html", headers=PRIVATE_HEADERS)
+
+
+def _check_url(container: Container, debtor_id: int) -> str:
+    """Ссылка «Проверить» — в бота, с этим должником в полезной нагрузке.
+
+    Не запрос со страницы: проверка стоит денег, а страница живёт за токеном,
+    который пересылают, и не знает, кто её открыл. В боте человек опознан,
+    квота считается на него, и отказать незнакомцу есть чем.
+
+    Пустая строка, если имя бота неизвестно (Telegram не спросили — так бывает
+    в тестах и в вебе без бота). Кнопки тогда просто нет: честнее мёртвой.
+    """
+    if not container.bot_username:
+        return ""
+    return f"https://t.me/{container.bot_username}?start={CHECK_PAYLOAD_PREFIX}{debtor_id}"
 
 
 # ---------------------------------------------------------------- отчёт

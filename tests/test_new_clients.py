@@ -42,6 +42,7 @@ from app.providers.newdb import QUEUE_PATIENCE_POLLS, NewDBClient
 from app.providers.phone_bridge import PhoneNameProvider, PhoneNameResult
 from app.providers.registry import ProviderRegistry
 from app.services import card_identify
+from app.services.deeplink import CHECK_PAYLOAD_PREFIX, debtor_id_from_payload
 from app.services.phone_lookups import PhoneLookupService
 from app.services.query_card import Card, QueryCardService, fill_from_bridge
 from app.services.share import ShareKind, ShareLinkService, ShareTarget
@@ -711,3 +712,87 @@ async def test_a_task_that_started_working_gets_the_whole_budget(
         await NewDBClient(settings).call("fssp_person", {"lastname": "Иванов"})
 
     assert caught.value.code == "poll_timeout", "работающую задачу оборвали как незапущенную"
+
+
+# ------------------------------------- 8. отчёт по клику со страницы базы
+
+
+def test_the_check_link_carries_the_debtor_and_nothing_else() -> None:
+    """Полезная нагрузка ``?start=`` — префикс и число, больше в неё нельзя.
+
+    Ограничение задал Telegram: не больше 64 символов и только
+    ``[A-Za-z0-9_-]``. Ни ФИО, ни кириллицы, ни двоеточий туда не положить —
+    и хорошо, что нельзя: ссылку видно в адресной строке.
+    """
+    assert debtor_id_from_payload(f"{CHECK_PAYLOAD_PREFIX}42") == 42
+    # Всё, что не «префикс плюс цифры», отвергается молча: нагрузку пишет кто
+    # угодно, и «почти похожее» здесь не значит ничего.
+    for junk in ("", None, "42", "chk", "chkabc", "chk4 2", "other7"):
+        assert debtor_id_from_payload(junk) is None, f"принята чужая нагрузка {junk!r}"
+
+
+async def test_a_click_from_the_base_runs_the_check_in_the_bot(
+    bridged: Container, bridged_dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Кнопка со страницы должника доводит до отчёта, ничего не переспрашивая.
+
+    Требование владелицы дословно: «при переходе во всю базу и нажатии на
+    любого человека сразу формировался отчёт».
+
+    Проверка идёт в БОТЕ, а не со страницы, и это про деньги: страница живёт
+    за токеном, который пересылают, и не знает, кто её открыл. Кнопка, бьющая в
+    источники прямо оттуда, означала бы, что каждый получатель ссылки тратит
+    баланс владельца кликами.
+    """
+    await bridged.import_service.import_text(
+        "ИД,ФИО,Дата рождения,Госномер\n440466,Иванова Мария Сергеевна,05.07.1985,А123ВС777"
+    )
+    async with bridged.database.session() as session:
+        rows = await DebtorRepository(session).all_by_name(limit=1)
+    assert rows, "выгрузка не загрузилась"
+
+    await feed(
+        bridged_dispatcher,
+        bot,
+        message=make_message(f"/start {CHECK_PAYLOAD_PREFIX}{rows[0].id}"),
+    )
+
+    answer = sent.joined
+    assert "Иванова Мария Сергеевна" in answer
+    # Отчёт, а не приветствие и не форма сбора: человек уже нажал «Проверить».
+    assert "Перспектива взыскания" in answer, "клик со страницы не дошёл до отчёта"
+    assert not sent.contains("С чего начнём"), "вместо отчёта показано приветствие"
+
+
+async def test_an_unknown_debtor_falls_back_to_the_welcome(
+    bridged: Container, bridged_dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Ссылка устарела — человек попадает на первый экран, а не в тупик.
+
+    Ссылки живут в переписках и переживают чистку истории: должника могли
+    удалить, базу переимпортировать. Сообщение об ошибке вместо приветствия —
+    плохая встреча там, где всё, что нужно, это начать заново.
+    """
+    await feed(
+        bridged_dispatcher, bot, message=make_message(f"/start {CHECK_PAYLOAD_PREFIX}999999")
+    )
+
+    assert not sent.contains("Перспектива взыскания")
+    assert sent.joined, "бот не ответил вовсе"
+
+
+def test_the_person_page_has_no_button_when_the_bot_is_unknown(bridged: Container) -> None:
+    """Имя бота неизвестно — кнопки нет. Мёртвая ссылка хуже отсутствующей.
+
+    Так бывает, когда веб поднят без бота: Telegram никто не спрашивал, и
+    подставлять в ссылку пустое имя значило бы вести в никуда.
+    """
+    from app.web.app import _check_url
+
+    assert bridged.bot_username == ""
+    assert _check_url(bridged, 42) == ""
+
+    bridged.bot_username = "proverka_dolga_bot"
+    assert _check_url(bridged, 42) == (
+        f"https://t.me/proverka_dolga_bot?start={CHECK_PAYLOAD_PREFIX}42"
+    )

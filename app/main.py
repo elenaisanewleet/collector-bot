@@ -107,6 +107,17 @@ async def start_bot(settings: Settings | None = None) -> None:
     )
     dispatcher = setup_dispatcher(Dispatcher(storage=MemoryStorage()), container)
 
+    # Имя бота спрашивается у Telegram ДО подъёма веба: страница должника
+    # печатает по нему ссылку «Проверить», и без имени кнопки на ней не будет.
+    # Не настройкой: настройка разъедется с ботом при первом переименовании, и
+    # кнопка поведёт в никуда — а заметить это некому.
+    #
+    # Ошибка здесь не должна валить запуск: бот полезен и без одной кнопки.
+    try:
+        container.bot_username = (await bot.get_me()).username or ""
+    except Exception:
+        logger.warning("bot.username_unknown")
+
     # Веб-сервер отчётов живёт в том же цикле событий, что и опрос Telegram:
     # это одна и та же библиотека (aiohttp), отдельный процесс не нужен.
     web_runner = await run_web_server(container) if resolved.web_enabled else None

@@ -5,7 +5,7 @@ from __future__ import annotations
 from html import escape
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
@@ -24,7 +24,10 @@ from app.bot.keyboards import (
     more_menu,
 )
 from app.container import Container
-from app.db.repository import DebtorRepository
+from app.db.models import Debtor
+from app.db.repository import DebtorRepository, debtor_to_record
+from app.services import card_identify
+from app.services.deeplink import debtor_id_from_payload
 from app.services.share import ShareKind, ShareTarget
 from app.utils.formatting import pluralize_ru
 from app.utils.money import format_compact_amount
@@ -209,6 +212,49 @@ def build_router() -> Router:
     Dispatcher — in tests, or in any future multi-bot setup — impossible.
     """
     router = Router(name="start")
+
+    @router.message(CommandStart(deep_link=True))
+    async def handle_check_from_web(
+        message: Message,
+        state: FSMContext,
+        container: Container,
+        user_id: int,
+        command: CommandObject,
+    ) -> None:
+        """Пришли со страницы должника: проверить его и отдать отчёт.
+
+        Это вторая половина кнопки «Проверить по реестрам» на странице базы.
+        Первая — сама ссылка (:mod:`app.services.deeplink`), и она уводит СЮДА,
+        а не запускает проверку со страницы. Причина в деньгах: страница живёт
+        за токеном, который пересылают, и не знает, кто её открыл; кнопка,
+        бьющая в источники прямо оттуда, означала бы, что каждый получатель
+        ссылки тратит баланс владельца кликами. Здесь человек опознан, квота
+        считается на него, и отказать незнакомцу есть чем.
+
+        Карточка начинается с чистой: пришли за КОНКРЕТНЫМ должником, и чужие
+        поля от прошлой проверки в его отчёте были бы подменой. Дальше в неё
+        переносится строка выгрузки — ФИО, дата рождения, ИНН, паспорт, договор,
+        машина, — и по ней сразу идёт прогон: человек нажал «Проверить», второй
+        раз спрашивать его об этом незачем.
+
+        Незнакомая полезная нагрузка и пропавший должник ведут на обычное
+        приветствие: ссылка могла устареть, а тупик с сообщением об ошибке
+        вместо первого экрана — плохая встреча.
+        """
+        debtor_id = debtor_id_from_payload(command.args)
+        if debtor_id is None:
+            await handle_start(message, state, container, user_id)
+            return
+        await reset_state(state)
+        async with container.database.session() as session:
+            debtor = await session.get(Debtor, debtor_id)
+        if debtor is None:
+            await handle_start(message, state, container, user_id)
+            return
+
+        card = await container.query_cards.wipe(user_id, message.chat.id)
+        card_identify.absorb(card, debtor_to_record(debtor))
+        await query_card.run_card(message, container, card, user_id)
 
     @router.message(CommandStart())
     async def handle_start(
