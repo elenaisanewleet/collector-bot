@@ -40,8 +40,7 @@ from typing import NamedTuple
 from app.db.models import Debtor
 from app.domain.fees import FEE_BRACKETS, claim_fee, court_order_fee
 from app.utils.dates import format_datetime, utcnow
-from app.utils.formatting import pluralize_ru
-from app.utils.masking import mask_vin
+from app.utils.formatting import format_phone, pluralize_ru
 from app.utils.money import format_amount
 from app.web.render import cell, document, e, navigation, print_footer, raw_cell, section, table
 
@@ -655,8 +654,12 @@ def _person_facts(debtor: Debtor) -> str:
                 ("ФИО", debtor.fio),
                 ("Дата рождения", _date(debtor.birth_date)),
                 ("Адрес", debtor.address),
-                ("Телефон", debtor.phone_masked),
-                ("Паспорт", debtor.passport_masked),
+                # Полное значение, когда оно есть; маска — только вместо
+                # отсутствующего. Маскированный телефон нельзя набрать, а
+                # маскированный паспорт нельзя вписать в заявление: страница
+                # существует ради этих двух действий.
+                ("Телефон", format_phone(debtor.phone) or debtor.phone_masked),
+                ("Паспорт", debtor.passport or debtor.passport_masked),
                 ("ИНН", debtor.inn),
             ],
         ),
@@ -664,7 +667,7 @@ def _person_facts(debtor: Debtor) -> str:
             "Машины",
             [
                 ("Госномера", plates),
-                ("VIN", mask_vin(debtor.vin) if debtor.vin else None),
+                ("VIN", debtor.vin),
             ],
         ),
         (

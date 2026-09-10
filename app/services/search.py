@@ -47,6 +47,7 @@ from app.services.aggregation import Aggregator
 from app.services.identity import IdentityMatcher
 from app.services.scoring import RecoveryScoreEngine
 from app.utils.dates import iso_or_none
+from app.utils.formatting import format_phone
 from app.utils.hashing import stable_hash
 from app.utils.masking import mask_inn, mask_name, mask_passport, mask_phone
 
@@ -492,7 +493,9 @@ class SearchService:
                 telegram_user_id=telegram_user_id,
                 search_type=report.subject.search_type,
                 normalized_query_hash=query_hash,
-                masked_query=describe_subject(report.subject),
+                masked_query=describe_subject(
+                    report.subject, mask=not self._settings.store_sensitive_identifiers
+                ),
                 subject_json=json.dumps(
                     redact_subject(
                         report.subject,
@@ -882,16 +885,30 @@ def subject_from_json(payload: str) -> SearchSubject | None:
         return None
 
 
-def describe_subject(subject: SearchSubject) -> str:
-    """A masked, human-readable label for the history list.
+def describe_subject(subject: SearchSubject, *, mask: bool = False) -> str:
+    """Подпись запроса в списке истории.
 
-    Never contains a full phone number or passport.
+    Раньше здесь всё маскировалось безусловно: «А*** А***, 1995,
+    +7 (987) ***-**-20». Список истории существует ровно для одного — вернуться
+    к своему же прежнему запросу, — и маска убивала это назначение: двух
+    однофамильцев по такой строке не различить, а повторить запрос по ней нельзя
+    вовсе. Бот закрыт списком допуска, историю видит только тот, кто её и
+    создал, и видит в ней то, что сам же и вводил.
+
+    ``mask`` остаётся, и остаётся не для симметрии. Подпись ПИШЕТСЯ В БАЗУ, а
+    что попадает в базу целиком, решает одна настройка на весь продукт —
+    ``STORE_SENSITIVE_IDENTIFIERS``. Развёртывание, опустившее её, сказало
+    «полных документов у себя не держим», и колонка с именем ``masked_query`` —
+    последнее место, где стоит это правило нарушать. Поэтому вызывающий передаёт
+    сюда состояние флага, а не своё мнение.
     """
     search_type = subject.search_type
     if search_type == SearchType.CONTRACT.value:
         return subject.contract_number or subject.claim_number or subject.debtor_id or "—"
     if search_type == SearchType.PASSPORT.value:
-        return mask_passport(subject.passport) or "—"
+        if mask:
+            return mask_passport(subject.passport) or "—"
+        return subject.passport or "—"
     vehicle_types = {
         SearchType.VEHICLE_PLATE.value,
         SearchType.VIN.value,
@@ -902,15 +919,16 @@ def describe_subject(subject: SearchSubject) -> str:
     if search_type == SearchType.ADDRESS.value:
         return subject.address or "—"
 
-    parts = [mask_name(subject.name.full) if subject.name else None]
+    full_name = subject.name.full if subject.name else None
+    parts = [mask_name(full_name) if mask and full_name else full_name]
     if subject.birth_date:
         parts.append(str(subject.birth_date.year))
     if subject.inn:
         # Поиск по одному ИНН иначе попадал бы в историю как «—»: ФИО у него
         # нет, а вернуться к такой строке потом невозможно.
-        parts.append(mask_inn(subject.inn))
+        parts.append(mask_inn(subject.inn) if mask else subject.inn)
     if subject.phone:
-        parts.append(mask_phone(subject.phone))
+        parts.append(mask_phone(subject.phone) if mask else format_phone(subject.phone))
     label = ", ".join(part for part in parts if part)
     return label or "—"
 

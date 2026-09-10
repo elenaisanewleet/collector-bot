@@ -68,12 +68,15 @@ from app.domain.identity import (
     parse_fio,
 )
 from app.domain.models import ProviderResult
+from app.logging_setup import get_logger
 from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import RecordDict
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
 from app.utils.dates import parse_date
 from app.utils.masking import mask_phone
+
+logger = get_logger(__name__)
 
 __all__ = ["PhoneNameProvider", "PhoneNameResult", "build_phone_bridge"]
 
@@ -252,7 +255,7 @@ def _read_rows(
 
     kin = _kin(rows, anchor)
     passport = _pick(kin, _read_passport, "passport", "passport_number")
-    return PhoneNameResult(
+    result = PhoneNameResult(
         provider=provider.name,
         status=ProviderStatus.SUCCESS,
         records=(),
@@ -265,6 +268,27 @@ def _read_rows(
         address=_pick_address(kin),
         note=f"ФИО определено по номеру {mask_phone(phone)}",
     )
+    # ЧТО РАЗОБРАЛОСЬ, А ЧТО НЕТ — списком имён полей, без значений.
+    #
+    # Строка появилась после первого же вопроса, на который нечем было
+    # ответить: «адрес в итоге забирает?». По одному отчёту это не различить —
+    # раздел ЕГРН пишет «недостаточно данных» и когда адреса не было в ответе
+    # поставщика, и когда он там был, а разбор его не нашёл. Первое — не наша
+    # беда, второе — наша, и лечатся они противоположным.
+    #
+    # Значения не печатаются: имён полей хватает, чтобы отличить одно от
+    # другого, а лог живёт дольше и расходится шире, чем отчёт.
+    logger.info(
+        "phone_bridge.parsed",
+        rows=len(rows),
+        kin=len(kin),
+        found=sorted(
+            field
+            for field in ("birth_date", "inn", "passport", "snils", "passport_issued", "address")
+            if getattr(result, field) is not None
+        ),
+    )
+    return result
 
 
 #: Кириллическое слово. Требование не про язык, а про пригодность ключа: искать

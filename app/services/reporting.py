@@ -42,8 +42,7 @@ from app.domain.models import (
     RecoveryScore,
 )
 from app.utils.dates import format_date, format_datetime
-from app.utils.formatting import percent, pluralize_ru, signed, truncate
-from app.utils.masking import mask_phone, mask_vin
+from app.utils.formatting import format_phone, percent, pluralize_ru, signed, truncate
 from app.utils.money import format_amount
 
 MAX_LISTED_PROCEEDINGS = 5
@@ -153,7 +152,15 @@ DISCLAIMER = "Оценка является аналитической и не �
 # разъехался бы с первым за одну правку.
 CONNECTED_LABEL = "подключено"
 NOT_CONFIGURED_LABEL = "не подключено"
-EMPTY_LABEL = "проверено, записей нет"
+#: «Записей нет» — чьих записей и по чьей вине? Первый же читатель отчёта
+#: споткнулся ровно об это: «мне не очень формулировка понятна — записей нет,
+#: это что значит?». Вопрос законный: подпись стоит рядом с «не проверено», и на
+#: слух обе читаются как отсутствие результата, хотя означают противоположное.
+#: Здесь источник СПРОСИЛИ, он ОТВЕТИЛ, и ответ его — «на этого человека у меня
+#: ничего». Для должника это факт в его пользу, и звучать он должен утверждением,
+#: а не сводкой по таблице. Тире и слово «проверено» держат пару с «не проверено
+#: — …»: различие между ними и есть главный инвариант продукта.
+EMPTY_LABEL = "проверено — ничего не найдено"
 NOT_CONFIGURED_REPORT_LINE = "Не проверено: источник не подключён."
 DEMO_BANNER = "⚠️ ДЕМО-РЕЖИМ: данные вымышленные, внешние источники не опрашивались."
 NO_FACTORS_NOTE = "Факторов для оценки недостаточно — источники не дали данных."
@@ -449,7 +456,10 @@ def _internal_lines(record: InternalDebtorRecord) -> list[str]:
         lines.append(f"ФИО: {record.full_name}")
     if record.birth_date:
         lines.append(f"Дата рождения: {format_date(record.birth_date)}")
-    phone = record.phone_masked or mask_phone(record.phone)
+    # Полный номер, когда он у нас есть; маска — только если самого номера нет
+    # (запись пришла при выключенном STORE_SENSITIVE_IDENTIFIERS). Прочерк не
+    # ставится никогда: маска хуже номера, но лучше пустоты.
+    phone = format_phone(record.phone) or record.phone_masked
     if phone:
         lines.append(f"Телефон: {phone}")
     if record.contract_number:
@@ -463,7 +473,7 @@ def _internal_lines(record: InternalDebtorRecord) -> list[str]:
     if record.vehicle_plate:
         lines.append(f"Госномер: {record.vehicle_plate}")
     if record.vin:
-        lines.append(f"VIN: {mask_vin(record.vin)}")
+        lines.append(f"VIN: {record.vin}")
     return lines
 
 
@@ -719,7 +729,7 @@ def _pledge_lines(item: PledgeRecord) -> list[str]:
     if item.pledgee_name:
         lines.append(f"  Залогодержатель: {truncate(item.pledgee_name, 90)}")
     if item.vin:
-        lines.append(f"  VIN: {mask_vin(item.vin)}")
+        lines.append(f"  VIN: {item.vin}")
     if item.registration_number:
         lines.append(f"  Уведомление: {item.registration_number}")
     if item.registered_at:

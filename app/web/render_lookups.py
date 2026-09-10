@@ -30,7 +30,7 @@ from datetime import date
 
 from app.db.models import PhoneLookup
 from app.utils.dates import format_datetime, utcnow
-from app.utils.formatting import pluralize_ru
+from app.utils.formatting import format_phone, pluralize_ru
 from app.web.render import cell, document, e, navigation, print_footer, raw_cell, section, table
 
 __all__ = ["render_lookups_page"]
@@ -151,6 +151,7 @@ def _table(lookups: Sequence[PhoneLookup]) -> str:
     cells: list[tuple[str, ...]] = []
     attrs: list[str] = []
     for lookup in lookups:
+        phone = format_phone(lookup.phone) or lookup.phone_masked
         passport = _document(lookup.passport, lookup.passport_masked)
         snils = _document(lookup.snils, lookup.snils_masked)
         birth = _day(lookup.birth_date)
@@ -165,7 +166,7 @@ def _table(lookups: Sequence[PhoneLookup]) -> str:
                 cell(format_datetime(lookup.created_at), label="Когда"),
                 raw_cell(f"<b>{e(lookup.fio or '—')}</b>", label="ФИО"),
                 cell(birth, label="Дата рождения"),
-                cell(lookup.phone_masked or "—", label="Телефон"),
+                cell(phone or "—", label="Телефон"),
                 # Копируется одним нажатием: страницу открывают затем, чтобы
                 # перенести эти цифры в заявление, и перебивать их руками —
                 # это опечатка в иске.
@@ -179,7 +180,7 @@ def _table(lookups: Sequence[PhoneLookup]) -> str:
         haystack = " ".join(
             filter(
                 None,
-                (lookup.fio, birth, lookup.phone_masked, passport, issued, snils, lookup.inn),
+                (lookup.fio, birth, phone, passport, issued, snils, lookup.inn),
             )
         ).lower()
         kind = "new" if lookup.is_new_client else "known"

@@ -81,21 +81,51 @@ def test_secret_masking_never_reveals_the_value() -> None:
 # ---------------------------------------------------------------- history
 
 
-def test_history_label_masks_the_phone(person_subject) -> None:  # type: ignore[no-untyped-def]
+def test_history_label_is_readable_because_the_bot_is_closed(person_subject) -> None:  # type: ignore[no-untyped-def]
+    """Подпись в истории пишется целиком — это её единственное назначение.
+
+    Раньше здесь стояло обратное требование: телефон и ФИО обязаны быть под
+    маской. Владелица его сняла — «зачем мы маскируем телефон, если мы и так его
+    вводим, вообще нам маскирование особо не нужно в боте, так как это закрытый
+    бот», — и в этом месте она права по существу. Список истории нужен, чтобы
+    вернуться к своему же прежнему запросу; по «А*** А***, 1995» не различить
+    двух однофамильцев и не повторить запрос.
+    """
     subject = person_subject.model_copy(update={"phone": "+79991234567"})
     label = describe_subject(subject)
+
+    # Номер ещё и разбит по-человечески: цифрами он хранится, а читают его
+    # глазом и диктуют вслух.
+    assert "+7 (999) 123-45-67" in label
+    assert "Тестов Андрей Сергеевич" in label
+
+
+def test_history_label_still_obeys_the_storage_flag(person_subject) -> None:  # type: ignore[no-untyped-def]
+    """А в базу подпись всё равно едет по правилу развёртывания.
+
+    Строка не только показывается — она ХРАНИТСЯ, в колонке с именем
+    ``masked_query``. Что попадает в базу целиком, решает
+    ``STORE_SENSITIVE_IDENTIFIERS``, один флаг на весь продукт, и открытость
+    интерфейса не даёт права его обойти: развёртывание, опустившее флаг,
+    сказало «полных документов у себя не держим».
+    """
+    subject = person_subject.model_copy(update={"phone": "+79991234567"})
+    label = describe_subject(subject, mask=True)
+
     assert "+79991234567" not in label
     assert "Тестов А. С." in label
 
 
-def test_history_label_masks_the_passport() -> None:
+def test_history_label_masks_the_passport_when_the_flag_is_down() -> None:
     from app.domain.enums import SearchType
     from app.domain.identity import SearchSubject
 
     subject = SearchSubject(search_type=SearchType.PASSPORT.value, passport="4509123456")
-    label = describe_subject(subject)
-    assert "4509123456" not in label
-    assert label.startswith("45")
+
+    assert describe_subject(subject) == "4509123456"
+    masked = describe_subject(subject, mask=True)
+    assert "4509123456" not in masked
+    assert masked.startswith("45")
 
 
 def test_stored_subject_drops_sensitive_identifiers(person_subject) -> None:  # type: ignore[no-untyped-def]

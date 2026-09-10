@@ -209,9 +209,9 @@ async def test_the_phone_has_its_own_button_and_opens_nothing_external(
     assert sent.contains("✎ Номер или ФИО")
 
     await feed(dispatcher, bot, message=make_message("+7 999 000 11 22"))
-    # В карточку едет маска, полный номер — только в память процесса.
-    assert sent.contains("+7 (999) ***-**-22")
-    assert not sent.contains("+79990001122")
+    # Номер показывается целиком и по-человечески. Маска стояла здесь как
+    # рефлекс: бот закрыт списком допуска, а номер оператор только что ввёл сам.
+    assert sent.contains("+7 (999) 000-11-22")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
     subject = next(iter(container.subject_store._items.values()))[0]

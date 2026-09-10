@@ -56,6 +56,10 @@ class PhoneLookupService:
             lookup = await PhoneLookupRepository(session).record(
                 PhoneLookup(
                     telegram_user_id=telegram_user_id,
+                    # Номер под тем же флагом, что паспорт и СНИЛС. Список
+                    # существует ради звонка новому клиенту, а по маске не
+                    # позвонишь.
+                    phone=phone if keep else None,
                     phone_masked=mask_phone(phone),
                     last_name=name.last_name,
                     first_name=name.first_name,

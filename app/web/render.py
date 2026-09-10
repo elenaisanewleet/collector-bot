@@ -78,8 +78,7 @@ from app.services.reporting import (
     unanswered_line,
 )
 from app.utils.dates import format_date, format_datetime
-from app.utils.formatting import pluralize_ru
-from app.utils.masking import mask_phone, mask_vin
+from app.utils.formatting import format_phone, pluralize_ru
 from app.utils.money import format_amount
 from app.web.style import CSS
 
@@ -495,11 +494,12 @@ def internal_section(report: DebtorReport) -> str:
 
 
 def _internal_facts(record: InternalDebtorRecord) -> list[tuple[str, str, str, str]]:
-    phone = record.phone_masked or mask_phone(record.phone)
+    # Полный номер, когда он есть; маска — только вместо отсутствующего.
+    phone = format_phone(record.phone) or record.phone_masked
     rows: list[tuple[str, str, str, str]] = [
         ("ФИО", record.full_name or "—", "", ""),
         ("Дата рождения", format_date(record.birth_date), "", ""),
-        ("Телефон", phone or "—", "", "маскирован"),
+        ("Телефон", phone or "—", "", ""),
         ("Договор", record.contract_number or "—", "", ""),
         (
             "Задолженность",
@@ -511,7 +511,7 @@ def _internal_facts(record: InternalDebtorRecord) -> list[tuple[str, str, str, s
     if record.vehicle_plate:
         rows.append(("Госномер", record.vehicle_plate, "", ""))
     if record.vin:
-        rows.append(("VIN", mask_vin(record.vin) or "—", "", "маскирован"))
+        rows.append(("VIN", record.vin, "", ""))
     return rows
 
 
@@ -843,7 +843,7 @@ def pledge_section(report: DebtorReport) -> str:
             cell(item.subject, label="Предмет"),
             raw_cell(_pledge_status(item.status), label="Состояние"),
             cell(item.pledgee_name, label="Залогодержатель"),
-            cell(mask_vin(item.vin) if item.vin else None, label="VIN", numeric=True),
+            cell(item.vin, label="VIN", numeric=True),
             cell(item.registration_number, label="Уведомление", numeric=True, copy=True),
             raw_cell(match_tag(item.match_level), label="Совпадение"),
         )

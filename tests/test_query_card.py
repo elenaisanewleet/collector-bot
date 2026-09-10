@@ -252,7 +252,7 @@ async def test_even_a_blank_message_gets_an_answer(
 @pytest.mark.parametrize(
     ("line", "expected_row"),
     [
-        ("(916) 000-00-00", "Телефон: +7 (916) ***-**-00"),
+        ("(916) 000-00-00", "Телефон: +7 (916) 000-00-00"),
         ("4515 384710", "Паспорт: 4515384710"),
     ],
     ids=["телефон по форме записи", "паспорт по форме записи"],
@@ -281,21 +281,24 @@ async def test_ten_joined_digits_are_asked_about_not_guessed(
 # ---------------------------------------------------------------- приватность
 
 
-def test_the_table_stores_documents_but_never_the_phone() -> None:
-    """Паспорт и СНИЛС — да, телефон — нет, и это две разные причины.
+def test_the_table_stores_the_documents_and_the_number_beside_their_masks() -> None:
+    """Паспорт, СНИЛС и телефон — по одному правилу, маска рядом с каждым.
 
     Документы хранятся с 08.09.2026 по прямому указанию владелицы («нам надо
     наоборот сохранять эти номера») и по общему правилу базы: сама запись
-    происходит только при поднятом ``STORE_SENSITIVE_IDENTIFIERS``, а маска
-    рядом остаётся — по ней карточка отличает «было, но не сохранилось» от «не
-    спрашивали».
+    происходит только при поднятом ``STORE_SENSITIVE_IDENTIFIERS``.
 
-    Телефона нет ни под каким флагом, и это не забыли: оператор вводит его сам
-    и помнит, хранить нечего.
+    Телефон был исключением — «оператор вводит его сам и помнит, хранить
+    нечего», — и исключение не пережило проверки жизнью: после перезапуска
+    карточка показывала маску номера, который оператор только что ввёл, и
+    просила прислать его заново. Правило теперь одно на три поля.
+
+    Маска рядом с каждым остаётся, и это главное в тесте: по ней карточка
+    отличает «было, но не сохранилось» от «не спрашивали», а без этой разницы
+    интерфейс врёт молча.
     """
     columns = {column.name for column in Base.metadata.tables["query_cards"].columns}
-    assert {"passport", "snils"} <= columns
-    assert "phone" not in columns
+    assert {"passport", "snils", "phone"} <= columns
     assert {"passport_masked", "snils_masked", "phone_masked"} <= columns
 
 
@@ -346,7 +349,7 @@ async def test_a_forgotten_secret_says_so_instead_of_showing_a_dash(
     """
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:phone"))
     await feed(dispatcher, bot, message=make_message("+7 916 123 45 67"))
-    assert "+7 (916) ***-**-67" in last(sent)
+    assert "+7 (916) 123-45-67" in last(sent)
 
     # «Перезапуск»: сервис пересоздан, память процесса пуста, база — нет.
     container.query_cards = QueryCardService(container.database, container.settings)
@@ -804,7 +807,7 @@ async def test_the_search_button_always_starts_a_new_person(
 
     screen = last(sent)
     assert "Тестов" not in screen, "фамилия прежнего должника осталась в карточке"
-    assert "***-**-45" not in screen, "телефон прежнего должника остался в карточке"
+    assert "982945" not in screen, "телефон прежнего должника остался в карточке"
     assert "✎" in screen, "после сброса бот обязан задать первый вопрос"
 
 
@@ -873,7 +876,7 @@ async def test_a_new_phone_does_not_inherit_the_previous_person(
 
     screen = last(sent)
     assert "Абаджян" not in screen, "чужая фамилия прилипла к новому номеру"
-    assert "***-**-45" in screen, "сам номер до карточки не доехал"
+    assert "+7 (985) 198-29-45" in screen, "сам номер до карточки не доехал"
 
 
 async def test_the_phone_button_adds_to_the_same_person(
@@ -894,4 +897,4 @@ async def test_the_phone_button_adds_to_the_same_person(
     # Ищется по всей переписке: полное ФИО опознаёт должника однозначно, и
     # последним сообщением уходит отчёт, а не карточка.
     assert "Тестов" in sent.joined, "нажатие «Телефон» стёрло набранного человека"
-    assert "***-**-67" in sent.joined, "номер не дописался к тому же человеку"
+    assert "+7 (916) 123-45-67" in sent.joined, "номер не дописался к тому же человеку"

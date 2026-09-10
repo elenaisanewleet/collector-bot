@@ -71,6 +71,7 @@ from app.domain.identity import (
     parse_fio,
 )
 from app.utils.dates import utcnow
+from app.utils.formatting import format_phone
 from app.utils.hashing import stable_hash
 from app.utils.masking import mask_passport, mask_phone, mask_snils
 
@@ -356,13 +357,15 @@ class Card:
         честно говорит «было, но не сохранилось», и это не то же самое, что «не
         спрашивали».
 
-        Телефон — всегда маской, и он тут особый: его прислал сам оператор, он
-        его и так знает, а строка карточки от полного номера длиннее ровно на
-        ничего.
+        Телефон подчиняется тому же правилу, что паспорт и СНИЛС. Раньше он был
+        исключением — всегда маска, «оператор его и так знает». Но после
+        перезапуска карточка показывала маску номера, который оператор ввёл сам,
+        и предлагала ввести его заново: маска экономила ровно ничего и мешала
+        по-настоящему.
         """
         match name:
             case "phone":
-                return self.phone_masked
+                return format_phone(self.phone) or self.phone_masked
             case "passport":
                 return self.passport or self.passport_masked
             case "snils":
@@ -392,6 +395,7 @@ class Card:
             "middle_name": self.middle_name,
             "birth_date": self.birth_date,
             "inn": self.inn,
+            "phone": self.phone,
             "phone_masked": self.phone_masked,
             "passport": self.passport,
             "passport_masked": self.passport_masked,
@@ -584,6 +588,7 @@ class QueryCardService:
                 middle_name=row.middle_name,
                 birth_date=row.birth_date,
                 inn=row.inn,
+                phone=row.phone,
                 phone_masked=row.phone_masked,
                 passport=row.passport,
                 passport_masked=row.passport_masked,
@@ -628,6 +633,7 @@ class QueryCardService:
             # Флаг опущен — в базу едут только маски. Решение развёртывания, а
             # не умолчание кода: снаружи это видно по тому, что после
             # перезапуска карточка просит прислать номер заново.
+            columns["phone"] = None
             columns["passport"] = None
             columns["snils"] = None
         async with self._database.session() as session:

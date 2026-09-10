@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 TELEGRAM_MESSAGE_LIMIT = 4096
+#: Российский номер в нормализованном виде: код страны плюс десять цифр.
+RU_PHONE_DIGITS = 11
+_DIGITS = re.compile(r"\D")
 _SAFE_CHUNK_LIMIT = 3900
 
 
@@ -77,3 +81,25 @@ def _split_on(text: str, separator: str, limit: int) -> list[str]:
 
 def truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
+
+def format_phone(phone: str | None) -> str | None:
+    """``+79991234567`` → ``+7 (999) 123-45-67``.
+
+    Зеркало :func:`app.utils.masking.mask_phone`, и появилось оно ровно тогда,
+    когда маску убрали из интерфейса. Хранится и ищется номер цифрами
+    (``+79991234567``) — так его нормализует :func:`normalize_phone`, так он
+    сравнивается и хэшируется. Показывать его в этом виде значило бы поменять
+    аккуратную маску на строку, которую глазом не прочитать и вслух не
+    продиктовать, — то есть сделать интерфейс ХУЖЕ снятием ограничения.
+
+    Форма разбирается только знакомая: одиннадцать цифр, начинающихся с 7 или 8.
+    Всё остальное возвращается как пришло — выдумывать разбивку для номера,
+    которого не понимаешь, значит соврать о его структуре.
+    """
+    if not phone:
+        return None
+    digits = _DIGITS.sub("", phone)
+    if len(digits) == RU_PHONE_DIGITS and digits[0] in {"7", "8"}:
+        return f"+7 ({digits[1:4]}) {digits[4:7]}-{digits[7:9]}-{digits[9:]}"
+    return phone

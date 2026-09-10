@@ -345,6 +345,12 @@ class QueryCard(Base):
     middle_name: Mapped[str | None] = mapped_column(String(64))
     birth_date: Mapped[date | None] = mapped_column(Date)
     inn: Mapped[str | None] = mapped_column(String(12))
+    # Полный номер — по тому же правилу, что паспорт и СНИЛС: только при
+    # поднятом STORE_SENSITIVE_IDENTIFIERS, маска рядом всегда. Раньше здесь
+    # стояла одна маска — считалось, что номер оператор ввёл сам и помнит. Для
+    # карточки это было почти верно, для списка находок нет: по маске нельзя
+    # позвонить, а список новых клиентов существует ровно ради звонка.
+    phone: Mapped[str | None] = mapped_column(String(20))
     phone_masked: Mapped[str | None] = mapped_column(String(32))
     passport: Mapped[str | None] = mapped_column(String(16))
     passport_masked: Mapped[str | None] = mapped_column(String(32))
@@ -420,6 +426,7 @@ class PhoneLookup(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     telegram_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    phone: Mapped[str | None] = mapped_column(String(20))
     phone_masked: Mapped[str | None] = mapped_column(String(32))
     last_name: Mapped[str | None] = mapped_column(String(64))
     first_name: Mapped[str | None] = mapped_column(String(64))

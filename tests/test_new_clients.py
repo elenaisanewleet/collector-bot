@@ -501,7 +501,10 @@ def test_the_progress_message_keeps_moving_after_the_stages_run_out() -> None:
 
     assert "Считаю перспективу…" in frozen
     assert "47 с" in alive, "сообщение не говорит, сколько уже идёт"
-    assert view.WAITING_NOTE in alive, "не сказано, почему ждём"
+    # Строка рядом со счётчиком отвечает на вопрос ожидающего — «сколько ещё», —
+    # а не рассказывает, как устроен опрос источников.
+    assert view.WAITING_NOTE in alive, "не сказано, сколько ждать"
+    assert "минут" in view.WAITING_NOTE
     assert alive != frozen, "сообщение не изменилось — Telegram не покажет движения"
 
 
