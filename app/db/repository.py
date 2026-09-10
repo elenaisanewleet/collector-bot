@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
@@ -36,6 +36,14 @@ from app.utils.dates import utcnow
 from app.utils.hashing import normalize_token, stable_hash
 
 HISTORY_PAGE_SIZE = 10
+
+#: «Бессрочно» — датой, а не ``NULL``. Колонка ``expires_at`` участвует в семи
+#: запросах вида ``expires_at > now``, и ``NULL`` в SQL сравнивается со всем
+#: подряд как «неизвестно»: каждое из этих семи мест пришлось бы чинить
+#: отдельно, а забытое восьмое тихо перестало бы находить бессрочные ссылки.
+#: Дата в конце времён проходит те же сравнения и ничего не ломает — в том
+#: числе ``purge_expired``, который такую строку никогда не удалит.
+NEVER_EXPIRES = datetime(9999, 12, 31, tzinfo=UTC)
 
 
 class VendorCacheRepository:
@@ -584,7 +592,7 @@ class ShareLinkRepository:
             kind=kind,
             target_id=target_id,
             telegram_user_id=telegram_user_id,
-            expires_at=utcnow() + timedelta(hours=ttl_hours),
+            expires_at=NEVER_EXPIRES if ttl_hours <= 0 else utcnow() + timedelta(hours=ttl_hours),
         )
         self._session.add(link)
         await self._session.flush()

@@ -9,7 +9,6 @@ from datetime import date, timedelta
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from pydantic import ValidationError
 
 from app.config import Settings
 from app.container import Container
@@ -209,38 +208,72 @@ async def test_revoke_all_closes_every_live_link(web_container: Container) -> No
     assert (await web_container.share_service.revoke_all(telegram_user_id=OPERATOR_ID)).revoked == 2
 
 
-def test_no_link_outlives_a_month() -> None:
-    """Срок жизни ссылки ограничен, и ограничен потолком, а не дисциплиной.
+def test_links_do_not_expire_by_default() -> None:
+    """Срока жизни у ссылки нет, и это решение про деньги, а не про удобство.
 
-    Здесь стояло обратное требование: ссылка на список обязана гаснуть РАНЬШЕ
-    ссылки на отчёт, потому что за ней вся выгрузка, а не один человек. Довод
-    верный, но цену платил не тот, кто рисковал: двенадцать часов означали, что
-    страница базы и страница проверок протухали к следующему утру, и владелец
-    каждый день начинал с поиска новой ссылки в переписке.
+    Сроки были 72 часа у отчёта и 12 часов у списков, и здесь стоял тест,
+    требовавший, чтобы список гас раньше отчёта. Довод был про радиус поражения —
+    за списком вся выгрузка, а не один человек, — и он верен. Неверно было то,
+    что цену платил не тот, кто рисковал.
 
-    Владелица сняла это прямо: «давай уберём срок или сделаем его 30 дней».
-    Убрать нельзя — адрес открывается без пароля и живёт в пересланных
-    сообщениях, — а тридцать дней стали и умолчанием, и ПОТОЛКОМ: настройка не
-    примет большего, сколько бы ни написали в .env. Проверяется именно потолок:
-    умолчание правится одной строкой, а граница держит правило.
+    Решающим оказался счёт: «владелец заплатит 30 к, прогонит всю базу, а у него
+    через 30 дней не будет результата». Прогон по двум тысячам должников стоит
+    около тридцати тысяч рублей, и срок жизни ссылки на его результат — это срок,
+    после которого за те же данные надо платить заново.
+
+    Доступ держится не сроком, а токеном: 256 бит из ``secrets``, адрес не
+    подбирается. Страховкой от утечки самого адреса остаётся ``/revoke`` —
+    и она сильнее срока, потому что срабатывает немедленно.
     """
-    month = 24 * 30
-    assert Settings(_env_file=None).share_link_ttl_hours == month
-    assert Settings(_env_file=None).share_queue_ttl_hours == month
+    settings = Settings(_env_file=None)
 
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None, share_link_ttl_hours=month + 1)
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None, share_queue_ttl_hours=month + 1)
+    assert settings.share_link_ttl_hours == 0
+    assert settings.share_queue_ttl_hours == 0
+
+
+async def test_an_unlimited_link_is_still_alive_next_year(web_container: Container) -> None:
+    """«Бессрочно» проверяется временем, а не нулём в настройке.
+
+    Ноль часов легко превратить в ``expires_at = сейчас`` одной невнимательной
+    правкой, и тогда ссылка умирала бы В МОМЕНТ ВЫДАЧИ — отказ, который на глаз
+    неотличим от «токен не тот». Поэтому тест смотрит на дату в строке, а не на
+    значение настройки.
+    """
+    url = await web_container.share_service.issue(
+        ShareTarget(ShareKind.REPORT, 1), telegram_user_id=OPERATOR_ID
+    )
+    assert url is not None
+    token = url.rsplit("/", maxsplit=1)[-1]
+
+    async with web_container.database.session() as session:
+        link = await ShareLinkRepository(session).find_active(token)
+    assert link is not None
+    assert link.expires_at > utcnow() + timedelta(days=365 * 100)
+
+    assert await web_container.share_service.resolve(token, ShareKind.REPORT) is not None
+
+
+async def test_revoke_still_kills_an_unlimited_link(web_container: Container) -> None:
+    """Раз срока нет, отзыв остаётся единственной аварийной кнопкой — и работает.
+
+    Это цена решения, и она проверяется отдельно: пока срок был, утёкший адрес
+    умирал сам. Теперь не умирает, и ``/revoke`` из запасного выхода стал
+    основным.
+    """
+    target = ShareTarget(ShareKind.BASE, 0)
+    url = await web_container.share_service.issue(target, telegram_user_id=OPERATOR_ID)
+    assert url is not None
+    token = url.rsplit("/", maxsplit=1)[-1]
+
+    assert (await web_container.share_service.revoke_all(telegram_user_id=OPERATOR_ID)).revoked == 1
+    assert await web_container.share_service.resolve(token, ShareKind.BASE) is None
 
 
 async def test_the_two_ttls_stay_separate_knobs(web_container: Container) -> None:
-    """Сроки сравнялись, но не слились: список по-прежнему можно укоротить.
+    """Срок можно вернуть, и по отдельности: настройки остались раздельными.
 
-    Разница в радиусе поражения никуда не делась — за ссылкой на список стоит
-    вся выгрузка. Просто платить за неё сроком оказалось дорого, а закрыт список
-    и без того: он выдаётся только владельцу. Настройки остались раздельными,
-    чтобы развёртывание, которому эта разница важна, могло вернуть её себе.
+    Развёртывание, которому разница в радиусе поражения важна, ставит часы
+    спискам и оставляет отчёты бессрочными.
     """
     container = web_container
     container.share_service._settings = container.settings.model_copy(
