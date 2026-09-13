@@ -450,10 +450,20 @@
     }
   },
   "nalog_debt": {
-    "_note": "Налоговая задолженность физлица. Строка data — объект-обёртка вокруг результата скрейпа: сумма лежит в debt.total, позиции — в debt.items. Форму позиций поставщик в спецификации НЕ описал, поэтому берётся только сумма и число позиций; разбор самих позиций писать не из чего. Ключи взяты из примера ответа в newdb.net/swagger.json и живьём не сверены.",
+    "_note": "СВЕРЕНО ЖИВЬЁМ 13.09.2026. Сумма лежит в debt.amount.value (число), рядом debt.amount.text строкой и debt.amount.currency. Массива debt.items в живом ответе НЕТ вовсе — он был в примере спецификации поставщика, и написанная по нему карта (debt.total) не читала ни одного поля, из-за чего источник падал в unexpected_schema на каждом должнике. debt.status_text приходит null.",
     "fields": {
-      "amount": "debt.total",
-      "items_count": "debt.items_count"
+      "amount": "debt.amount.value",
+      "amount_text": "debt.amount.text",
+      "actual_date": "debt.actual_date"
+    }
+  },
+  "self_employed": {
+    "_note": "СВЕРЕНО ЖИВЬЁМ 13.09.2026. Строка data несёт is_self_employed булевым, registry_status и message — словами, source_url — ссылкой на сервис ФНС. Даты постановки на учёт источник НЕ возвращает: request_date — это дата запроса, а не регистрации, и подставлять её как дату учёта нельзя.",
+    "fields": {
+      "is_active": "is_self_employed",
+      "registry_status": "registry_status",
+      "message": "message",
+      "source_url": "source_url"
     }
   }
 }

@@ -310,10 +310,9 @@ class SelfEmployedRecord(SourcedFact):
     kind: Literal["self_employed"] = "self_employed"
     provider: ProviderName = ProviderName.SELF_EMPLOYED
 
+    # ``None`` — источник не сказал. Не «не самозанятый»: разница в том,
+    # начислять ли плюс, и выдумывать здесь нельзя.
     is_active: bool | None = None
-    # Дата постановки на учёт, если источник её называет: недавний статус и
-    # многолетний — разные основания рассчитывать на доход.
-    registered_at: date | None = None
 
 
 class TaxDebtRecord(SourcedFact):
@@ -334,10 +333,10 @@ class TaxDebtRecord(SourcedFact):
     provider: ProviderName = ProviderName.TAX_DEBT
 
     amount: Decimal | None = None
-    # Сколько отдельных позиций за этой суммой. Источник документирует их
-    # массивом, форма которого в спецификации не описана, поэтому здесь только
-    # счётчик: показывать разбор, которого мы не читали, нельзя.
-    items_count: int | None = None
+    # На какую дату сумма актуальна по словам источника. Разбивки по позициям
+    # он не даёт вовсе — сверено живьём 13.09.2026, — поэтому её здесь и нет:
+    # поле под разбор, которого не бывает, обещало бы больше, чем источник знает.
+    actual_date: date | None = None
 
 
 class AccountBlockRecord(SourcedFact):

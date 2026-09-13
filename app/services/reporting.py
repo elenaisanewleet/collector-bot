@@ -803,10 +803,10 @@ def _self_employed_block(report: DebtorReport) -> str:
     if not active:
         return ""
 
+    # Даты постановки на учёт здесь нет и не будет: источник её не возвращает.
+    # В ответе есть дата ЗАПРОСА, и печатать её как «на учёте с» значило бы
+    # сочинить факт — верный для любого ответа и неверный ни про кого.
     lines = [header, SELF_EMPLOYED_ACTIVE_LINE]
-    registered = next((item.registered_at for item in active if item.registered_at), None)
-    if registered:
-        lines.append(f"На учёте с {format_date(registered)}")
     lines.extend(_source_notes(result))
     lines.append(_checked_at(result))
     return "\n".join(lines)

@@ -5,21 +5,16 @@
 доход — это легальный доход, на который обращают взыскание, и основание, с
 которым идут к приставу.
 
-**Карты полей у этого метода пока нет, и это не забывчивость.** Поставщик
-документирует запрос (двенадцатизначный ИНН физлица под ключом ``inn``) и не
-документирует ответ: формы строк ``data`` в его спецификации нет вовсе. Написать
-карту по догадке значило бы нарушить правило проекта — код кодирует только
-проверенное — и купить за это худший из возможных исходов: неверная карта роняет
-источник в ``unexpected_schema`` на КАЖДОМ ответе, то есть платный вызов уходит, а
-отчёт пишет «не проверено».
+**Карта полей написана по живому ответу, а не по документации.** Формы ответа
+поставщик в спецификации не описал вовсе, поэтому источник сначала был выпущен
+без карты и честно отвечал ``NOT_CONFIGURED``. 13.09.2026 сделан один живой
+вызов, и карта собрана по нему: ``is_self_employed`` булевым, ``registry_status``
+и ``message`` словами, ``source_url`` ссылкой на сервис ФНС.
 
-Поэтому метод отсутствует в ``config/field_maps/example_newdb.json``, и по общему
-правилу провайдер отвечает ``NOT_CONFIGURED`` со ссылкой на то, чего не хватает.
-Это честное молчание: источник не притворяется, что смотрел.
-
-Чтобы его включить, нужен один живой ответ. Владелец делает одну проверку с
-``STORE_RAW_RESPONSES=true``, сохранённое тело показывает форму строк, и карта
-дописывается по факту — как это было сделано для ``egrul_ip`` 05.09.2026.
+**Даты постановки на учёт источник не возвращает.** В ответе есть
+``request_date`` — это дата ЗАПРОСА, и подставить её как дату учёта значило бы
+сочинить факт: «на учёте с сегодня» верно для любого ответа и неверно ни про
+кого.
 """
 
 from __future__ import annotations
@@ -29,7 +24,6 @@ from app.domain.identity import SearchSubject
 from app.domain.models import ProviderResult, SelfEmployedRecord
 from app.providers.mapping import RecordDict, as_text
 from app.providers.newdb import COUNTRY_RU, NewDBMethodProvider, individual_inn
-from app.utils.dates import parse_date
 
 NEWDB_METHOD = "self_employed"
 
@@ -68,15 +62,16 @@ def _params(inn: str) -> dict[str, str]:
 def to_self_employed(record: RecordDict) -> SelfEmployedRecord | None:
     """Строка ответа в запись о статусе. ``None`` — источник ничего не сказал.
 
-    Имена ключей здесь — те, под которыми их положит карта полей, когда её
-    напишут по живому ответу. Пока карты нет, функция не вызывается ни разу: до
-    неё доходит только тот, у кого метод описан.
+    Статус — единственное обязательное поле: запись без него не утверждает
+    ничего, а раздел с пустой строкой читался бы как «что-то нашли».
     """
     active = _flag(record.get("is_active"))
-    registered = parse_date(as_text(record.get("registered_at")))
-    if active is None and registered is None:
+    if active is None:
         return None
-    return SelfEmployedRecord(is_active=active, registered_at=registered)
+    return SelfEmployedRecord(
+        is_active=active,
+        source_url=as_text(record.get("source_url")),
+    )
 
 
 def _flag(value: object) -> bool | None:

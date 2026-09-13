@@ -30,18 +30,23 @@ SUBJECT = SearchSubject(
 )
 
 
-def test_the_method_is_deliberately_absent_from_the_shipped_map() -> None:
-    """Карты полей у метода нет, и это решение, а не пропуск.
+def test_the_map_was_written_from_a_live_answer() -> None:
+    """Карта собрана по живому ответу, а не по документации.
 
-    Поставщик описал запрос и не описал ответ: формы строк data в его
-    спецификации нет вовсе. Карта по догадке нарушила бы правило проекта — код
-    кодирует только проверенное — и купила бы за это худший исход: неверные пути
-    роняют источник в unexpected_schema на КАЖДОМ ответе, то есть платный вызов
-    уходит, а отчёт пишет «не проверено».
+    Формы ответа поставщик не описал вовсе, поэтому источник сначала вышел БЕЗ
+    карты и честно молчал. 13.09.2026 сделан один живой вызов, и пути взяты из
+    него. Соседний nalog_debt показал цену другого порядка действий: карта,
+    написанная по примеру из спецификации, не прочитала ни одного поля и роняла
+    источник на каждом должнике — платно и молча.
+
+    Даты постановки на учёт среди путей нет намеренно: источник её не
+    возвращает, а ``request_date`` — это дата запроса.
     """
     shipped = json.loads(Path("config/field_maps/example_newdb.json").read_text(encoding="utf-8"))
 
-    assert NEWDB_METHOD not in shipped
+    fields = shipped[NEWDB_METHOD]["fields"]
+    assert fields["is_active"] == "is_self_employed"
+    assert "registered_at" not in fields
 
 
 async def test_without_a_map_the_source_says_it_is_not_connected(
@@ -97,7 +102,7 @@ def test_silence_about_the_status_is_not_a_denial() -> None:
     как «не самозанятый» значило бы молча снять этот плюс у человека, чей доход
     мы просто не спросили.
     """
-    assert to_self_employed({"is_active": None, "registered_at": None}) is None
+    assert to_self_employed({"is_active": None}) is None
 
     denied = to_self_employed({"is_active": "нет"})
     assert denied is not None
@@ -116,7 +121,7 @@ def _report_with(*records: SelfEmployedRecord) -> DebtorReport:
 
 
 def test_a_confirmed_status_is_a_bonus_and_a_section() -> None:
-    report = _report_with(SelfEmployedRecord(is_active=True, registered_at=date(2023, 4, 1)))
+    report = _report_with(SelfEmployedRecord(is_active=True))
     assert report.recovery_score is not None
 
     names = {factor.name for factor in report.recovery_score.factors}
@@ -124,7 +129,6 @@ def test_a_confirmed_status_is_a_bonus_and_a_section() -> None:
 
     text = reporting._self_employed_block(report)
     assert "профессиональный доход" in text
-    assert "01.04.2023" in text
 
 
 def test_not_being_self_employed_prints_nothing_and_costs_nothing() -> None:

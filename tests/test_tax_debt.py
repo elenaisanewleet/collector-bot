@@ -37,12 +37,18 @@ SUBJECT = SearchSubject(
 )
 
 
-def envelope(total: str | None, *, items_count: int | None = None) -> dict[str, Any]:
+def envelope(total: str | None, *, actual_date: str | None = None) -> dict[str, Any]:
+    """Конверт в той форме, в какой поставщик отвечает ЖИВЬЁМ.
+
+    Сверено 13.09.2026. Сумма — в ``debt.amount.value`` числом, рядом ``text``
+    строкой. ``debt.total`` из примера спецификации в живом ответе нет, и первая
+    карта, написанная по нему, роняла источник на каждом должнике.
+    """
     debt: dict[str, Any] = {}
     if total is not None:
-        debt["total"] = total
-    if items_count is not None:
-        debt["items_count"] = items_count
+        debt["amount"] = {"text": f"{total} ₽", "value": float(total), "currency": "RUB"}
+    if actual_date is not None:
+        debt["actual_date"] = actual_date
     return {
         "state": "complete",
         "requestId": "00000000-0000-4000-8000-000000000001",
@@ -71,7 +77,9 @@ def maps() -> NewDBFieldMaps:
 
 @respx.mock
 async def test_the_amount_is_read(settings: Settings, maps: NewDBFieldMaps) -> None:
-    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=envelope("125300.50")))
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(200, json=envelope("125300.50", actual_date="12.09.2026"))
+    )
 
     result = await NewDBTaxDebtProvider(settings, maps).fetch(SUBJECT)
 
@@ -79,6 +87,7 @@ async def test_the_amount_is_read(settings: Settings, maps: NewDBFieldMaps) -> N
     record = result.records[0]
     assert isinstance(record, TaxDebtRecord)
     assert record.amount == Decimal("125300.50")
+    assert record.actual_date == date(2026, 9, 12)
 
 
 @respx.mock
@@ -170,7 +179,7 @@ def test_a_confirmed_zero_earns_a_bonus() -> None:
 
 def test_an_answer_without_an_amount_earns_nothing() -> None:
     """Ни плюса, ни минуса: утверждения не было."""
-    report = _report_with(TaxDebtRecord(amount=None, items_count=3))
+    report = _report_with(TaxDebtRecord(amount=None))
     assert report.recovery_score is not None
     names = {f.name for f in report.recovery_score.factors}
 
@@ -192,7 +201,7 @@ def test_the_section_separates_silence_from_zero() -> None:
     нет. Печатать в этом случае «задолженности не найдено» значило бы выдать
     молчание за утверждение.
     """
-    text = reporting._tax_debt_block(_report_with(TaxDebtRecord(amount=None, items_count=2)))
+    text = reporting._tax_debt_block(_report_with(TaxDebtRecord(amount=None)))
 
     assert reporting.TAX_DEBT_UNKNOWN_LINE in text
     assert reporting.TAX_DEBT_NONE_LINE not in text

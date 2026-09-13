@@ -1506,6 +1506,7 @@ def test_shipped_example_map_describes_every_documented_method() -> None:
     from app.providers.fedresurs import NEWDB_METHOD as BANKRUPTCY_METHOD
     from app.providers.fns import NEWDB_METHOD as BUSINESS_METHOD
     from app.providers.pledge import PERSON_METHOD, VIN_METHOD
+    from app.providers.self_employed import NEWDB_METHOD as SELF_EMPLOYED_METHOD
     from app.providers.tax_debt import NEWDB_METHOD as TAX_METHOD
     from app.providers.wanted import NEWDB_METHOD as WANTED_METHOD
 
@@ -1520,6 +1521,7 @@ def test_shipped_example_map_describes_every_documented_method() -> None:
         WANTED_METHOD,
         BLOCK_METHOD,
         TAX_METHOD,
+        SELF_EMPLOYED_METHOD,
     }
     # egrul_ip появился 05.09.2026, когда его строки увидели живьём. Раньше его
     # здесь не было намеренно — архивная документация показывала только пустой
