@@ -296,6 +296,36 @@ class VehicleRecord(SourcedFact):
     restrictions: tuple[str, ...] = Field(default_factory=tuple)
 
 
+class WantedRecord(SourcedFact):
+    """Запись розыска МВД.
+
+    Самая тяжёлая запись в отчёте по последствиям и самая лёгкая по составу.
+    Человек в розыске — это не «сложный должник», это «иск подавать некуда»:
+    повестку вручать некому, а исполнительное производство упрётся в то же
+    самое. Узнать об этом надо ДО пошлины, а не после.
+
+    ``birth_date_match`` приходит от источника, а не считается нами, и в этом
+    вся ценность поля: МВД ищет по строке ФИО, и полный тёзка попадает в выдачу
+    наравне с должником. Источник сам говорит, совпала ли дата рождения, —
+    запись без совпадения по дате остаётся в отчёте, но фактом о должнике не
+    становится (:mod:`app.services.identity`).
+    """
+
+    kind: Literal["wanted"] = "wanted"
+    provider: ProviderName = ProviderName.WANTED
+
+    full_name: str | None = None
+    birth_date: date | None = None
+    # Совпадение даты рождения по мнению ИСТОЧНИКА. ``None`` — источник не
+    # сказал, и это не то же самое, что «не совпала».
+    birth_date_match: bool | None = None
+    # Регион розыска и статья — то, что отличает «разыскивается по подозрению»
+    # от «пропал без вести»: последствия для взыскания у них разные.
+    region: str | None = None
+    reason: str | None = None
+    details: str | None = None
+
+
 class PropertyRecord(SourcedFact):
     """Объект недвижимости по известному нам адресу или кадастровому номеру.
 
@@ -470,7 +500,8 @@ FactRecord = Annotated[
     | PledgeRecord
     | VehicleRecord
     | PropertyRecord
-    | InheritanceCase,
+    | InheritanceCase
+    | WantedRecord,
     Field(discriminator="kind"),
 ]
 
@@ -574,6 +605,7 @@ class DebtorReport(BaseModel):
     inheritance_cases: list[InheritanceCase] = Field(default_factory=list)
     vehicles: list[VehicleRecord] = Field(default_factory=list)
     properties: list[PropertyRecord] = Field(default_factory=list)
+    wanted: list[WantedRecord] = Field(default_factory=list)
     provider_results: list[ProviderResult] = Field(default_factory=list)
     recovery_score: RecoveryScore | None = None
     from_cache: bool = False

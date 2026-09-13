@@ -34,6 +34,7 @@ from app.providers.phone_bridge import PhoneNameProvider, build_phone_bridge
 from app.providers.pledge import NewDBPledgeProvider
 from app.providers.property import NewDBPropertyProvider
 from app.providers.vehicle import UnconfiguredVehicleProvider
+from app.providers.wanted import NewDBWantedProvider
 
 logger = get_logger(__name__)
 
@@ -194,6 +195,11 @@ def build_external_providers(
         # act on ("опишите метод в NEWDB_FIELD_MAP").
         providers.append(NewDBPledgeProvider(settings, field_maps))
         providers.append(NewDBArbitrationProvider(settings, field_maps))
+        # Розыск МВД. Стоит рядом с остальными картовыми методами и по тому же
+        # правилу: не описан в карте — отвечает NOT_CONFIGURED. Ищет по ФИО и
+        # дате рождения, то есть добирается до тех должников, у которых нет ни
+        # ИНН, ни паспорта, — а таких в выгрузке большинство.
+        providers.append(NewDBWantedProvider(settings, field_maps))
         # Разбираются кодом по живому ответу, поэтому гейт у них — настройка, а
         # не запись в карте. Выключенные, они отвечают NOT_CONFIGURED и говорят,
         # какой именно флаг это включает.

@@ -166,10 +166,23 @@ def scrub_passport(text: str, *, seria: str, number: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class NewDBResponse:
-    """Rows from one or more calls of the same method, plus the raw bodies."""
+    """Rows from one or more calls of the same method, plus the raw bodies.
+
+    ``results`` — узлы ``results.<method>.result`` целиком, по одному на вызов.
+    Нужны там, где ответ метода держит ПРИЗНАКИ РЯДОМ с ``data``, а не внутри
+    неё, и признаки эти меняют смысл пустого списка.
+
+    Живой пример, ради которого поле и появилось: ``mvd_wanted`` отвечает
+    ``captcha_error``, ``found`` и ``total_found`` на уровне результата. Капча,
+    не взятая источником, приходит как ``data: []`` при ``captcha_error: true`` —
+    то есть как «в розыске не значится» для любого, кто читает только строки.
+    Хуже инверсии в этом продукте нет: «не проверено» становится «чисто» ровно в
+    том разделе, где чисто значит «можно подавать».
+    """
 
     rows: list[Any]
     raw: str
+    results: list[Any] = field(default_factory=list)
 
 
 class NewDBClient:
@@ -207,6 +220,7 @@ class NewDBClient:
         )
         rows: list[Any] = []
         raw_bodies: list[str] = []
+        result_nodes: list[Any] = []
 
         async with build_client(
             base_url=self._settings.newdb_base_url,
@@ -216,9 +230,11 @@ class NewDBClient:
             for params in param_sets:
                 envelope, raw = await self._run(client, method, params, retry)
                 raw_bodies.append(raw)
-                rows.extend(_extract_rows(envelope, _section_of(envelope, method, result_section)))
+                section = _section_of(envelope, method, result_section)
+                result_nodes.append(_result_node(envelope, section))
+                rows.extend(_extract_rows(envelope, section))
 
-        return NewDBResponse(rows=rows, raw="\n".join(raw_bodies))
+        return NewDBResponse(rows=rows, raw="\n".join(raw_bodies), results=result_nodes)
 
     # ------------------------------------------------------------ envelope
 
@@ -934,6 +950,14 @@ class NewDBMethodProvider(BaseProvider):
         response = await self._client.call(method, *param_sets)
         return response.rows, response.raw
 
+    async def answer_for(self, method: str, *param_sets: Mapping[str, Any]) -> NewDBResponse:
+        """Ответ целиком — строки, тело и узлы ``result``.
+
+        Для методов, у которых признаки лежат РЯДОМ с ``data`` и меняют смысл
+        пустого списка: см. :class:`NewDBResponse`.
+        """
+        return await self._client.call(method, *param_sets)
+
     async def rows_for(
         self, method: str, *param_sets: Mapping[str, Any]
     ) -> tuple[list[RecordDict], str]:
@@ -945,6 +969,17 @@ class NewDBMethodProvider(BaseProvider):
         mapped, raw = await self.mapped_for(method, *param_sets)
         return mapped.records, raw
 
+    async def mapped_answer_for(
+        self, method: str, *param_sets: Mapping[str, Any]
+    ) -> tuple[MappedRows, NewDBResponse]:
+        """То же, что :meth:`mapped_for`, но с ответом целиком.
+
+        Нужен методам, у которых признаки лежат рядом с ``data`` и меняют смысл
+        пустого списка — см. :class:`NewDBResponse`.
+        """
+        mapped, response = await self._mapped(method, *param_sets)
+        return mapped, response
+
     async def mapped_for(
         self, method: str, *param_sets: Mapping[str, Any]
     ) -> tuple[MappedRows, str]:
@@ -954,6 +989,12 @@ class NewDBMethodProvider(BaseProvider):
         it exists precisely for a deployment whose contract wants something
         different from what this code would send.
         """
+        mapped, response = await self._mapped(method, *param_sets)
+        return mapped, response.raw
+
+    async def _mapped(
+        self, method: str, *param_sets: Mapping[str, Any]
+    ) -> tuple[MappedRows, NewDBResponse]:
         mapping = self._field_maps.require(method)
         merged = [{**params, **mapping.extra_params} for params in param_sets]
         response = await self._client.call(method, *merged)
@@ -987,7 +1028,7 @@ class NewDBMethodProvider(BaseProvider):
                 f"Карта полей не разобрала {mapped.unreadable} из "
                 f"{mapped.unreadable + len(mapped.records)} записей ответа NewDB ({method})",
             )
-        return mapped, response.raw
+        return mapped, response
 
     def option(self, method: str, key: str, default: str) -> str:
         """Настройка разбора из карты полей — та, что не является путём к полю.

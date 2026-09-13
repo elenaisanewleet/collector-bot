@@ -43,6 +43,7 @@ from app.domain.scoring import (
     CONFIRMED_PROBATE_CASE_PENALTY,
     CONFIRMED_PROPERTY_BONUS,
     CONFIRMED_VEHICLE_BONUS,
+    CONFIRMED_WANTED_PENALTY,
     ENFORCEMENT_AMOUNT_PENALTIES,
     ENFORCEMENT_COUNT_PENALTIES,
     MAX_BUSINESS_BONUS,
@@ -77,6 +78,7 @@ class RecoveryScoreEngine:
         factors.extend(_pledge_factors(report))
         factors.extend(_court_factors(report))
         factors.extend(_inheritance_factors(report))
+        factors.extend(_wanted_factors(report))
         factors.extend(_asset_factors(report))
 
         total = BASE_SCORE + sum(factor.delta for factor in factors)
@@ -471,6 +473,41 @@ def _court_factors(report: DebtorReport) -> list[ScoreFactor]:
 
 
 # ---------------------------------------------------------------- наследство
+
+
+def _wanted_factors(report: DebtorReport) -> list[ScoreFactor]:
+    """Розыск МВД: подтверждённое совпадение — минус, всё остальное — ноль.
+
+    Гейт ``is_confirmed``, по той же причине, что у наследственных дел: МВД
+    ищет по строке имени и возвращает полных тёзок. Разница в том, что здесь
+    источник сам говорит, совпала ли дата рождения (``birth_date_match``), и
+    отождествление читает это поле, а не гадает.
+
+    Плюса за пустой ответ нет. «В розыске не значится» — это общее место: оно
+    верно почти для всех и не говорит о платёжеспособности ничего.
+    """
+    result = report.result_for(ProviderName.WANTED)
+    if result is None or not result.is_answered:
+        # Не проверено — ни плюса, ни минуса; причина уйдёт в «Ограничения
+        # оценки». Молчание этого источника особенно дорого: оно значит «может
+        # быть в розыске», а не «не в розыске».
+        return []
+
+    confirmed = [item for item in report.wanted if item.is_confirmed]
+    if not confirmed:
+        return []
+
+    record = confirmed[0]
+    reason = f": {record.reason}" if record.reason else ""
+    region = f", {record.region}" if record.region else ""
+    return [
+        ScoreFactor(
+            name="wanted_by_police",
+            delta=CONFIRMED_WANTED_PENALTY,
+            reason=f"Должник в розыске МВД{reason}{region}",
+            source=ProviderName.WANTED,
+        )
+    ]
 
 
 def _inheritance_factors(report: DebtorReport) -> list[ScoreFactor]:

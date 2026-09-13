@@ -40,6 +40,7 @@ from app.domain.models import (
     PropertyRecord,
     ProviderResult,
     RecoveryScore,
+    WantedRecord,
 )
 from app.utils.dates import format_date, format_datetime
 from app.utils.formatting import format_phone, percent, pluralize_ru, signed, truncate
@@ -63,6 +64,10 @@ PLEDGE_SCOPE_NOTE = (
 COURT_SCOPE_NOTE = "Суды общей юрисдикции этот источник не покрывает."
 MAX_LISTED_PROPERTIES = 3
 MAX_LISTED_INHERITANCE = 5
+#: Розыск не бывает длинным списком: у реального должника одна запись, у
+#: однофамильцев — несколько. Три строки покрывают оба случая, а всё, что
+#: длиннее, значит «мы поймали тёзок», и перечислять их подробно незачем.
+MAX_LISTED_WANTED = 3
 # Границы реестра наследственных дел, обе обязательны и обе печатаются в каждой
 # ветке раздела.
 #
@@ -356,6 +361,11 @@ def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
             f"Последняя проверка: {format_datetime(report.cached_at)}"
         )
     blocks.append(_internal_block(report))
+    # Розыск — до всего остального, и это не вопрос важности источника, а
+    # вопрос порядка чтения. Человек в розыске отменяет смысл всех разделов
+    # ниже: повестку вручать некому. Читающий должен наткнуться на это раньше,
+    # чем начнёт складывать суммы.
+    blocks.append(_wanted_block(report))
     blocks.append(_enforcement_block(report))
     blocks.append(_bankruptcy_block(report))
     blocks.append(_business_block(report))
@@ -735,6 +745,67 @@ def _pledge_lines(item: PledgeRecord) -> list[str]:
     if item.registered_at:
         lines.append(f"  Зарегистрирован: {format_date(item.registered_at)}")
     lines.append(f"  {_match_note(item.match_level)}")
+    return lines
+
+
+def _wanted_block(report: DebtorReport) -> str:
+    """Розыск МВД.
+
+    Раздел печатается только тогда, когда есть что сказать, и это исключение из
+    общего правила отчёта. Остальные разделы стоят всегда — «проверено, ничего
+    не найдено» такой же ответ, как находка. Здесь пустой раздел под каждым
+    должником был бы строкой «в розыске не значится» в девяноста девяти случаях
+    из ста, то есть шумом, за которым потеряется сотый.
+
+    Молчание источника — другое дело: оно печатается ВСЕГДА. «Не проверено» в
+    этом разделе значит «может быть в розыске, мы не смотрели», и прятать это
+    нельзя ни при какой частоте.
+    """
+    result = report.result_for(ProviderName.WANTED)
+    if result is None:
+        return ""
+    header = "РОЗЫСК МВД"
+    unanswered = unanswered_line(result)
+    if unanswered:
+        return "\n".join([header, unanswered])
+
+    usable = [item for item in report.wanted if item.is_usable]
+    if not usable:
+        # Пусто и проверено — раздела нет вовсе. Ответ источника при этом не
+        # теряется: он стоит в блоке ИСТОЧНИКИ, где его и ищут, когда нужно
+        # убедиться, что смотрели.
+        return ""
+
+    lines = [header]
+    confirmed = [item for item in usable if item.is_confirmed]
+    if confirmed:
+        lines.append(
+            "Должник в розыске. Подавать иск обычно бессмысленно: повестку "
+            "вручать некому, и производство упрётся в то же самое."
+        )
+    else:
+        lines.append(
+            "В розыске значится однофамилец: дата рождения не совпала или "
+            "источник её не подтвердил. Это не должник, но проверить стоит."
+        )
+    for item in usable[:MAX_LISTED_WANTED]:
+        lines.extend(_wanted_lines(item))
+    hidden = len(usable) - MAX_LISTED_WANTED
+    if hidden > 0:
+        lines.append(f"…и ещё {hidden}")
+    lines.extend(_source_notes(result))
+    lines.append(_checked_at(result))
+    return "\n".join(lines)
+
+
+def _wanted_lines(item: WantedRecord) -> list[str]:
+    lines = [f"• {truncate(item.full_name or 'имя не указано', 90)}"]
+    if item.birth_date:
+        lines.append(f"  Дата рождения: {format_date(item.birth_date)}")
+    if item.reason:
+        lines.append(f"  Основание: {truncate(item.reason, 90)}")
+    if item.region:
+        lines.append(f"  Регион розыска: {truncate(item.region, 90)}")
     return lines
 
 

@@ -83,7 +83,6 @@
     "Each enabled method is a paid call per debtor. On a run of eight hundred",
     "that is eight hundred calls per method, so enable what you will read."
   ],
-
   "_bankrot_person": [
     "Источник: fedresurs_bankrot (страница названа так, метод зовётся иначе).",
     "Строка data — это объект-персона, дела лежат в её массиве 'bankruptcy'.",
@@ -146,7 +145,6 @@
       "source_url": "case_url"
     }
   },
-
   "_egrul_ip": [
     "Метод отдаёт НЕ ТОЛЬКО ИП, вопреки собственному имени и архивной",
     "документации. Живой ответ по одному ИНН вернул три строки: регистрацию ИП",
@@ -227,7 +225,6 @@
       }
     }
   },
-
   "_arbitr_person": [
     "Строка data — НЕ дело, а обёртка на запрос: {query, query_inn, found,",
     "total_count, pagination, message, cases[], detailed_cases[]}. Раньше здесь",
@@ -322,7 +319,6 @@
       }
     }
   },
-
   "_pledge_person": [
     "Строка data — контейнер на субъекта, и в нём ТРИ носителя факта, а не",
     "один: уведомления ФНП в массиве 'fnp', сообщения Федресурса (лизинг,",
@@ -396,7 +392,6 @@
       }
     }
   },
-
   "_pledge_vin": [
     "Тот же контейнер и та же строка ФНП, что у pledge_person, но по одной",
     "машине. Дополнительно к списку выше здесь нет и pledgor_birth_date: этот",
@@ -429,6 +424,18 @@
       "status": {
         "возникновение залога": "действует"
       }
+    }
+  },
+  "mvd_wanted": {
+    "_note": "Розыск МВД по ФИО и дате рождения. Строки data — сами записи розыска, вложенного массива нет. Ключи взяты из примера ответа в OpenAPI-документе поставщика (newdb.net/swagger.json, раздел mvd_wanted) и живьём ещё не сверены: первый прогон стоит делать со STORE_RAW_RESPONSES=true. captcha_error, found и total_found лежат РЯДОМ с data, картой полей недостижимы и читаются кодом — см. app/providers/wanted.py.",
+    "fields": {
+      "full_name": "full_name",
+      "birth_date": "birth_date",
+      "birth_date_match": "birth_date_match",
+      "region": "wanted_region",
+      "reason": "wanted_reason",
+      "details": "details",
+      "source": "source"
     }
   }
 }

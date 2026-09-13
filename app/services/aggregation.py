@@ -25,6 +25,7 @@ from app.domain.models import (
     ProviderResult,
     SourcedFact,
     VehicleRecord,
+    WantedRecord,
 )
 from app.services.identity import IdentityMatcher
 
@@ -76,6 +77,8 @@ def _dispatch(report: DebtorReport, record: SourcedFact) -> None:
         report.vehicles.append(record)
     elif isinstance(record, PropertyRecord):
         report.properties.append(record)
+    elif isinstance(record, WantedRecord):
+        report.wanted.append(record)
     elif isinstance(record, InternalDebtorRecord):
         report.internal_records.append(record)
 

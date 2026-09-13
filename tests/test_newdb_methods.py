@@ -1505,6 +1505,7 @@ def test_shipped_example_map_describes_every_documented_method() -> None:
     from app.providers.fedresurs import NEWDB_METHOD as BANKRUPTCY_METHOD
     from app.providers.fns import NEWDB_METHOD as BUSINESS_METHOD
     from app.providers.pledge import PERSON_METHOD, VIN_METHOD
+    from app.providers.wanted import NEWDB_METHOD as WANTED_METHOD
 
     example = NewDBFieldMaps.load(Path("config/field_maps/example_newdb.json"))
 
@@ -1514,6 +1515,7 @@ def test_shipped_example_map_describes_every_documented_method() -> None:
         BUSINESS_METHOD,
         PERSON_METHOD,
         VIN_METHOD,
+        WANTED_METHOD,
     }
     # egrul_ip появился 05.09.2026, когда его строки увидели живьём. Раньше его
     # здесь не было намеренно — архивная документация показывала только пустой

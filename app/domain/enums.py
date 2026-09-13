@@ -74,6 +74,10 @@ class ProviderName(StrEnum):
     # им имя — ключ поиска, а не установленный факт.
     PHONE_BRIDGE = "phone_bridge"
     NAME_BRIDGE = "name_bridge"
+    # Розыск МВД. Ищет по ФИО и дате рождения, то есть работает по КАЖДОМУ
+    # должнику выгрузки — в отличие от банкротства, ИП и арбитража, которым
+    # нужен ИНН, а его в выгрузке нет ни у кого.
+    WANTED = "wanted"
 
 
 PROVIDER_TITLES: dict[ProviderName, str] = {
@@ -90,6 +94,7 @@ PROVIDER_TITLES: dict[ProviderName, str] = {
     ProviderName.PROPERTY: "Объект по адресу (ЕГРН)",
     ProviderName.PLEDGE: "Залоги",
     ProviderName.INHERITANCE: "Наследственные дела",
+    ProviderName.WANTED: "Розыск МВД",
     ProviderName.INN_BRIDGE: "ИНН по паспорту (ФНС)",
     ProviderName.PHONE_BRIDGE: "ФИО по телефону",
     ProviderName.NAME_BRIDGE: "Паспорт по ФИО и дате рождения",
