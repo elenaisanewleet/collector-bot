@@ -296,6 +296,30 @@ class VehicleRecord(SourcedFact):
     restrictions: tuple[str, ...] = Field(default_factory=tuple)
 
 
+class TaxDebtRecord(SourcedFact):
+    """Задолженность перед налоговой — одной суммой.
+
+    Это не «ещё один долг должника», а ещё один ВЗЫСКАТЕЛЬ, и в этом вся разница
+    для перспективы. Налоговая взыскивает бесспорно: ей не нужно ни решение суда,
+    ни исполнительный лист — она списывает со счёта и обращается к приставу
+    напрямую. То есть в очереди она стоит впереди нашего заказчика независимо от
+    того, кто первым обратился.
+
+    ``amount`` — сумма, которую назвал источник. Ноль здесь ЗНАЧАЩЕЕ значение:
+    «проверено, долгов нет», и это не то же самое, что ``None`` — «источник
+    суммы не назвал». Первое улучшает картину, второе не говорит ничего.
+    """
+
+    kind: Literal["tax_debt"] = "tax_debt"
+    provider: ProviderName = ProviderName.TAX_DEBT
+
+    amount: Decimal | None = None
+    # Сколько отдельных позиций за этой суммой. Источник документирует их
+    # массивом, форма которого в спецификации не описана, поэтому здесь только
+    # счётчик: показывать разбор, которого мы не читали, нельзя.
+    items_count: int | None = None
+
+
 class AccountBlockRecord(SourcedFact):
     """Решение ФНС о приостановлении операций по счёту.
 
@@ -531,7 +555,8 @@ FactRecord = Annotated[
     | PropertyRecord
     | InheritanceCase
     | WantedRecord
-    | AccountBlockRecord,
+    | AccountBlockRecord
+    | TaxDebtRecord,
     Field(discriminator="kind"),
 ]
 
@@ -637,6 +662,7 @@ class DebtorReport(BaseModel):
     properties: list[PropertyRecord] = Field(default_factory=list)
     wanted: list[WantedRecord] = Field(default_factory=list)
     account_blocks: list[AccountBlockRecord] = Field(default_factory=list)
+    tax_debts: list[TaxDebtRecord] = Field(default_factory=list)
     provider_results: list[ProviderResult] = Field(default_factory=list)
     recovery_score: RecoveryScore | None = None
     from_cache: bool = False

@@ -81,6 +81,9 @@ class ProviderName(StrEnum):
     # Решения ФНС о приостановлении операций по счетам. Остатков не показывает —
     # это банковская тайна, — но называет БАНК, и приставу нужен именно он.
     ACCOUNT_BLOCK = "account_block"
+    # Задолженность перед налоговой. Не «ещё один долг», а ещё один ВЗЫСКАТЕЛЬ,
+    # причём взыскивающий бесспорно и без суда.
+    TAX_DEBT = "tax_debt"
 
 
 PROVIDER_TITLES: dict[ProviderName, str] = {
@@ -102,6 +105,7 @@ PROVIDER_TITLES: dict[ProviderName, str] = {
     # подпись «✓ Счета в банках — 2 зап.» прочиталась бы как «нашли счета
     # должника» — обещание шире того, что источник делает.
     ProviderName.ACCOUNT_BLOCK: "Блокировки счетов (ФНС)",
+    ProviderName.TAX_DEBT: "Налоговая задолженность",
     ProviderName.INN_BRIDGE: "ИНН по паспорту (ФНС)",
     ProviderName.PHONE_BRIDGE: "ФИО по телефону",
     ProviderName.NAME_BRIDGE: "Паспорт по ФИО и дате рождения",

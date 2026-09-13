@@ -43,6 +43,7 @@ from app.domain.models import (
     RecoveryScore,
     WantedRecord,
 )
+from app.providers.tax_debt import total_debt as total_tax_debt
 from app.utils.dates import format_date, format_datetime
 from app.utils.formatting import format_phone, percent, pluralize_ru, signed, truncate
 from app.utils.money import format_amount
@@ -153,6 +154,17 @@ BANK_NO_SOURCE_LINE = (
 #: Проверено и блокировок нет. Строка нужна ровно потому, что раздел начинается
 #: с отказа: без неё читающий не отличит «ФНС счета не блокировала» от «мы и это
 #: не смотрели», а весь смысл раздела в том, чтобы эти два случая различать.
+#: Почему налоговый долг весит больше своей суммы. Формулировка объясняет
+#: механизм, а не пугает: бесспорное взыскание — это конкретное полномочие, и
+#: взыскателю важно знать именно его, а не то, что «долгов много».
+TAX_DEBT_PRIORITY_NOTE = (
+    "Налоговая взыскивает бесспорно — без суда и исполнительного листа, —\n"
+    "то есть окажется впереди независимо от того, кто обратился первым."
+)
+TAX_DEBT_NONE_LINE = "Задолженности перед налоговой не найдено."
+#: Источник ответил, но суммы не назвал. Отличать это от нуля обязательно: ноль
+#: — утверждение в пользу должника, молчание о сумме утверждением не является.
+TAX_DEBT_UNKNOWN_LINE = "Источник ответил, но суммы задолженности не назвал."
 BANK_NO_BLOCKS_LINE = "Решений ФНС о приостановлении операций по счетам не найдено."
 BANK_ACCESS_LINE = (
     "Их получают двумя путями: ходатайством об истребовании доказательств в суде\n"
@@ -376,6 +388,7 @@ def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
     # чем начнёт складывать суммы.
     blocks.append(_wanted_block(report))
     blocks.append(_enforcement_block(report))
+    blocks.append(_tax_debt_block(report))
     blocks.append(_bankruptcy_block(report))
     blocks.append(_business_block(report))
     blocks.append(_pledge_block(report))
@@ -755,6 +768,45 @@ def _pledge_lines(item: PledgeRecord) -> list[str]:
         lines.append(f"  Зарегистрирован: {format_date(item.registered_at)}")
     lines.append(f"  {_match_note(item.match_level)}")
     return lines
+
+
+def _tax_debt_block(report: DebtorReport) -> str:
+    """Налоговая задолженность.
+
+    Раздел стоит сразу за исполнительными производствами, потому что отвечает на
+    соседний вопрос: кто ещё стоит в очереди на те же деньги. И ответ этот
+    тяжелее, чем кажется на сумму: налоговая взыскивает БЕССПОРНО — без суда, без
+    исполнительного листа, списанием со счёта, — то есть окажется впереди
+    независимо от того, кто первым обратился.
+
+    Ноль печатается словами и печатается всегда, когда источник ответил. «Долгов
+    перед налоговой нет» — полноценная хорошая новость для взыскателя, и молча
+    пропустить её значило бы отдать читателю пустое место вместо ответа.
+    """
+    result = report.result_for(ProviderName.TAX_DEBT)
+    if result is None:
+        return ""
+    header = "НАЛОГОВАЯ ЗАДОЛЖЕННОСТЬ"
+    unanswered = unanswered_line(result)
+    if unanswered:
+        return "\n".join([header, unanswered])
+
+    total = total_tax_debt([item for item in report.tax_debts if item.is_usable])
+    if total is None:
+        # Источник ответил, но суммы не назвал. Это не ноль: ноль — утверждение,
+        # а молчание о сумме утверждением не является.
+        return _empty_block(header, result, TAX_DEBT_UNKNOWN_LINE, found=0, noun="запись")
+    if not total:
+        return "\n".join([header, TAX_DEBT_NONE_LINE, _checked_at(result)])
+
+    lines = [
+        header,
+        f"Долг перед налоговой: {format_amount(total)}",
+        TAX_DEBT_PRIORITY_NOTE,
+    ]
+    lines.extend(_source_notes(result))
+    lines.append(_checked_at(result))
+    return "\n".join(lines)
 
 
 def _wanted_block(report: DebtorReport) -> str:

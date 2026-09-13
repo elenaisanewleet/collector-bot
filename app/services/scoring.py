@@ -58,8 +58,10 @@ from app.domain.scoring import (
     NO_COURT_CLAIMS_BONUS,
     NO_ENFORCEMENT_BONUS,
     NO_PLEDGE_BONUS,
+    NO_TAX_DEBT_BONUS,
     PROBABLE_MATCH_CONFIDENCE_FACTOR,
     PROVIDER_CONFIDENCE_WEIGHTS,
+    TAX_DEBT_PENALTIES,
     TERMINATED_BUSINESS_PENALTY,
     UNKNOWN_BANKRUPTCY_STATE_PENALTY,
     WEAK_IDENTITY_CONFIDENCE_FACTOR,
@@ -67,7 +69,9 @@ from app.domain.scoring import (
     categorize,
     clamp,
 )
+from app.providers.tax_debt import total_debt as total_tax_debt
 from app.utils.formatting import pluralize_ru
+from app.utils.money import format_amount
 
 
 class RecoveryScoreEngine:
@@ -83,6 +87,7 @@ class RecoveryScoreEngine:
         factors.extend(_inheritance_factors(report))
         factors.extend(_wanted_factors(report))
         factors.extend(_account_block_factors(report))
+        factors.extend(_tax_debt_factors(report))
         factors.extend(_asset_factors(report))
 
         total = BASE_SCORE + sum(factor.delta for factor in factors)
@@ -477,6 +482,52 @@ def _court_factors(report: DebtorReport) -> list[ScoreFactor]:
 
 
 # ---------------------------------------------------------------- наследство
+
+
+def _tax_debt_factors(report: DebtorReport) -> list[ScoreFactor]:
+    """Налоговый долг: штраф по полосам, плюс за подтверждённый ноль.
+
+    Полосы те же, что у суммы исполнительных производств: вопрос один — сколько
+    денег уже обещано другим. Штраф чуть тяжелее за ту же сумму, потому что
+    налоговая не ждёт очереди: она взыскивает бесспорно и окажется впереди
+    независимо от того, кто обратился первым.
+
+    Ноль и молчание о сумме различаются. Ноль — утверждение в пользу должника, за
+    него положен плюс. Ответ без суммы утверждением не является, и за него не
+    начисляется ничего: иначе источник, промолчавший о сумме, платил бы должнику
+    премию за собственную неразговорчивость.
+    """
+    result = report.result_for(ProviderName.TAX_DEBT)
+    if result is None or not result.is_answered:
+        return []
+
+    total = total_tax_debt([item for item in report.tax_debts if item.is_usable])
+    if total is None:
+        return []
+    if not total:
+        return [
+            ScoreFactor(
+                name="no_tax_debt",
+                delta=NO_TAX_DEBT_BONUS,
+                reason="Задолженности перед налоговой не найдено",
+                source=ProviderName.TAX_DEBT,
+            )
+        ]
+
+    for threshold, delta in TAX_DEBT_PENALTIES:
+        if total >= threshold:
+            return [
+                ScoreFactor(
+                    name="tax_debt",
+                    delta=delta,
+                    reason=(
+                        f"Долг перед налоговой {format_amount(total)}: она взыскивает "
+                        f"бесспорно и окажется впереди"
+                    ),
+                    source=ProviderName.TAX_DEBT,
+                )
+            ]
+    return []
 
 
 def _account_block_factors(report: DebtorReport) -> list[ScoreFactor]:
