@@ -24,6 +24,7 @@ from app.domain.models import (
     PledgeRecord,
     PropertyRecord,
     ProviderResult,
+    SelfEmployedRecord,
     SourcedFact,
     TaxDebtRecord,
     VehicleRecord,
@@ -85,6 +86,8 @@ def _dispatch(report: DebtorReport, record: SourcedFact) -> None:
         report.account_blocks.append(record)
     elif isinstance(record, TaxDebtRecord):
         report.tax_debts.append(record)
+    elif isinstance(record, SelfEmployedRecord):
+        report.self_employment.append(record)
     elif isinstance(record, InternalDebtorRecord):
         report.internal_records.append(record)
 

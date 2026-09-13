@@ -45,6 +45,7 @@ from app.domain.models import (
     InternalDebtorRecord,
     LegalEntityCase,
     PledgeRecord,
+    SelfEmployedRecord,
     SourcedFact,
     TaxDebtRecord,
     VehicleRecord,
@@ -156,7 +157,7 @@ class IdentityMatcher:
     """Scores how strongly a record belongs to the search subject."""
 
     def assess(self, subject: SearchSubject, record: SourcedFact) -> MatchAssessment:
-        if isinstance(record, (AccountBlockRecord, TaxDebtRecord)):
+        if isinstance(record, (AccountBlockRecord, TaxDebtRecord, SelfEmployedRecord)):
             # Ни блокировка счёта, ни налоговый долг не несут имени и даты
             # рождения: в решении ФНС стоят банк, номер и дата, а в ответе про
             # долг — одна сумма. Сопоставлять нечего, и общий путь дал бы таким

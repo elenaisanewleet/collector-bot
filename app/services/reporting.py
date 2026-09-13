@@ -161,6 +161,13 @@ TAX_DEBT_PRIORITY_NOTE = (
     "Налоговая взыскивает бесспорно — без суда и исполнительного листа, —\n"
     "то есть окажется впереди независимо от того, кто обратился первым."
 )
+#: Подтверждённый статус самозанятого. Формулировка называет ПОСЛЕДСТВИЕ, а не
+#: факт: взыскателю важно не то, что должник самозанят, а то, что у него есть
+#: легальный доход, на который обращают взыскание.
+SELF_EMPLOYED_ACTIVE_LINE = (
+    "Должник — плательщик налога на профессиональный доход.\n"
+    "Это подтверждённый легальный доход, на который обращают взыскание."
+)
 TAX_DEBT_NONE_LINE = "Задолженности перед налоговой не найдено."
 #: Источник ответил, но суммы не назвал. Отличать это от нуля обязательно: ноль
 #: — утверждение в пользу должника, молчание о сумме утверждением не является.
@@ -391,6 +398,7 @@ def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
     blocks.append(_tax_debt_block(report))
     blocks.append(_bankruptcy_block(report))
     blocks.append(_business_block(report))
+    blocks.append(_self_employed_block(report))
     blocks.append(_pledge_block(report))
     blocks.append(_inheritance_block(report))
     blocks.append(_property_block(report))
@@ -768,6 +776,40 @@ def _pledge_lines(item: PledgeRecord) -> list[str]:
         lines.append(f"  Зарегистрирован: {format_date(item.registered_at)}")
     lines.append(f"  {_match_note(item.match_level)}")
     return lines
+
+
+def _self_employed_block(report: DebtorReport) -> str:
+    """Самозанятость.
+
+    Стоит рядом с бизнесом: оба раздела отвечают на вопрос «с чего он живёт», и
+    читают их вместе. Печатается только при подтверждённом статусе и при
+    молчании источника — пустой ответ раздела не порождает.
+
+    Это то же исключение, что у розыска, и по той же причине: «самозанятым не
+    является» верно для подавляющего большинства, и строка об этом под каждым
+    должником была бы шумом. Разница в знаке — там пустота хорошая новость, здесь
+    отсутствие находки, — но правило чтения одно: раздел появляется, когда есть
+    что сказать.
+    """
+    result = report.result_for(ProviderName.SELF_EMPLOYED)
+    if result is None:
+        return ""
+    header = "САМОЗАНЯТОСТЬ"
+    unanswered = unanswered_line(result)
+    if unanswered:
+        return "\n".join([header, unanswered])
+
+    active = [item for item in report.self_employment if item.is_usable and item.is_active is True]
+    if not active:
+        return ""
+
+    lines = [header, SELF_EMPLOYED_ACTIVE_LINE]
+    registered = next((item.registered_at for item in active if item.registered_at), None)
+    if registered:
+        lines.append(f"На учёте с {format_date(registered)}")
+    lines.extend(_source_notes(result))
+    lines.append(_checked_at(result))
+    return "\n".join(lines)
 
 
 def _tax_debt_block(report: DebtorReport) -> str:

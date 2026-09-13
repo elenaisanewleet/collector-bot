@@ -296,6 +296,26 @@ class VehicleRecord(SourcedFact):
     restrictions: tuple[str, ...] = Field(default_factory=tuple)
 
 
+class SelfEmployedRecord(SourcedFact):
+    """Статус плательщика налога на профессиональный доход.
+
+    Один из немногих источников в этом отчёте, который говорит, ЧТО у должника
+    ЕСТЬ, а не чего у него нет. Подтверждённый статус — это легальный доход, на
+    который обращают взыскание, и адрес, по которому пристав его найдёт.
+
+    ``is_active`` — ``None``, пока источник не сказал. Это не «не самозанятый»:
+    разница в том, начислять ли плюс, и выдумывать здесь нельзя.
+    """
+
+    kind: Literal["self_employed"] = "self_employed"
+    provider: ProviderName = ProviderName.SELF_EMPLOYED
+
+    is_active: bool | None = None
+    # Дата постановки на учёт, если источник её называет: недавний статус и
+    # многолетний — разные основания рассчитывать на доход.
+    registered_at: date | None = None
+
+
 class TaxDebtRecord(SourcedFact):
     """Задолженность перед налоговой — одной суммой.
 
@@ -556,7 +576,8 @@ FactRecord = Annotated[
     | InheritanceCase
     | WantedRecord
     | AccountBlockRecord
-    | TaxDebtRecord,
+    | TaxDebtRecord
+    | SelfEmployedRecord,
     Field(discriminator="kind"),
 ]
 
@@ -663,6 +684,7 @@ class DebtorReport(BaseModel):
     wanted: list[WantedRecord] = Field(default_factory=list)
     account_blocks: list[AccountBlockRecord] = Field(default_factory=list)
     tax_debts: list[TaxDebtRecord] = Field(default_factory=list)
+    self_employment: list[SelfEmployedRecord] = Field(default_factory=list)
     provider_results: list[ProviderResult] = Field(default_factory=list)
     recovery_score: RecoveryScore | None = None
     from_cache: bool = False

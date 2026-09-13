@@ -37,6 +37,7 @@ from app.domain.scoring import (
     ACTIVE_BANKRUPTCY_PENALTY,
     ACTIVE_LEGAL_ENTITY_ROLE_BONUS,
     ACTIVE_PLEDGE_PENALTY,
+    ACTIVE_SELF_EMPLOYED_BONUS,
     ACTIVE_SOLE_PROPRIETOR_BONUS,
     BASE_SCORE,
     CLAIM_AGAINST_DEBTOR_PENALTY,
@@ -88,6 +89,7 @@ class RecoveryScoreEngine:
         factors.extend(_wanted_factors(report))
         factors.extend(_account_block_factors(report))
         factors.extend(_tax_debt_factors(report))
+        factors.extend(_self_employed_factors(report))
         factors.extend(_asset_factors(report))
 
         total = BASE_SCORE + sum(factor.delta for factor in factors)
@@ -482,6 +484,30 @@ def _court_factors(report: DebtorReport) -> list[ScoreFactor]:
 
 
 # ---------------------------------------------------------------- наследство
+
+
+def _self_employed_factors(report: DebtorReport) -> list[ScoreFactor]:
+    """Подтверждённый статус самозанятого — плюс. Всё остальное — ноль.
+
+    Минуса за «не самозанятый» нет и быть не может: это верно для подавляющего
+    большинства людей и о платёжеспособности не говорит ничего. Источник умеет
+    подтверждать доход и не умеет опровергать его наличие.
+    """
+    result = report.result_for(ProviderName.SELF_EMPLOYED)
+    if result is None or not result.is_answered:
+        return []
+
+    active = [item for item in report.self_employment if item.is_usable and item.is_active is True]
+    if not active:
+        return []
+    return [
+        ScoreFactor(
+            name="self_employed",
+            delta=ACTIVE_SELF_EMPLOYED_BONUS,
+            reason="Должник — плательщик НПД: доход легален и на него обращают взыскание",
+            source=ProviderName.SELF_EMPLOYED,
+        )
+    ]
 
 
 def _tax_debt_factors(report: DebtorReport) -> list[ScoreFactor]:

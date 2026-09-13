@@ -84,6 +84,9 @@ class ProviderName(StrEnum):
     # Задолженность перед налоговой. Не «ещё один долг», а ещё один ВЗЫСКАТЕЛЬ,
     # причём взыскивающий бесспорно и без суда.
     TAX_DEBT = "tax_debt"
+    # Статус плательщика НПД. Подтверждённый источник дохода — редкий в этом
+    # отчёте случай, когда источник говорит, ЧТО у должника есть.
+    SELF_EMPLOYED = "self_employed"
 
 
 PROVIDER_TITLES: dict[ProviderName, str] = {
@@ -106,6 +109,7 @@ PROVIDER_TITLES: dict[ProviderName, str] = {
     # должника» — обещание шире того, что источник делает.
     ProviderName.ACCOUNT_BLOCK: "Блокировки счетов (ФНС)",
     ProviderName.TAX_DEBT: "Налоговая задолженность",
+    ProviderName.SELF_EMPLOYED: "Самозанятость (НПД)",
     ProviderName.INN_BRIDGE: "ИНН по паспорту (ФНС)",
     ProviderName.PHONE_BRIDGE: "ФИО по телефону",
     ProviderName.NAME_BRIDGE: "Паспорт по ФИО и дате рождения",
