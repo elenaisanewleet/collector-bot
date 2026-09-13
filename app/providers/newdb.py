@@ -1027,6 +1027,10 @@ class NewDBMethodProvider(BaseProvider):
                 "unexpected_schema",
                 f"Карта полей не разобрала {mapped.unreadable} из "
                 f"{mapped.unreadable + len(mapped.records)} записей ответа NewDB ({method})",
+                # Тело — вместе с отказом. Починить карту можно только по нему, а
+                # сообщение выше прямо зовёт её чинить; отправлять за этим к
+                # поставщику во второй раз значит платить за ответ дважды.
+                raw_response=response.raw,
             )
         return mapped, response
 

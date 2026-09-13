@@ -1530,3 +1530,41 @@ def test_shipped_example_map_describes_every_documented_method() -> None:
     # руководитель ЮЛ, показанный «иной связью», — это потеря смысла находки.
     assert entry.field_map.value_maps["role"]["upr"] == "руководитель"
     assert entry.field_map.value_maps["role"]["uchr"] == "учредитель"
+
+
+async def test_a_broken_map_keeps_the_body_it_broke_on(
+    newdb_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """Отказ по карте полей несёт тело ответа, а успех и так его нёс.
+
+    Это ровно тот случай, ради которого заведён STORE_RAW_RESPONSES: карта не
+    сошлась с живым ответом. До сих пор тело в этом случае ТЕРЯЛОСЬ — исключение
+    поднималось раньше, чем собирался результат, — и выходило наоборот:
+    разобравшийся ответ сохранялся целиком, а тот единственный, по которому
+    чинят карту, пропадал. Оператору при этом в отчёте написано «карта полей не
+    разобрала N записей», то есть его зовут чинить по телу, которого нет.
+
+    Снято с прода 13.09.2026: nalog_debt упал с unexpected_schema, и на запрос
+    сохранённого тела база ответила «сырой ответ не сохранён».
+    """
+    import httpx
+    import respx
+
+    from app.providers.fedresurs import NewDBBankruptcyProvider
+
+    settings = newdb_settings.model_copy(update={"store_raw_responses": True})
+    maps = NewDBFieldMaps.load(settings.newdb_field_map)
+
+    with respx.mock:
+        respx.post(BASE_URL + "/v2").mock(
+            return_value=httpx.Response(
+                200,
+                json=envelope("bankrot_person", data=[{"совсем": "не та форма"}]),
+            )
+        )
+        subject = person_subject.model_copy(update={"inn": "770912345601"})
+        result = await NewDBBankruptcyProvider(settings, maps).fetch(subject)
+
+    assert result.error_code == "unexpected_schema"
+    assert result.raw_response, "тело потеряно ровно там, где оно и нужно"
+    assert "не та форма" in result.raw_response

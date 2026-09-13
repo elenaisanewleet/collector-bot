@@ -46,14 +46,27 @@ NO_CONTEXT = FetchContext()
 
 
 class ProviderError(Exception):
-    """Internal-to-the-provider failure, translated into a status at the boundary."""
+    """Internal-to-the-provider failure, translated into a status at the boundary.
+
+    ``raw_response`` — тело ответа, если оно у поставщика уже было на руках,
+    когда разбор сломался. Нужно ровно в том случае, ради которого и заведён
+    ``STORE_RAW_RESPONSES``: карта полей не сошлась с живым ответом.
+
+    До сих пор тело в этом случае терялось. Успешный результат его нёс, а отказ
+    — нет, потому что исключение поднималось раньше, чем собирался
+    ``ProviderResult``. Выходило наоборот: ответ, который разобрался, сохранялся
+    целиком, а тот единственный, по которому чинят карту, пропадал. Оператору
+    при этом в отчёте написано «карта полей не разобрала N записей» — то есть его
+    зовут чинить по телу, которого нет.
+    """
 
     status: ProviderStatus = ProviderStatus.ERROR
 
-    def __init__(self, code: str, message: str = "") -> None:
+    def __init__(self, code: str, message: str = "", *, raw_response: str | None = None) -> None:
         super().__init__(message or code)
         self.code = code
         self.message = message or code
+        self.raw_response = raw_response
 
 
 class ProviderUnavailableError(ProviderError):
@@ -180,7 +193,13 @@ class BaseProvider(ABC):
                 status=exc.status.value,
                 error_code=exc.code,
             )
-            return self._result(exc.status, started, error_code=exc.code, error_message=exc.message)
+            return self._result(
+                exc.status,
+                started,
+                error_code=exc.code,
+                error_message=exc.message,
+                raw_response=self.raw_for(exc.raw_response) if exc.raw_response else None,
+            )
         except Exception as exc:
             # A provider bug must degrade one section of the report, not the run.
             logger.exception(
@@ -198,6 +217,15 @@ class BaseProvider(ABC):
             result.duration_ms = _elapsed_ms(started)
         return result
 
+    def raw_for(self, raw: str) -> str | None:
+        """Тело, которое можно сохранить, — или ``None``, если хранить нельзя.
+
+        База переопределяет это заглушкой: хранение сырых тел — свойство
+        транспорта, а не всякого провайдера. Тот, кто умеет (NewDB), заменяет
+        реализацию на свою с вычисткой чужих персональных данных.
+        """
+        return None
+
     def _result(
         self,
         status: ProviderStatus,
@@ -205,9 +233,11 @@ class BaseProvider(ABC):
         *,
         error_code: str | None = None,
         error_message: str | None = None,
+        raw_response: str | None = None,
     ) -> ProviderResult:
         return ProviderResult(
             provider=self.name,
+            raw_response=raw_response,
             status=status,
             error_code=error_code,
             error_message=error_message,
