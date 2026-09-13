@@ -24,10 +24,11 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import Settings
 from app.db.models import SearchResult
-from app.db.repository import AuditRepository, SearchRepository
+from app.db.repository import AuditRepository, DebtorRepository, SearchRepository
 from app.db.session import Database
 from app.domain.enums import ProviderName, ProviderStatus, SearchType
 from app.domain.identity import SearchSubject
@@ -190,6 +191,8 @@ class SearchService:
         )
         report.recovery_score = self._score_engine.evaluate(report)
 
+        await self._keep_identifiers(report, subject)
+
         request_id = await self._persist(
             report,
             telegram_user_id=telegram_user_id,
@@ -300,6 +303,48 @@ class SearchService:
             if value is not None and getattr(subject, field, None) in (None, ""):
                 update[field] = value
         return subject.model_copy(update=update), result
+
+    async def _keep_identifiers(self, report: DebtorReport, subject: SearchSubject) -> None:
+        """Записать должнику то, что мосты добыли за деньги.
+
+        ИНН физлица стоит цепочки из двух платных вызовов: ФИО и дата рождения
+        дают паспорт, паспорт даёт ИНН. До сих пор найденное нигде не оседало —
+        проверка того же человека завтра платила за ту же цепочку заново, а
+        карточка показывала «ИНН: —» под тем, чей ИНН уже напечатан в отчёте.
+
+        Пишется только должнику ИЗ НАШЕЙ ВЫГРУЗКИ и только в пустые поля:
+        найденное слабее того, что заказчик завёл сам. Человеку, которого в
+        выгрузке нет, дописывать некуда — он живёт в журнале проверок по номеру.
+
+        Паспорт — под общим флагом хранения документов, как везде. ИНН без
+        флага: он в этой базе не маскируется и не хэшируется вовсе, потому что
+        по нему ищут банкротство, ИП и арбитраж, а маскированный для этого
+        бесполезен.
+
+        Падение записи не роняет отчёт: человек ждёт результат проверки, а не
+        обновление справочника.
+        """
+        record = report.internal_record
+        if record is None or not record.debtor_id:
+            return
+        passport = subject.passport if self._settings.store_sensitive_identifiers else None
+        if not subject.inn and not passport:
+            return
+        try:
+            async with self._database.session() as session:
+                changed = await DebtorRepository(session).enrich_identifiers(
+                    record.debtor_id, inn=subject.inn, passport=passport
+                )
+        except SQLAlchemyError:
+            logger.warning("debtor.enrich_failed", debtor_id=record.debtor_id)
+            return
+        if changed:
+            # Числами, без значений: строка живёт в логе дольше, чем отчёт.
+            logger.info(
+                "debtor.enriched",
+                has_inn=bool(subject.inn),
+                has_passport=bool(passport),
+            )
 
     async def _resolve_passport(
         self, subject: SearchSubject

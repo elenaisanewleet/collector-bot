@@ -34,6 +34,7 @@ from app.domain.identity import normalize_phone
 from app.domain.models import InternalDebtorRecord, ProviderResult, RecoveryScore
 from app.utils.dates import utcnow
 from app.utils.hashing import normalize_token, stable_hash
+from app.utils.masking import mask_passport
 
 HISTORY_PAGE_SIZE = 10
 
@@ -186,6 +187,41 @@ class DebtorRepository:
         return await self._all(
             select(Debtor).order_by(Debtor.fio_normalized.asc(), Debtor.id.asc()).limit(limit)
         )
+
+    async def enrich_identifiers(
+        self, debtor_id: str, *, inn: str | None = None, passport: str | None = None
+    ) -> bool:
+        """Дописать должнику найденные идентификаторы. Только в ПУСТОЕ.
+
+        Зачем это вообще. ИНН физлица добывается цепочкой платных мостов — ФИО и
+        дата рождения дают паспорт, паспорт даёт ИНН, — и до сих пор найденное
+        нигде не оседало. Проверка того же человека завтра платила за ту же
+        цепочку заново, карточка показывала «ИНН: —» под человеком, чей ИНН уже
+        напечатан в отчёте, а справочник не становился полнее ни на одну строку.
+
+        Только в пустое, и это то же правило, что у мостов: выгрузка заказчика
+        сильнее найденного. Совпавшее значение не переписывается тоже — незачем
+        трогать строку ради того же самого.
+
+        Возвращает, изменилось ли что-нибудь: вызывающему это нужно для лога, а
+        молчаливая запись «ничего не поменяли» неотличима от «записали».
+        """
+        rows = await self.find_by_external_id(debtor_id)
+        if not rows:
+            return False
+        debtor = rows[0]
+        changed = False
+        if inn and not debtor.inn:
+            debtor.inn = inn
+            changed = True
+        if passport and not debtor.passport:
+            debtor.passport = passport
+            debtor.passport_masked = debtor.passport_masked or mask_passport(passport)
+            changed = True
+        if changed:
+            debtor.updated_at = utcnow()
+            await self._session.flush()
+        return changed
 
     async def find_by_phone_hash(self, phone_hash: str) -> list[Debtor]:
         return await self._all(select(Debtor).where(Debtor.phone_hash == phone_hash))
