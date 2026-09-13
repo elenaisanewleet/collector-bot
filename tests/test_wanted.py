@@ -22,7 +22,7 @@ from app.domain.enums import ProviderName, ProviderStatus, SearchType
 from app.domain.identity import PersonName, SearchSubject
 from app.domain.models import WantedRecord
 from app.providers.newdb import NewDBFieldMaps
-from app.providers.wanted import NEWDB_METHOD, NewDBWantedProvider
+from app.providers.wanted import NEWDB_METHOD, NewDBWantedProvider, _params_for
 
 BASE_URL = "https://newdb.example.test"
 NEWDB_URL = f"{BASE_URL}/v2"
@@ -77,6 +77,7 @@ def settings(live_settings: Settings) -> Settings:
             "newdb_poll_attempts": 2,
             "newdb_poll_interval_seconds": 0.01,
             "provider_max_retries": 0,
+            "newdb_wanted_email": "owner@example.test",
         }
     )
 
@@ -201,3 +202,54 @@ def test_the_shipped_map_describes_the_fields_the_code_reads() -> None:
         "reason",
         "source",
     }
+
+
+# ------------------------------------------------- контракт запроса
+
+
+def test_the_request_carries_the_email_the_contract_demands() -> None:
+    """Без ``email`` поставщик отвечает HTTP 400.
+
+    Снято с прода: источник падал с ``http_error`` на каждом должнике, потому
+    что параметр обязателен — публичная форма МВД без адреса почты не
+    отправляется. Тест держит именно контракт, а не наши представления о нём.
+
+    ``country`` не отправляется: в схеме этого метода его нет вовсе, в отличие
+    от соседних. Единого набора параметров у поставщика не существует, и
+    общий помощник здесь был как раз причиной отказа.
+    """
+    params = _params_for(SUBJECT, "owner@example.test")
+
+    assert params["email"] == "owner@example.test"
+    assert params["lastname"] == "Тестов"
+    assert params["firstname"] == "Андрей"
+    assert params["secondname"] == "Сергеевич"
+    assert params["dob"] == "12.03.1985"
+    assert "country" not in params
+
+
+def test_a_missing_patronymic_is_omitted_not_sent_empty() -> None:
+    """Пустое отчество поставщик отбивает — ключа быть не должно вовсе."""
+    nameless = SUBJECT.model_copy(
+        update={"name": PersonName(last_name="Тестов", first_name="Андрей")}
+    )
+
+    assert "secondname" not in _params_for(nameless, "owner@example.test")
+
+
+async def test_without_an_email_the_source_says_it_is_not_connected(
+    settings: Settings, maps: NewDBFieldMaps
+) -> None:
+    """Пустая настройка — «не подключено», а не ошибка HTTP.
+
+    Разница не косметическая: «не подключено» оператор чинит сам и видит, чем
+    именно, а ``http_error`` выглядит как наша поломка, приходит к нам и при
+    этом списывает деньги за каждый отбитый вызов.
+    """
+    provider = NewDBWantedProvider(settings.model_copy(update={"newdb_wanted_email": ""}), maps)
+
+    assert not provider.is_configured
+
+    result = await provider.fetch(SUBJECT)
+    assert result.status is ProviderStatus.NOT_CONFIGURED
+    assert "NEWDB_WANTED_EMAIL" in (result.error_message or "")

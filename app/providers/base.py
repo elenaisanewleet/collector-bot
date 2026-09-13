@@ -169,7 +169,7 @@ class BaseProvider(ABC):
                 ProviderStatus.NOT_CONFIGURED,
                 started,
                 error_code="not_configured",
-                error_message="Источник не подключён",
+                error_message=self.not_configured_reason,
             )
         try:
             result = await self._dispatch(subject, context)
@@ -213,6 +213,21 @@ class BaseProvider(ABC):
             error_message=error_message,
             duration_ms=_elapsed_ms(started),
         )
+
+    @property
+    def not_configured_reason(self) -> str:
+        """Чего именно не хватает, чтобы источник заработал.
+
+        Общее «Источник не подключён» верно, но бесполезно: оператор видит
+        строку и не знает, его это дело или наше. Источник, у которого причина
+        одна и чинится настройкой, обязан её назвать — тогда «не подключено»
+        становится задачей с решением, а не сообщением о судьбе.
+
+        Переопределяется там, где причина известна точно. Где не известна,
+        остаётся общая формулировка: перечислять все мыслимые причины хуже, чем
+        не называть ни одной.
+        """
+        return "Источник не подключён"
 
     def not_configured(
         self, message: str = "Источник не подключён", *, notes: Sequence[str] = ()

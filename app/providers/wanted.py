@@ -33,7 +33,7 @@ from app.domain.enums import MissingInput, ProviderName, ProviderStatus
 from app.domain.identity import SearchSubject
 from app.domain.models import ProviderResult, WantedRecord
 from app.providers.mapping import RecordDict, as_text, dig
-from app.providers.newdb import NewDBMethodProvider, person_params_for
+from app.providers.newdb import NewDBMethodProvider
 from app.utils.dates import parse_date
 
 NEWDB_METHOD = "mvd_wanted"
@@ -44,6 +44,10 @@ CAPTCHA_REFUSAL = (
     "Это не значит, что в розыске никого нет"
 )
 NEEDS_PERSON = "Для проверки розыска нужны ФИО и дата рождения"
+NEEDS_EMAIL = (
+    "Проверка розыска не настроена: публичная форма МВД требует адрес почты, "
+    "укажите NEWDB_WANTED_EMAIL"
+)
 
 
 class NewDBWantedProvider(NewDBMethodProvider):
@@ -53,11 +57,37 @@ class NewDBWantedProvider(NewDBMethodProvider):
     title = "Розыск МВД"
     methods = (NEWDB_METHOD,)
 
+    @property
+    def is_configured(self) -> bool:
+        """Карты полей мало: без адреса почты запрос не примут.
+
+        Гейт добавлен по живому отказу: без ``email`` поставщик отвечает
+        HTTP 400, и источник падал с ``http_error`` на каждом должнике. «Не
+        подключено» честнее вдвойне — оно называет причину и чинится настройкой,
+        а ошибка HTTP выглядит как наша поломка и приходит к нам.
+        """
+        return super().is_configured and bool(self._settings.newdb_wanted_email)
+
+    @property
+    def not_configured_reason(self) -> str:
+        """Причина называется, только если она действительно в почте.
+
+        Когда ключа NewDB нет или метод не описан в карте полей, причина другая,
+        и подсовывать оператору почту значило бы отправить его чинить не то.
+        """
+        if self._settings.newdb_configured and not self._settings.newdb_wanted_email:
+            return NEEDS_EMAIL
+        return super().not_configured_reason
+
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
+        if not self._settings.newdb_wanted_email:  # pragma: no cover - закрыто is_configured
+            return self.not_configured(NEEDS_EMAIL)
         if subject.name is None or subject.birth_date is None:
             return self.insufficient_query(NEEDS_PERSON, missing=_missing_for(subject))
 
-        mapped, answer = await self.mapped_answer_for(NEWDB_METHOD, person_params_for(subject))
+        mapped, answer = await self.mapped_answer_for(
+            NEWDB_METHOD, _params_for(subject, self._settings.newdb_wanted_email)
+        )
         raw = self.raw_for(answer.raw)
 
         if captcha_failed(answer.results):
@@ -90,6 +120,29 @@ class NewDBWantedProvider(NewDBMethodProvider):
             else (),
             raw_response=raw,
         )
+
+
+def _params_for(subject: SearchSubject, email: str) -> dict[str, str]:
+    """Параметры ровно те, что объявлены в контракте метода.
+
+    Без ``country``, и это не пропуск: в схеме ``mvd_wanted`` его нет вовсе, а
+    обязательными названы ``lastname``, ``firstname``, ``dob`` и ``email``.
+    Отчество передаётся, когда оно есть, — пустым его слать нельзя, поставщик
+    такие поля отбивает.
+
+    ``email`` источник использует для отправки формы МВД и обратно не
+    возвращает.
+    """
+    assert subject.name is not None and subject.birth_date is not None
+    params = {
+        "lastname": subject.name.last_name,
+        "firstname": subject.name.first_name,
+        "dob": subject.birth_date.strftime("%d.%m.%Y"),
+        "email": email,
+    }
+    if subject.name.middle_name:
+        params["secondname"] = subject.name.middle_name
+    return params
 
 
 def _missing_for(subject: SearchSubject) -> tuple[MissingInput, ...]:

@@ -143,6 +143,20 @@ class Settings(BaseSettings):
     # described by the deployment, and a method absent from this file is a
     # method that stays NOT_CONFIGURED rather than one this tool guesses at.
     newdb_field_map: Path | None = None
+    # Адрес, который метод розыска МВД передаёт источнику. Обязательный
+    # параметр контракта: публичная форма МВД требует email для отправки, и без
+    # него поставщик отвечает HTTP 400 — то есть источник падает на каждом
+    # должнике, а деньги за вызов списываются.
+    #
+    # Настройкой, а не константой, по двум причинам. Адрес уходит НАРУЖУ, в
+    # чужой сервис, и зашить сюда чей-то чужой значит отправлять трафик
+    # развёртывания под чужим именем. И репозиторий публичный: почте владельца в
+    # нём не место.
+    #
+    # Пустой — источник отвечает NOT_CONFIGURED и говорит, чего не хватает. Это
+    # лучше, чем падать с http_error: «не подключено» оператор чинит сам, а
+    # ошибку HTTP несёт нам.
+    newdb_wanted_email: str = ""
 
     # ---------------------------------------------------------------- ЕФРСБ
     fedresurs_backend: FedresursBackend = FedresursBackend.NONE
@@ -524,6 +538,11 @@ class Settings(BaseSettings):
         checked.
         """
         return self.newdb_configured and self.newdb_field_map is not None
+
+    @property
+    def wanted_configured(self) -> bool:
+        """Ключ NewDB есть и указан email для формы МВД."""
+        return self.newdb_configured and bool(self.newdb_wanted_email)
 
     @property
     def rosreestr_configured(self) -> bool:
