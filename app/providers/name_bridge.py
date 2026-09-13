@@ -60,12 +60,15 @@ from app.domain.identity import (
     normalize_snils,
 )
 from app.domain.models import ProviderResult
+from app.logging_setup import get_logger
 from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import RecordDict
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
 from app.utils.dates import parse_date
 from app.utils.hashing import normalize_token
+
+logger = get_logger(__name__)
 
 __all__ = ["PassportByNameProvider", "PassportByNameResult", "build_name_bridge"]
 
