@@ -14,6 +14,7 @@ from app.config import AppMode, FedresursBackend, FNSBackend, Settings
 from app.db.session import Database
 from app.domain.enums import ProviderName
 from app.logging_setup import get_logger
+from app.providers.account_block import NewDBAccountBlockProvider
 from app.providers.arbitr_legal import NewDBLegalCasesProvider
 from app.providers.base import BaseProvider
 from app.providers.court import NewDBArbitrationProvider
@@ -200,6 +201,9 @@ def build_external_providers(
         # дате рождения, то есть добирается до тех должников, у которых нет ни
         # ИНН, ни паспорта, — а таких в выгрузке большинство.
         providers.append(NewDBWantedProvider(settings, field_maps))
+        # Блокировки счетов ФНС. Единственный законный ответ на «счета в банках»
+        # из ТЗ: остатков не покажет, но назовёт банк.
+        providers.append(NewDBAccountBlockProvider(settings, field_maps))
         # Разбираются кодом по живому ответу, поэтому гейт у них — настройка, а
         # не запись в карте. Выключенные, они отвечают NOT_CONFIGURED и говорят,
         # какой именно флаг это включает.

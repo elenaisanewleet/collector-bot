@@ -29,6 +29,7 @@ from app.domain.enums import (
     ScoreCategory,
 )
 from app.domain.models import (
+    AccountBlockRecord,
     BankruptcyRecord,
     BusinessRelation,
     CourtCase,
@@ -68,6 +69,10 @@ MAX_LISTED_INHERITANCE = 5
 #: однофамильцев — несколько. Три строки покрывают оба случая, а всё, что
 #: длиннее, значит «мы поймали тёзок», и перечислять их подробно незачем.
 MAX_LISTED_WANTED = 3
+#: Блокировок у одного человека бывает много — ФНС выносит решение на каждый счёт
+#: и на каждую инспекцию. Пять строк показывают, в каких банках искать; остальные
+#: повторят те же банки другими номерами решений.
+MAX_LISTED_BLOCKS = 5
 # Границы реестра наследственных дел, обе обязательны и обе печатаются в каждой
 # ветке раздела.
 #
@@ -145,6 +150,10 @@ BANK_NO_SOURCE_LINE = (
     "Источника нет и не будет: сведения о счетах и остатках — банковская тайна\n"
     "(ст. 26 ФЗ «О банках и банковской деятельности»)."
 )
+#: Проверено и блокировок нет. Строка нужна ровно потому, что раздел начинается
+#: с отказа: без неё читающий не отличит «ФНС счета не блокировала» от «мы и это
+#: не смотрели», а весь смысл раздела в том, чтобы эти два случая различать.
+BANK_NO_BLOCKS_LINE = "Решений ФНС о приостановлении операций по счетам не найдено."
 BANK_ACCESS_LINE = (
     "Их получают двумя путями: ходатайством об истребовании доказательств в суде\n"
     "или через пристава в возбуждённом производстве (ст. 69 ФЗ-229)."
@@ -374,7 +383,7 @@ def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
     blocks.append(_property_block(report))
     # Сразу за имуществом, а не в конце: читающий ищет, с чего взыскивать, и
     # счета — соседний вопрос к тому же вопросу, а не примечание.
-    blocks.append(_bank_block())
+    blocks.append(_bank_block(report))
     blocks.append(_court_block(report))
     blocks.append(_score_block(report.recovery_score))
     blocks.append(_sources_block(report))
@@ -1011,22 +1020,68 @@ def _rights_line(item: PropertyRecord) -> str:
     return f"Права: {kinds}, {item.rights_count} {noun}{shares}"
 
 
-def _bank_block() -> str:
-    """Счета в банках: источника нет и не будет — и что вместо него делать.
+def _bank_block(report: DebtorReport) -> str:
+    """Счета в банках: чего не будет никогда и что всё-таки есть.
 
-    Единственный раздел без ``ProviderResult``, и аргумента у него поэтому нет:
-    состояние здесь не вычисляется из ответа, а известно заранее и навсегда.
-    Отсутствующий раздел был хуже пустого: в ТЗ счета названы прямым текстом, и
-    их молчаливое отсутствие читалось как забывчивость — а через раз как
-    обещание, что «когда-нибудь подключим». Подключать нечего: ни один
-    агрегатор эти сведения легально не отдаёт.
+    Отказ про ОСТАТКИ остаётся дословно и остаётся первым. Он верен: сведения о
+    счетах и оборотах — банковская тайна, ни один агрегатор их легально не
+    отдаёт, и раздел обязан сказать это раньше, чем покажет что-либо ещё.
 
-    Псевдо-источника под это заводить нельзя, и не только из брезгливости:
-    ``ProviderResult`` попал бы в счётчик «ответили N из M», в строку «Не
-    проверено: …» на первом экране и в карточку чата репликой «проверено не
-    всё» — то есть позвал бы оператора чинить нечинимое три раза подряд.
+    А под ним — то, что законом открыто. ФНС публикует решения о приостановлении
+    операций, и в решении стоит БИК банка. Остатка это не даёт, зато даёт
+    единственное, что нужно для заявления приставу: в каком банке искать. Раздел
+    поэтому стоит из двух слоёв, и порядок между ними не косметический — сперва
+    граница возможного, потом то, что внутри неё удалось достать.
+
+    Блокировки живут ЗДЕСЬ, а не отдельным разделом, по решению владельца:
+    заказчик искал счета и должен найти ответ там, где искал. Цена решения —
+    одна: подпись источника в блоке ИСТОЧНИКИ называется «Блокировки счетов
+    (ФНС)», а не «Счета в банках», иначе строка «✓ Счета в банках — 2 зап.»
+    пообещала бы то, чего источник не говорит.
+
+    Состояние раздела по-прежнему не вычисляется из ответа: отказ про остатки
+    вечен, и ``NO_SOURCE_STATE`` описывает именно его. Ответ провайдера
+    блокировок стоит в блоке ИСТОЧНИКИ на общих правах.
     """
-    return "\n".join([BANK_TITLE.upper(), BANK_NO_SOURCE_LINE, BANK_ACCESS_LINE])
+    lines = [BANK_TITLE.upper(), BANK_NO_SOURCE_LINE, BANK_ACCESS_LINE]
+    result = report.result_for(ProviderName.ACCOUNT_BLOCK)
+    if result is None:
+        return "\n".join(lines)
+
+    unanswered = unanswered_line(result)
+    if unanswered:
+        lines.append(f"Блокировки счетов (ФНС): {unanswered[0].lower()}{unanswered[1:]}")
+        return "\n".join(lines)
+
+    usable = [item for item in report.account_blocks if item.is_usable]
+    if not usable:
+        lines.append(BANK_NO_BLOCKS_LINE)
+        return "\n".join(lines)
+
+    lines.append("")
+    lines.append(
+        "ФНС приостановила операции по счетам. Остатков это не раскрывает, но "
+        "называет банк — его и указывают в заявлении приставу."
+    )
+    for item in usable[:MAX_LISTED_BLOCKS]:
+        lines.extend(_account_block_lines(item))
+    hidden = len(usable) - MAX_LISTED_BLOCKS
+    if hidden > 0:
+        lines.append(f"…и ещё {hidden}")
+    lines.extend(_source_notes(result))
+    lines.append(_checked_at(result))
+    return "\n".join(lines)
+
+
+def _account_block_lines(item: AccountBlockRecord) -> list[str]:
+    head = f"• Банк БИК {item.bank_bic}" if item.bank_bic else "• Банк не указан"
+    lines = [head]
+    if item.decision_number:
+        date = f" от {format_date(item.decision_date)}" if item.decision_date else ""
+        lines.append(f"  Решение № {item.decision_number}{date}")
+    if item.started_at:
+        lines.append(f"  Операции приостановлены с {format_date(item.started_at)}")
+    return lines
 
 
 def _court_block(report: DebtorReport) -> str:

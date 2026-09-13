@@ -296,6 +296,35 @@ class VehicleRecord(SourcedFact):
     restrictions: tuple[str, ...] = Field(default_factory=tuple)
 
 
+class AccountBlockRecord(SourcedFact):
+    """Решение ФНС о приостановлении операций по счёту.
+
+    Единственный законный способ узнать хоть что-то о счетах должника, и знает
+    он ровно одно: в каком БАНКЕ счёт есть. Остатки — банковская тайна
+    (ст. 26 ФЗ «О банках»), и этот источник их не показывает и показывать не
+    может.
+
+    Для взыскателя ценен именно :attr:`bank_bic`: заявление приставу подают с
+    указанием банка, и до сих пор этот банк искали перебором. Решение при этом
+    двусторонняя новость — счёт есть, но ФНС в очереди впереди нас, — и оценка
+    читает обе стороны (:func:`app.services.scoring._account_block_factors`).
+    """
+
+    kind: Literal["account_block"] = "account_block"
+    provider: ProviderName = ProviderName.ACCOUNT_BLOCK
+
+    # БИК банка. Само содержание записи: по нему банк и опознают.
+    bank_bic: str | None = None
+    decision_number: str | None = None
+    decision_date: date | None = None
+    # Дата начала приостановления — не всегда совпадает с датой решения.
+    started_at: date | None = None
+    # Код основания и код инспекции: оператору не нужны, приставу в заявлении
+    # пригодятся, поэтому хранятся, но в чат не печатаются.
+    reason_code: str | None = None
+    tax_office: str | None = None
+
+
 class WantedRecord(SourcedFact):
     """Запись розыска МВД.
 
@@ -501,7 +530,8 @@ FactRecord = Annotated[
     | VehicleRecord
     | PropertyRecord
     | InheritanceCase
-    | WantedRecord,
+    | WantedRecord
+    | AccountBlockRecord,
     Field(discriminator="kind"),
 ]
 
@@ -606,6 +636,7 @@ class DebtorReport(BaseModel):
     vehicles: list[VehicleRecord] = Field(default_factory=list)
     properties: list[PropertyRecord] = Field(default_factory=list)
     wanted: list[WantedRecord] = Field(default_factory=list)
+    account_blocks: list[AccountBlockRecord] = Field(default_factory=list)
     provider_results: list[ProviderResult] = Field(default_factory=list)
     recovery_score: RecoveryScore | None = None
     from_cache: bool = False

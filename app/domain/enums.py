@@ -78,6 +78,9 @@ class ProviderName(StrEnum):
     # должнику выгрузки — в отличие от банкротства, ИП и арбитража, которым
     # нужен ИНН, а его в выгрузке нет ни у кого.
     WANTED = "wanted"
+    # Решения ФНС о приостановлении операций по счетам. Остатков не показывает —
+    # это банковская тайна, — но называет БАНК, и приставу нужен именно он.
+    ACCOUNT_BLOCK = "account_block"
 
 
 PROVIDER_TITLES: dict[ProviderName, str] = {
@@ -95,6 +98,10 @@ PROVIDER_TITLES: dict[ProviderName, str] = {
     ProviderName.PLEDGE: "Залоги",
     ProviderName.INHERITANCE: "Наследственные дела",
     ProviderName.WANTED: "Розыск МВД",
+    # Не «Счета в банках»: источник знает только о ЗАБЛОКИРОВАННЫХ счетах, и
+    # подпись «✓ Счета в банках — 2 зап.» прочиталась бы как «нашли счета
+    # должника» — обещание шире того, что источник делает.
+    ProviderName.ACCOUNT_BLOCK: "Блокировки счетов (ФНС)",
     ProviderName.INN_BRIDGE: "ИНН по паспорту (ФНС)",
     ProviderName.PHONE_BRIDGE: "ФИО по телефону",
     ProviderName.NAME_BRIDGE: "Паспорт по ФИО и дате рождения",

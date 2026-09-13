@@ -55,6 +55,7 @@ from app.domain.scoring import PROVIDER_CONFIDENCE_WEIGHTS
 from app.domain.verdict import FEE_BASIS_TITLES, VERDICT_TITLES, VerdictDecision
 from app.services.reporting import (
     BANK_ACCESS_LINE,
+    BANK_NO_BLOCKS_LINE,
     BANK_NO_SOURCE_LINE,
     BANK_TITLE,
     BRIDGES,
@@ -1063,7 +1064,7 @@ def property_section(report: DebtorReport) -> str:
     )
 
 
-def bank_section() -> str:
+def bank_section(report: DebtorReport) -> str:
     """Счета в банках — раздел, у которого источника нет и не будет.
 
     Отчёта без него читающий не мог разобрать: счета названы в ТЗ прямым
@@ -1082,7 +1083,46 @@ def bank_section() -> str:
     body = (
         f'<p class="empty">{e(BANK_NO_SOURCE_LINE)}</p><p class="empty">{e(BANK_ACCESS_LINE)}</p>'
     )
+    body += _account_blocks(report)
     return section("bank", BANK_TITLE, body, state=NO_SOURCE_STATE)
+
+
+def _account_blocks(report: DebtorReport) -> str:
+    """Блокировки ФНС — вторым слоем того же раздела.
+
+    Порядок слоёв тот же, что в тексте отчёта, и по той же причине: сперва
+    граница возможного (остатков не будет никогда), потом то, что внутри неё
+    удалось достать. Поменять их местами значило бы пообещать счета и оговориться
+    мелким шрифтом.
+    """
+    result = report.result_for(ProviderName.ACCOUNT_BLOCK)
+    if result is None:
+        return ""
+
+    unanswered = unanswered_line(result)
+    if unanswered:
+        return f'<p class="empty">Блокировки счетов (ФНС): {e(unanswered)}</p>'
+
+    usable = [item for item in report.account_blocks if item.is_usable]
+    if not usable:
+        return f'<p class="empty">{e(BANK_NO_BLOCKS_LINE)}</p>'
+
+    rows = [
+        (
+            # БИК копируется одним нажатием: его переносят в заявление приставу,
+            # и перебитый руками БИК — это заявление не в тот банк.
+            cell(item.bank_bic, label="БИК банка", numeric=True, copy=bool(item.bank_bic)),
+            cell(item.decision_number, label="Решение", numeric=True),
+            cell(format_date(item.decision_date), label="Дата решения"),
+            cell(format_date(item.started_at), label="Приостановлены с"),
+        )
+        for item in usable
+    ]
+    note = (
+        '<p class="hint">Остатков и оборотов здесь нет и быть не может. '
+        "Ценность записи — банк: его указывают в заявлении приставу.</p>"
+    )
+    return table(("БИК банка", "Решение", "Дата решения", "Приостановлены с"), rows) + note
 
 
 def _property_cost(item: PropertyRecord) -> str:
@@ -1306,7 +1346,7 @@ def build_blocks(report: DebtorReport) -> list[Block]:
         # Сразу за имуществом: читающий ищет, с чего взыскивать, и счета — тот же
         # вопрос, а не примечание в конце. В хвосте оглавления раздел выглядел бы
         # оговоркой, тогда как это единственный ответ, который у нас на него есть.
-        Block("bank", BANK_TITLE, bank_section()),
+        Block("bank", BANK_TITLE, bank_section(report)),
         Block("court", "Суды", court_section(report)),
         Block("business", "Бизнес", business_section(report)),
         Block("sources", "Источники", sources_section(report)),

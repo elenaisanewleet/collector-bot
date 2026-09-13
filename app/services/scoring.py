@@ -32,6 +32,8 @@ from app.domain.models import (
     ScoreFactor,
 )
 from app.domain.scoring import (
+    ACCOUNT_BLOCKED_PENALTY,
+    ACCOUNT_EXISTS_BONUS,
     ACTIVE_BANKRUPTCY_PENALTY,
     ACTIVE_LEGAL_ENTITY_ROLE_BONUS,
     ACTIVE_PLEDGE_PENALTY,
@@ -46,6 +48,7 @@ from app.domain.scoring import (
     CONFIRMED_WANTED_PENALTY,
     ENFORCEMENT_AMOUNT_PENALTIES,
     ENFORCEMENT_COUNT_PENALTIES,
+    MAX_ACCOUNT_BLOCK_PENALTY,
     MAX_BUSINESS_BONUS,
     MAX_CLAIM_PENALTY,
     MAX_PLEDGE_PENALTY,
@@ -79,6 +82,7 @@ class RecoveryScoreEngine:
         factors.extend(_court_factors(report))
         factors.extend(_inheritance_factors(report))
         factors.extend(_wanted_factors(report))
+        factors.extend(_account_block_factors(report))
         factors.extend(_asset_factors(report))
 
         total = BASE_SCORE + sum(factor.delta for factor in factors)
@@ -473,6 +477,53 @@ def _court_factors(report: DebtorReport) -> list[ScoreFactor]:
 
 
 # ---------------------------------------------------------------- наследство
+
+
+def _account_block_factors(report: DebtorReport) -> list[ScoreFactor]:
+    """Блокировка счёта ФНС: плюс за счёт, минус за очередь впереди нас.
+
+    Два фактора на одну запись, и это не избыточность. Оператор читает факторы
+    поштучно, и одно усреднённое число скрыло бы от него главное: счёт НАЙДЕН.
+    Отчёт вообще редко подтверждает наличие имущества — чаще он подтверждает его
+    отсутствие, — и такой случай обязан быть видно отдельной строкой.
+
+    Плюс начисляется один раз независимо от числа решений: пять блокировок в
+    одном банке — это один счёт, а не пять. Минус считается по числу РАЗНЫХ
+    банков и упирается в потолок: ФНС выносит решение на каждый счёт и каждую
+    инспекцию, и линейный штраф утопил бы должника за одну недоимку.
+
+    Плюса за «блокировок нет» нет: отсутствие решения ФНС не говорит о наличии
+    счёта ничего. У большинства людей счета есть и не заблокированы.
+    """
+    result = report.result_for(ProviderName.ACCOUNT_BLOCK)
+    if result is None or not result.is_answered:
+        return []
+
+    usable = [item for item in report.account_blocks if item.is_usable]
+    if not usable:
+        return []
+
+    banks = {item.bank_bic for item in usable if item.bank_bic}
+    named = ", ".join(sorted(banks)[:3]) if banks else ""
+    where = f" (БИК {named})" if named else ""
+    penalty = max(ACCOUNT_BLOCKED_PENALTY * max(len(banks), 1), MAX_ACCOUNT_BLOCK_PENALTY)
+    return [
+        ScoreFactor(
+            name="bank_account_found",
+            delta=ACCOUNT_EXISTS_BONUS,
+            reason=f"Счёт в банке подтверждён решением ФНС{where}",
+            source=ProviderName.ACCOUNT_BLOCK,
+        ),
+        ScoreFactor(
+            name="bank_account_blocked",
+            delta=penalty,
+            reason=(
+                "ФНС приостановила операции по счетам: налоговая взыскивает "
+                "бесспорно и стоит в очереди впереди"
+            ),
+            source=ProviderName.ACCOUNT_BLOCK,
+        ),
+    ]
 
 
 def _wanted_factors(report: DebtorReport) -> list[ScoreFactor]:

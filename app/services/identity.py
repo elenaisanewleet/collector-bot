@@ -36,6 +36,7 @@ from app.domain.identity import (
     normalize_vin,
 )
 from app.domain.models import (
+    AccountBlockRecord,
     BankruptcyRecord,
     BusinessRelation,
     CourtCase,
@@ -154,6 +155,24 @@ class IdentityMatcher:
     """Scores how strongly a record belongs to the search subject."""
 
     def assess(self, subject: SearchSubject, record: SourcedFact) -> MatchAssessment:
+        if isinstance(record, AccountBlockRecord):
+            # Запись о блокировке счёта не несёт ни имени, ни даты рождения —
+            # в решении ФНС их нет вовсе, там банк, номер и дата. Сопоставлять
+            # нечего, и общий путь дал бы такой записи ноль, то есть выбросил бы
+            # из отчёта единственный источник, который вообще что-то знает о
+            # счетах.
+            #
+            # Основание здесь — не содержание записи, а СПОСОБ ЗАПРОСА, ровно как
+            # у связи с юрлицом ниже. Метод принимает только двенадцатизначный ИНН
+            # физлица (``innfiz``) и отвечает о нём одном; отправить туда ФИО или
+            # десятизначный ИНН нельзя — поставщик отвергнет запрос. То есть
+            # ответ относится к субъекту по построению, и никакого допущения с
+            # нашей стороны в этом нет.
+            return MatchAssessment(
+                confidence=IDENTIFIER_LOOKUP_CONFIDENCE,
+                reasons=("решение найдено по ИНН должника",),
+            )
+
         if _is_about_a_company(record):
             # Запись об организации — не факт о человеке. Сопоставлять её с ФИО
             # не с чем (название ООО не является именем), а ИНН в ней —

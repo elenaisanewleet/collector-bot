@@ -338,6 +338,17 @@ def test_every_section_of_the_page_is_covered_by_the_state_table() -> None:
 # ---------------------------------------------------------------- счета в банках
 
 
+def _empty_report() -> DebtorReport:
+    """Отчёт без провайдера блокировок.
+
+    Раздел о счетах стоит из двух слоёв: вечный отказ про остатки и — если
+    источник блокировок подключён — то, что он нашёл. Проверки ниже про первый
+    слой, и они обязаны видеть его в одиночку: отказ верен независимо от того,
+    подключено ли что-нибудь ещё.
+    """
+    return DebtorReport(subject=SearchSubject(search_type=SearchType.PERSON.value))
+
+
 def test_bank_accounts_are_not_a_source_we_forgot_to_ask() -> None:
     """«Источника нет» обязано отличаться от «не подключено» и «не опрашивался».
 
@@ -346,8 +357,8 @@ def test_bank_accounts_are_not_a_source_we_forgot_to_ask() -> None:
     пристава и суда. Раздел, взявший чужую подпись, обещал бы подключение — а
     подключать нечего, и читающий строил бы на этом обещании план взыскания.
     """
-    text = reporting._bank_block()
-    page = plain(render.bank_section())
+    text = reporting._bank_block(_empty_report())
+    page = plain(render.bank_section(_empty_report()))
 
     for output in (text, page):
         assert reporting.NOT_CONFIGURED_LABEL not in output
@@ -402,7 +413,8 @@ def test_bank_section_says_where_the_data_can_actually_be_obtained() -> None:
     «Данных нет» — это не ответ взыскателю. Ответ — два законных пути и
     основание каждого; ими раздел и заканчивается.
     """
-    for output in (reporting._bank_block(), plain(render.bank_section())):
+    empty = _empty_report()
+    for output in (reporting._bank_block(empty), plain(render.bank_section(empty))):
         assert "суде" in output
         assert "пристава" in output
         assert "ст. 26" in output
@@ -415,14 +427,15 @@ def test_bank_section_names_no_source_and_no_setting() -> None:
     Название закона — не имя источника, а основание, и оно как раз обязано
     стоять: без него «нет и не будет» это наше слово против его вопроса.
     """
-    for output in (reporting._bank_block(), plain(render.bank_section())):
+    empty = _empty_report()
+    for output in (reporting._bank_block(empty), plain(render.bank_section(empty))):
         for name in ("ЕГРН", "Федресурс", "ЕФРСБ", "Росреестр", "ФНП", "NewDB", "ENABLED"):
             assert name not in output
 
 
 def test_bank_section_stays_short() -> None:
     """Владелица много раз возвращала лишний текст. Четыре строки — потолок."""
-    body = reporting._bank_block().split("\n")[1:]
+    body = reporting._bank_block(_empty_report()).split("\n")[1:]
     assert len(body) <= 4
 
 

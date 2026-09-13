@@ -1501,6 +1501,7 @@ def test_registry_without_a_field_map_leaves_the_new_sources_unconnected(
 
 def test_shipped_example_map_describes_every_documented_method() -> None:
     """Пример в репозитории и код не должны разъезжаться."""
+    from app.providers.account_block import NEWDB_METHOD as BLOCK_METHOD
     from app.providers.court import NEWDB_METHOD as ARBITRATION_METHOD
     from app.providers.fedresurs import NEWDB_METHOD as BANKRUPTCY_METHOD
     from app.providers.fns import NEWDB_METHOD as BUSINESS_METHOD
@@ -1516,6 +1517,7 @@ def test_shipped_example_map_describes_every_documented_method() -> None:
         PERSON_METHOD,
         VIN_METHOD,
         WANTED_METHOD,
+        BLOCK_METHOD,
     }
     # egrul_ip появился 05.09.2026, когда его строки увидели живьём. Раньше его
     # здесь не было намеренно — архивная документация показывала только пустой

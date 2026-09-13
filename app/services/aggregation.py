@@ -12,6 +12,7 @@ from collections.abc import Sequence
 
 from app.domain.identity import SearchSubject
 from app.domain.models import (
+    AccountBlockRecord,
     BankruptcyRecord,
     BusinessRelation,
     CourtCase,
@@ -79,6 +80,8 @@ def _dispatch(report: DebtorReport, record: SourcedFact) -> None:
         report.properties.append(record)
     elif isinstance(record, WantedRecord):
         report.wanted.append(record)
+    elif isinstance(record, AccountBlockRecord):
+        report.account_blocks.append(record)
     elif isinstance(record, InternalDebtorRecord):
         report.internal_records.append(record)
 
