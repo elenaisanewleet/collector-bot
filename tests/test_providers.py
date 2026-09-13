@@ -1158,3 +1158,50 @@ async def test_demo_providers_are_deterministic(person_subject: SearchSubject) -
     assert [r.model_dump(exclude={"fetched_at"}) for r in first.records] == [
         r.model_dump(exclude={"fetched_at"}) for r in second.records
     ]
+
+
+@respx.mock
+async def test_a_rejected_request_keeps_the_reason_the_source_gave(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """Причина отказа лежит в теле, и наружу должна идти вместе с ним.
+
+    Снято с прода 13.09.2026: розыск МВД падал с «HTTP 400» на каждом должнике,
+    и это всё, что знал отчёт. Почему именно четыреста — не знал никто, потому
+    что тело ответа выбрасывалось, а поставщик объясняет отказ ровно в нём.
+    «HTTP 400» — не диагноз, а сообщение о том, что диагноза нет.
+
+    Тело обрезается: оно нужно, чтобы прочитать причину, а не чтобы хранить
+    чужую выгрузку.
+    """
+    respx.post(NEWDB_URL).mock(
+        return_value=httpx.Response(
+            400,
+            json={"errors_info": [{"error": "email is required", "error_code": 400}]},
+        )
+    )
+
+    settings = fssp_settings.model_copy(update={"store_raw_responses": True})
+    result = await FSSPProvider(settings).fetch(person_subject)
+
+    assert not result.status.is_answered
+    assert result.raw_response, "тело отказа выброшено — чинить нечем"
+    assert "email is required" in result.raw_response
+
+
+@respx.mock
+async def test_a_rejection_body_is_not_stored_without_the_flag(
+    fssp_settings: Settings, person_subject: SearchSubject
+) -> None:
+    """Флаг хранения сырых тел командует и телами отказов.
+
+    Иначе диагностика стала бы лазейкой: тело отказа — такой же ответ
+    поставщика, и хранить его в обход настройки значит хранить в обход решения
+    развёртывания.
+    """
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(400, json={"error": "nope"}))
+
+    result = await FSSPProvider(fssp_settings).fetch(person_subject)
+
+    assert not result.status.is_answered
+    assert result.raw_response is None

@@ -17,6 +17,7 @@ from app.domain.enums import MissingInput, ProviderName, ProviderStatus
 from app.domain.identity import SearchSubject
 from app.domain.models import ProviderResult
 from app.logging_setup import get_logger
+from app.utils.masking import redact_sensitive_json
 
 logger = get_logger(__name__)
 
@@ -220,11 +221,20 @@ class BaseProvider(ABC):
     def raw_for(self, raw: str) -> str | None:
         """Тело, которое можно сохранить, — или ``None``, если хранить нельзя.
 
-        База переопределяет это заглушкой: хранение сырых тел — свойство
-        транспорта, а не всякого провайдера. Тот, кто умеет (NewDB), заменяет
-        реализацию на свою с вычисткой чужих персональных данных.
+        Два правила, и оба обязательны. Хранить только при поднятом
+        ``STORE_RAW_RESPONSES``: это решение развёртывания, и диагностика не
+        повод его обходить. И только вычищенным: в телах лежат СНИЛС, места
+        рождения и адреса РОДСТВЕННИКОВ должника — людей, которых никто не
+        спрашивал и которые в отчёт не попадают.
+
+        Провайдер без настроек тела не хранит. Таких немного, и все они
+        бесплатные вспомогательные: у них нет ни ключа, ни счёта, и сохранять
+        им нечего.
         """
-        return None
+        settings = getattr(self, "_settings", None)
+        if settings is None or not getattr(settings, "store_raw_responses", False):
+            return None
+        return redact_sensitive_json(raw)
 
     def _result(
         self,

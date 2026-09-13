@@ -29,6 +29,9 @@ HTTP_NOT_FOUND = 404
 HTTP_TOO_MANY_REQUESTS = 429
 HTTP_SERVER_ERROR_FLOOR = 500
 MAX_RETRY_AFTER_SECONDS = 30.0
+#: Сколько тела отказа хранить. Хватает, чтобы прочитать errors_info поставщика,
+#: и мало, чтобы превратить лог ошибок в свалку чужих персональных данных.
+ERROR_BODY_LIMIT = 2000
 #: Переадресаций на один запрос. Больше одной-двух не бывает ни у одного из
 #: источников, но цепочку надо чем-то оборвать.
 MAX_REDIRECTS = 5
@@ -182,6 +185,12 @@ async def request_raw(
             if error is None:
                 return response
             if not _is_retryable(error):
+                # Тело отказа — вместе с отказом. Поставщик объясняет 400 именно
+                # в нём («dob is not valid», «email required»), а наружу до сих
+                # пор уходило голое «HTTP 400»: диагноз, по которому нечего
+                # чинить. Читается только у неповторяемых ошибок: повторяемые
+                # уйдут на второй круг, и тело первого круга ничего не значит.
+                error.raw_response = await _body_of(response)
                 raise error
             last_error = error
             await _honour_retry_after(response, error)
@@ -266,6 +275,21 @@ def _reject_unsafe_redirect(current: httpx.URL, target: httpx.URL, *, provider: 
     raise ProviderBadResponseError(
         "redirect_blocked", f"{provider}: {reason} — запрос не отправлен"
     )
+
+
+async def _body_of(response: httpx.Response) -> str | None:
+    """Тело ответа для диагностики. ``None``, если его нечем прочитать.
+
+    Обрезается: тело нужно, чтобы прочитать причину отказа, а не чтобы хранить
+    чужую выгрузку. Ошибка чтения гасится намеренно — за ней стоит уже
+    установленный отказ, и уронить его на попытке объясниться было бы хуже, чем
+    не объясниться.
+    """
+    try:
+        raw = await response.aread()
+    except Exception:
+        return None
+    return raw.decode("utf-8", errors="replace")[:ERROR_BODY_LIMIT] or None
 
 
 def _classify(
