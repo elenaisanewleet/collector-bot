@@ -499,3 +499,52 @@ async def test_an_eleven_digit_inn_is_a_snils_and_is_refused(dump_settings: Sett
     assert isinstance(result, PhoneNameResult)
     assert result.status is ProviderStatus.SUCCESS
     assert result.inn is None, "одиннадцать цифр — это не ИНН"
+
+
+# ------------------------------------------- диагностика непонятых значений
+
+
+def test_the_shape_names_the_format_and_never_the_value() -> None:
+    """Шаблон значения — единственное, что уходит в лог, и в нём нет человека.
+
+    Живой ответ показал ``birth_date`` среди присланных ключей: имя подошло, а
+    значение разбор отверг. «Пришло пустым» и «пришло в формате, которого мы не
+    ждём» выглядели одинаково — пустым полем, — а лечатся противоположным.
+
+    Цифры заменены девятками, буквы — латинской A. «9999-99-99» называет формат
+    точно и не говорит о человеке ничего. Проверяется именно это: ни одна цифра
+    и ни одна буква исходника в шаблон не попадает.
+    """
+    from app.providers.phone_bridge import _shape
+
+    assert _shape("1986-04-19") == "9999-99-99"
+    assert _shape("19.04.1986") == "99.99.9999"
+    assert _shape("1986-04-19T00:00:00") == "9999-99-99A99:99:99"
+
+    secret = "Клочкова Елена Николаевна"
+    shape = _shape(secret)
+    assert not any(ch in shape for ch in secret if ch.isalnum())
+
+
+def test_a_value_that_is_not_a_string_is_named_by_its_type() -> None:
+    """``str(dict)`` разбирается в мусор, а выглядит как непонятый формат.
+
+    Тип здесь — тоже ответ, и иногда единственно нужный: он отличает «поставщик
+    прислал объект» от «прислал строку не того вида».
+    """
+    from app.providers.phone_bridge import _shape
+
+    assert _shape({"date": "1986-04-19"}) == "dict"
+    assert _shape(["1986-04-19"]) == "list"
+    assert _shape(514252800) == "int"
+    assert _shape(None) == "NoneType"
+
+
+def test_a_long_value_is_cut_before_it_becomes_a_fingerprint() -> None:
+    """Длинный шаблон адреса — это уже отпечаток, а не формат."""
+    from app.providers.phone_bridge import MAX_SHAPE, _shape
+
+    shape = _shape("Москва, улица Ленина, дом 5, квартира 12, подъезд 3")
+
+    assert len(shape) <= MAX_SHAPE + 1
+    assert shape.endswith("…")
