@@ -14,7 +14,12 @@ from app.domain.enums import BankruptcyStatus, ProviderName, ProviderStatus
 from app.domain.identity import SearchSubject
 from app.domain.models import BankruptcyRecord, ProviderResult
 from app.services.aggregation import Aggregator
-from app.services.reporting import render_report
+from app.services.reporting import (
+    BANKRUPTCY_EMPTY_LINE,
+    COURT_EMPTY_LINE,
+    PLEDGE_EMPTY_LINE,
+    render_report,
+)
 from app.services.scoring import RecoveryScoreEngine
 from tests.conftest import (
     make_bankruptcy,
@@ -120,7 +125,7 @@ def test_unconfigured_source_is_never_rendered_as_clean(
         [provider_result(ProviderName.FEDRESURS, ProviderStatus.NOT_CONFIGURED)],
     )
     assert "Не проверено: источник не подключён." in text
-    assert "Не обнаружено" not in text
+    assert BANKRUPTCY_EMPTY_LINE not in text
 
 
 def test_checked_and_empty_source_is_rendered_as_clean(
@@ -130,7 +135,7 @@ def test_checked_and_empty_source_is_rendered_as_clean(
         person_subject,
         [provider_result(ProviderName.FEDRESURS, ProviderStatus.NO_RESULTS)],
     )
-    assert "Не обнаружено" in text
+    assert BANKRUPTCY_EMPTY_LINE in text
 
 
 def test_unavailable_source_is_rendered_as_unavailable(
@@ -210,7 +215,7 @@ def test_unconnected_pledges_are_not_rendered_as_unencumbered(
     )
     assert "ЗАЛОГИ" in text
     assert "Не проверено: источник не подключён." in text
-    assert "Записей в реестре залогов не найдено" not in text
+    assert PLEDGE_EMPTY_LINE not in text
 
 
 def test_pledge_is_rendered_with_its_holder(person_subject: SearchSubject) -> None:
@@ -303,7 +308,7 @@ def test_court_block_says_what_it_does_not_cover(person_subject: SearchSubject) 
         person_subject,
         [provider_result(ProviderName.COURT, ProviderStatus.NO_RESULTS)],
     )
-    assert "Арбитражных дел не найдено." in text
+    assert COURT_EMPTY_LINE in text
     assert "Суды общей юрисдикции этот источник не покрывает." in text
 
 

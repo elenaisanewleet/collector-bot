@@ -44,7 +44,7 @@ from app.domain.models import DebtorReport, PledgeRecord
 from app.providers.newdb import NewDBFieldMaps
 from app.providers.pledge import NewDBPledgeProvider
 from app.services.aggregation import Aggregator
-from app.services.reporting import render_report
+from app.services.reporting import PLEDGE_EMPTY_LINE, render_report
 from app.services.scoring import RecoveryScoreEngine
 
 BASE_URL = "https://api.example.test"
@@ -141,7 +141,7 @@ async def test_documented_pledge_person_response_reaches_the_report(
     assert "полное совпадение ФИО" in record.match_reasons
 
     text = render_report(report)
-    assert "Записей в реестре залогов не найдено" not in text
+    assert PLEDGE_EMPTY_LINE not in text
     assert "2025-012-232030-634" in text
     assert 'АКЦИОНЕРНОЕ ОБЩЕСТВО "АЛЬФА-БАНК"' in text
     assert "Зарегистрирован: 24.11.2025" in text
@@ -220,7 +220,7 @@ async def test_documented_pledge_vin_response_reaches_the_report(
     assert "совпадает VIN, по которому шёл поиск" in record.match_reasons
 
     text = render_report(report)
-    assert "Записей в реестре залогов не найдено" not in text
+    assert PLEDGE_EMPTY_LINE not in text
     assert "2015-000-291842-833" in text
     assert "ИНТЕРПРОГРЕССБАНК" in text
 

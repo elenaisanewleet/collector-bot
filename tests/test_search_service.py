@@ -15,7 +15,7 @@ from app.domain.enums import ProviderName, ProviderStatus, Region, ScoreCategory
 from app.domain.identity import PersonName, SearchSubject, VehicleDescriptor, parse_fio
 from app.domain.models import ProviderResult
 from app.providers.base import BaseProvider
-from app.services.reporting import render_report
+from app.services.reporting import PLEDGE_EMPTY_LINE, render_report
 from app.services.search import _enrich_from_internal, build_query_hash
 
 OPERATOR_ID = 111
@@ -197,7 +197,7 @@ async def test_the_cache_is_never_kinder_than_the_answer_it_stores(
     assert result.notes == ("В реестре ФНП найдено 13 уведомлений на это ФИО",)
 
     text = render_report(cached)
-    assert "Записей в реестре залогов не найдено" not in text
+    assert PLEDGE_EMPTY_LINE not in text
     assert "13 уведомлений" in text
 
     score = cached.recovery_score

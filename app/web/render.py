@@ -58,10 +58,14 @@ from app.services.reporting import (
     BANK_NO_BLOCKS_LINE,
     BANK_NO_SOURCE_LINE,
     BANK_TITLE,
+    BANKRUPTCY_EMPTY_LINE,
     BRIDGES,
+    BUSINESS_EMPTY_LINE,
     COMPANY_ASSETS_DISCLAIMER,
+    COURT_EMPTY_LINE,
     COURT_SCOPE_NOTE,
     DEMO_BANNER,
+    INHERITANCE_EMPTY_LINE,
     INHERITANCE_SCOPE_NOTE,
     INTERNAL_NOT_FOUND,
     NO_FACTORS_NOTE,
@@ -69,6 +73,7 @@ from app.services.reporting import (
     NO_PROPERTY_FOUND_WITHOUT_ADDRESS,
     NO_SOURCE_STATE,
     OWNERSHIP_DISCLAIMER,
+    PLEDGE_EMPTY_LINE,
     PLEDGE_SCOPE_NOTE,
     PROPERTY_SCOPE_NOTE,
     SourceState,
@@ -684,7 +689,9 @@ def bankruptcy_section(report: DebtorReport) -> str:
         return section(
             "bankruptcy",
             "Банкротство",
-            _empty_body(result, "Не обнаружено.", found=len(report.bankruptcies), noun="запись"),
+            _empty_body(
+                result, BANKRUPTCY_EMPTY_LINE, found=len(report.bankruptcies), noun="запись"
+            ),
             state=state,
         )
 
@@ -742,7 +749,7 @@ def business_section(report: DebtorReport) -> str:
             "Бизнес",
             _empty_body(
                 result,
-                "Связей с ИП и юрлицами не найдено.",
+                BUSINESS_EMPTY_LINE,
                 found=len(report.business_relations),
                 noun="связь",
             ),
@@ -856,7 +863,7 @@ def pledge_section(report: DebtorReport) -> str:
             "Залоги",
             _empty_body(
                 result,
-                "Записей в реестре залогов не найдено.",
+                PLEDGE_EMPTY_LINE,
                 found=len(report.pledges),
                 noun="запись",
                 scope=scope,
@@ -922,7 +929,7 @@ def inheritance_section(report: DebtorReport) -> str:
             "Наследственные дела",
             _empty_body(
                 result,
-                "Наследственных дел по этому ФИО не найдено.",
+                INHERITANCE_EMPTY_LINE,
                 found=len(report.inheritance_cases),
                 noun="дело",
                 scope=scope,
@@ -1177,7 +1184,7 @@ def court_section(report: DebtorReport) -> str:
             "Суды",
             _empty_body(
                 result,
-                "Арбитражных дел не найдено.",
+                COURT_EMPTY_LINE,
                 found=len(report.court_cases),
                 noun="дело",
                 scope=scope,

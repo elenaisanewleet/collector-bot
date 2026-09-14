@@ -69,7 +69,13 @@ from app.providers.fns import NewDBBusinessProvider
 from app.providers.newdb import NewDBFieldMaps
 from app.providers.pledge import NewDBPledgeProvider
 from app.services.aggregation import Aggregator
-from app.services.reporting import render_report
+from app.services.reporting import (
+    BANKRUPTCY_EMPTY_LINE,
+    BUSINESS_EMPTY_LINE,
+    COURT_EMPTY_LINE,
+    PLEDGE_EMPTY_LINE,
+    render_report,
+)
 from app.services.scoring import RecoveryScoreEngine
 
 BASE_URL = "https://api.example.test"
@@ -188,7 +194,7 @@ async def test_live_bankruptcy_reaches_the_report(
     assert record.match_level is MatchLevel.CONFIRMED
 
     text = render_report(report)
-    assert "Не обнаружено" not in text
+    assert BANKRUPTCY_EMPTY_LINE not in text
     assert "А73-1111/2017" in text
 
 
@@ -217,7 +223,7 @@ async def test_a_bankruptcy_found_by_inn_survives_a_different_surname(
     assert record.is_usable, "запись, найденная по ИНН и подтверждённая датой рождения"
 
     text = render_report(report)
-    assert "Не обнаружено" not in text
+    assert BANKRUPTCY_EMPTY_LINE not in text
     assert "no_bankruptcy" not in factor_names(report)
 
 
@@ -286,7 +292,7 @@ async def test_live_empty_bankruptcy_is_an_honest_nothing(
     assert result.status is ProviderStatus.NO_RESULTS
     assert result.error_code is None
     assert not result.is_partial
-    assert "Не обнаружено" in render_report(report)
+    assert BANKRUPTCY_EMPTY_LINE in render_report(report)
     assert "no_bankruptcy" in factor_names(report)
 
 
@@ -375,7 +381,7 @@ async def test_live_egrul_returns_roles_in_legal_entities_too(
     assert sole.registration_date == date(2020, 9, 15)
 
     text = render_report(report)
-    assert "Связей с ИП и юрлицами не найдено" not in text
+    assert BUSINESS_EMPTY_LINE not in text
     assert "руководитель ЮЛ" in text
     assert "учредитель ЮЛ" in text
 
@@ -455,7 +461,7 @@ async def test_live_empty_egrul_is_an_honest_nothing(
     result = result_of(report, ProviderName.FNS)
     assert result.status is ProviderStatus.NO_RESULTS
     assert not result.is_partial
-    assert "Связей с ИП и юрлицами не найдено" in render_report(report)
+    assert BUSINESS_EMPTY_LINE in render_report(report)
 
 
 @respx.mock
@@ -516,7 +522,7 @@ async def test_live_arbitration_case_reaches_the_report(
     assert case.is_usable
 
     text = render_report(report)
-    assert "Арбитражных дел не найдено" not in text
+    assert COURT_EMPTY_LINE not in text
     assert "А57-11111/2025" in text
 
 
@@ -593,7 +599,7 @@ async def test_found_without_a_single_case_is_not_a_clean_answer(
     result = result_of(report, ProviderName.COURT)
     assert result.is_partial
     text = render_report(report)
-    assert "Арбитражных дел не найдено" not in text
+    assert COURT_EMPTY_LINE not in text
     assert "no_court_claims" not in factor_names(report)
 
 
@@ -616,7 +622,7 @@ async def test_live_empty_arbitration_is_an_honest_nothing(
     result = result_of(report, ProviderName.COURT)
     assert result.status is ProviderStatus.NO_RESULTS
     assert not result.is_partial
-    assert "Арбитражных дел не найдено" in render_report(report)
+    assert COURT_EMPTY_LINE in render_report(report)
     assert "no_court_claims" in factor_names(report)
 
 
@@ -648,7 +654,7 @@ async def test_thirteen_unmatched_notices_are_not_an_empty_register(
     assert "найдено 13 уведомлений" in " ".join(result.notes)
 
     text = render_report(report)
-    assert "Записей в реестре залогов не найдено" not in text
+    assert PLEDGE_EMPTY_LINE not in text
     assert "13 уведомлений" in text
     assert "требуется ручная проверка" in text or "нужна ручная проверка" in text
     # Ссылки — то, ради чего эта ветка вообще существует: взыскателю есть куда
@@ -688,5 +694,5 @@ async def test_an_empty_register_is_still_allowed_to_be_empty(
     result = result_of(report, ProviderName.PLEDGE)
     assert result.status is ProviderStatus.NO_RESULTS
     assert not result.is_partial
-    assert "Записей в реестре залогов не найдено" in render_report(report)
+    assert PLEDGE_EMPTY_LINE in render_report(report)
     assert "no_pledges" in factor_names(report)

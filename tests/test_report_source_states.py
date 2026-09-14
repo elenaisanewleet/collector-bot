@@ -410,23 +410,47 @@ def test_no_provider_result_can_ever_claim_this_state() -> None:
 def test_bank_section_says_where_the_data_can_actually_be_obtained() -> None:
     """Раздел полезен, а не просто честен: он называет, что делать дальше.
 
-    «Данных нет» — это не ответ взыскателю. Ответ — два законных пути и
-    основание каждого; ими раздел и заканчивается.
+    «Данных нет» — это не ответ взыскателю. Ответ — два пути, ими раздел и
+    заканчивается.
     """
     empty = _empty_report()
     for output in (reporting._bank_block(empty), plain(render.bank_section(empty))):
         assert "суде" in output
         assert "пристава" in output
-        assert "ст. 26" in output
-        assert "ст. 69 ФЗ-229" in output
+
+
+def test_no_section_lectures_the_reader_about_the_law() -> None:
+    """Ссылок на статьи в отчёте нет, и это решение владельца.
+
+    «Источника нет и не будет — это статья такая-то» заказчику не помогает: он
+    юрист по взысканию и статьи знает лучше нас. Ему нужен прогноз, а место в
+    строке одно — и занимать его ликбезом значит не сказать того, ради чего
+    отчёт читают.
+
+    Проверяются не только напечатанные строки, но и ВСЕ текстовые константы
+    модуля. Отрисованный отчёт показывает лишь те ветки, в которые попал этот
+    должник; ссылка, спрятанная в строке про найденные залоги или про доли в
+    ООО, прошла бы мимо. Константы же видны все сразу, независимо от данных.
+    """
+    citations = ("ст. ", "ФЗ-", "ФЗ «", "УК РФ", "НК РФ", "статья ", "статьи ")
+
+    report = _empty_report()
+    outputs = [
+        reporting.render_report(report),
+        plain("".join(block.html for block in render.build_blocks(report))),
+    ]
+    outputs.extend(
+        value
+        for name, value in vars(reporting).items()
+        if not name.startswith("_") and isinstance(value, str)
+    )
+    for output in outputs:
+        for citation in citations:
+            assert citation not in output, f"осталась ссылка на закон: {citation!r} в {output!r}"
 
 
 def test_bank_section_names_no_source_and_no_setting() -> None:
-    """Правило 4: имён источников и настроек в тексте для оператора нет.
-
-    Название закона — не имя источника, а основание, и оно как раз обязано
-    стоять: без него «нет и не будет» это наше слово против его вопроса.
-    """
+    """Правило 4: имён источников и настроек в тексте для оператора нет."""
     empty = _empty_report()
     for output in (reporting._bank_block(empty), plain(render.bank_section(empty))):
         for name in ("ЕГРН", "Федресурс", "ЕФРСБ", "Росреестр", "ФНП", "NewDB", "ENABLED"):
