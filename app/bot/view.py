@@ -467,6 +467,7 @@ def _gaps(report: DebtorReport) -> list[str]:
     unspecified: dict[str, list[str]] = {}
     not_configured: list[str] = []
     unavailable: list[str] = []
+    inn_blocked: list[ProviderName] = []
 
     for result in report.provider_results:
         state = source_state(result)
@@ -477,6 +478,8 @@ def _gaps(report: DebtorReport) -> list[str]:
             case SourceStateCode.NOT_CONFIGURED:
                 not_configured.append(title)
             case SourceStateCode.INSUFFICIENT:
+                if tuple(result.missing_input) == (MissingInput.INN.value,):
+                    inn_blocked.append(result.provider)
                 if result.missing_input:
                     unqueried.setdefault(tuple(result.missing_input), []).append(title)
                 else:
@@ -500,9 +503,12 @@ def _gaps(report: DebtorReport) -> list[str]:
     # (:func:`app.bot.report_actions._offers`): они и короче текста, и точнее —
     # нажатие сразу открывает нужное поле. Поэтому здесь остаётся назвать, чего
     # не хватает, а не объяснять это абзацем.
+    bridged = _inn_through_bridge(report, unqueried, inn_blocked)
     asks = sorted({missing_reason(missing) for missing in unqueried})
     if asks:
         lines.append(f"Чтобы проверить полнее — {'; '.join(asks)}.")
+    if bridged:
+        lines.append(bridged)
     # Записи из кэша поля не несут, и вместо короткого «нужна дата рождения»
     # остаётся целое предложение от источника. Ставим его отдельной строкой:
     # после тире получалось «Чтобы проверить полнее — Для поиска в ФССП нужна
@@ -518,6 +524,43 @@ def _gaps(report: DebtorReport) -> list[str]:
     elif not_configured:
         lines.append("Проверено не всё — что именно, видно в отчёте.")
     return lines
+
+
+def _inn_through_bridge(
+    report: DebtorReport,
+    unqueried: dict[tuple[str, ...], list[str]],
+    blocked: list[ProviderName],
+) -> str | None:
+    """«ИНН добуду сам — для этого нужна дата рождения».
+
+    ИНН — единственная просьба в карточке, которую оператор выполнить НЕ может:
+    ИНН физлица он ниоткуда не возьмёт. Зато его умеет добыть мост по паспорту,
+    и когда мосту не хватает только даты рождения, две строки — «нужен ИНН» и
+    «нужна дата рождения» — это одно действие, а не два.
+
+    Связи между ними в карточке не было видно, и владелец дважды прочитал
+    результат одинаково: «опять отключён мост получения ИНН по паспорту?».
+    Мост был включён и настроен — ему не хватало даты рождения, и сказать об
+    этом было некому.
+
+    Молчит, когда помочь нечем: моста нет, он не настроен, он уже ответил или
+    ждёт того же ИНН. Обещание «добуду сам» там, где мост не пойдёт, — ровно та
+    подмена, от которой весь этот раздел и заведён.
+    """
+    bridge = report.result_for(ProviderName.INN_BRIDGE)
+    if bridge is None or not blocked:
+        return None
+    if source_state(bridge).code is not SourceStateCode.INSUFFICIENT:
+        return None
+    gap = tuple(bridge.missing_input)
+    if not gap or MissingInput.INN.value in gap:
+        # Мост сам ждёт ИНН — тогда он не мост, а ещё один источник в очереди.
+        return None
+    opens = ", ".join(
+        subject for provider in blocked if (subject := PROVIDER_SUBJECTS.get(provider))
+    )
+    tail = f" Тогда откроются {opens}." if opens else ""
+    return f"ИНН добуду сам по паспорту — для этого {missing_reason(gap)}.{tail}"
 
 
 def missing_reason(missing: tuple[str, ...]) -> str:

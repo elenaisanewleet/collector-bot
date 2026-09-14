@@ -47,6 +47,7 @@ from app.services.deeplink import CHECK_PAYLOAD_PREFIX, debtor_id_from_payload
 from app.services.phone_lookups import PhoneLookupService
 from app.services.query_card import Card, QueryCardService, fill_from_bridge
 from app.services.share import ShareKind, ShareLinkService, ShareTarget
+from app.utils.formatting import format_phone
 from app.web.app import build_app
 from app.web.render_lookups import PAGE_TITLE
 
@@ -1008,3 +1009,30 @@ def test_the_person_page_has_no_button_when_the_bot_is_unknown(bridged: Containe
     assert _check_url(bridged, 42) == (
         f"https://t.me/proverka_dolga_bot?start={CHECK_PAYLOAD_PREFIX}42"
     )
+
+
+async def test_the_bot_speaks_before_the_phone_bridge_not_after(
+    bridged: Container, bridged_dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Между номером и первым словом бота не должно быть тишины.
+
+    Мост «телефон → ФИО» — сетевой вызов к поставщику на десятки секунд, и он
+    идёт ПЕРВЫМ, до всего остального. Полоса прогресса появлялась только у
+    платной проверки, то есть уже после моста, и всё это время в чате не было
+    ничего. Владелец описал это дословно: «написала номер телефона, и бот
+    молчал какое-то время, потом выдал это».
+
+    Проверяется порядок, а не наличие: сообщение обязано быть ПЕРВЫМ из
+    отправленных, иначе тишина остаётся ровно там же, где была.
+    """
+    await feed(bridged_dispatcher, bot, message=make_message(PHONE))
+
+    assert sent.sends, "бот не отправил ни одного сообщения"
+    assert sent.sends[0].startswith("Ищу, кто это по номеру"), (
+        f"первым бот сказал не о начале работы, а: {sent.sends[0]!r}"
+    )
+    # И номер повторён: это единственное подтверждение, что бот прочитал
+    # именно то, что напечатали.
+    pretty = format_phone(PHONE)
+    assert pretty is not None
+    assert pretty in sent.sends[0]

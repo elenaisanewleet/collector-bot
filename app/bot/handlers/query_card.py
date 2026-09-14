@@ -62,6 +62,7 @@ from app.logging_setup import get_logger
 from app.services import card_identify, coverage
 from app.services.query_card import Card, fill_from_bridge
 from app.utils.dates import utcnow
+from app.utils.formatting import format_phone
 
 logger = get_logger(__name__)
 
@@ -353,9 +354,20 @@ async def settle(
 
     # По одному номеру искать в выгрузке нечем: телефона в ней нет и не будет.
     # Имя добывает мост, и добывает ДО поиска — иначе искать не по чему.
+    #
+    # ПОКА ОН ИДЁТ, БОТ ОБЯЗАН ГОВОРИТЬ. Мост — это сетевой вызов к поставщику
+    # на десятки секунд, и всё это время в чате не было ничего: владелец описал
+    # это как «написала номер телефона, и бот молчал какое-то время». Полоса
+    # прогресса появлялась только у платной проверки, то есть ПОСЛЕ моста, —
+    # ровно за тем краем, где человек уже решил, что бот его не услышал.
     had_name = card.name is not None
+    progress = await _looking_up_phone(message, card) if not had_name and card.phone else None
     bridge_note = await _resolve_name(container, card)
     resolved_now = not had_name and card.name is not None
+    # Сообщение о ходе дальше не нужно: следующий экран — либо карточка, либо
+    # своя полоса платной проверки, и оба приезжают отдельными сообщениями.
+    if progress is not None:
+        await _drop(progress)
 
     found = await card_identify.identify(container.search_service, card)
     if found.only is not None:
@@ -843,6 +855,37 @@ def _came_back_empty(report: DebtorReport) -> bool:
     if not any(facts):
         return True
     return any(result.missing_input for result in report.provider_results)
+
+
+#: Что бот говорит, пока переводит номер в личность.
+#:
+#: Называет ДЕЙСТВИЕ, а не состояние: «ищу» отвечает на вопрос «бот меня
+#: услышал?», а «подождите» — нет. Номер повторяется в тексте, потому что это
+#: единственное подтверждение, что бот прочитал именно то, что напечатали.
+LOOKING_UP_PHONE = "Ищу, кто это по номеру {phone}…"
+
+
+async def _looking_up_phone(message: Message, card: Card) -> Message | None:
+    """Сказать, что работа пошла, до первого сетевого вызова.
+
+    Сообщение отдельное и недолгое: следующим экраном придёт либо карточка,
+    либо полоса платной проверки, и оба — свои сообщения. Правка на месте тут не
+    подходит, потому что эти два экрана приходят из разных мест кода и ни одно
+    из них про этот номер ещё ничего не знает.
+
+    Падение отправки не должно ронять проверку: без этой строки бот работает
+    ровно так же, как работал, — молча.
+    """
+    if not card.phone:
+        return None
+    with suppress(Exception):
+        return await message.answer(LOOKING_UP_PHONE.format(phone=format_phone(card.phone)))
+    return None
+
+
+async def _drop(message: Message) -> None:
+    with suppress(Exception):
+        await message.delete()
 
 
 async def _drop_card_message(message: Message, container: Container, card: Card) -> None:

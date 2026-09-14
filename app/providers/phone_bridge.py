@@ -278,15 +278,25 @@ def _read_rows(
     #
     # Значения не печатаются: имён полей хватает, чтобы отличить одно от
     # другого, а лог живёт дольше и расходится шире, чем отчёт.
+    fields = ("birth_date", "inn", "passport", "snils", "passport_issued", "address")
+    found = sorted(field for field in fields if getattr(result, field) is not None)
     logger.info(
         "phone_bridge.parsed",
         rows=len(rows),
         kin=len(kin),
-        found=sorted(
-            field
-            for field in ("birth_date", "inn", "passport", "snils", "passport_issued", "address")
-            if getattr(result, field) is not None
-        ),
+        found=found,
+        # ЧТО ПОСТАВЩИК ВООБЩЕ ПРИСЛАЛ — именами ключей, когда что-то не
+        # разобралось. Без этого «дата рождения не пришла» и «пришла под именем,
+        # которого нет в нашем списке» выглядят одинаково: пустым полем. Первое
+        # не наша беда, второе — наша, и стоит одной строки в таблице синонимов.
+        #
+        # Ровно так это и всплыло: владелец сказал «там должна быть моя дата
+        # рождения в ответе, почему мы её не взяли», а ответить было нечем.
+        # Для адреса синонимов шесть, для даты рождения было два.
+        #
+        # Только ИМЕНА. Значения в лог не идут никогда: он живёт дольше отчёта и
+        # расходится шире.
+        keys=sorted({key for row in kin for key in row}) if len(found) < len(fields) else [],
     )
     return result
 

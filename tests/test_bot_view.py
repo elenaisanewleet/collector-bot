@@ -423,3 +423,71 @@ def test_account_blocks_are_counted_as_decisions(settings: Settings) -> None:
     report.provider_results.append(found(ProviderName.ACCOUNT_BLOCK, blocks))
 
     assert facts(report) == ["Блокировки счетов: 2"]
+
+
+# --------------------------------- ИНН, который бот добудет сам
+
+
+def test_the_card_says_the_bot_will_fetch_the_inn_itself(settings: Settings) -> None:
+    """«Нужен ИНН» — единственная просьба, которую оператор выполнить НЕ может.
+
+    ИНН физлица он ниоткуда не возьмёт, зато его добывает мост по паспорту. И
+    когда мосту не хватает только даты рождения, две строки — «нужен ИНН» и
+    «нужна дата рождения» — это одно действие.
+
+    Связи между ними видно не было, и владелец дважды прочитал результат
+    одинаково: «опять отключён мост получения ИНН по паспорту?». Мост был
+    включён и настроен — ему не хватало даты рождения, и сказать об этом было
+    некому.
+    """
+    report = DebtorReport(subject=person(passport="4514964173"))
+    report.provider_results.extend(
+        (
+            gap_result(ProviderName.INN_BRIDGE, MissingInput.BIRTH_DATE),
+            gap_result(ProviderName.FEDRESURS, MissingInput.INN),
+            gap_result(ProviderName.FNS, MissingInput.INN),
+        )
+    )
+
+    gaps = "\n".join(view._gaps(report))
+
+    assert "ИНН добуду сам по паспорту" in gaps
+    assert "нужна дата рождения" in gaps
+    # И названо, ЧТО откроется: иначе просьба выглядит просьбой ни за чем.
+    assert "банкротство" in gaps and "статус ИП" in gaps
+
+
+def test_no_promise_to_fetch_the_inn_when_the_bridge_cannot_run(settings: Settings) -> None:
+    """Мост не подключён — обещать «добуду сам» нельзя.
+
+    Это ровно та подмена, от которой заведён весь раздел: обещание проверки,
+    которой не будет, хуже честного «нужен ИНН».
+    """
+    report = DebtorReport(subject=person(passport="4514964173"))
+    report.provider_results.extend(
+        (
+            ProviderResult(
+                provider=ProviderName.INN_BRIDGE,
+                status=ProviderStatus.NOT_CONFIGURED,
+                error_code="not_configured",
+            ),
+            gap_result(ProviderName.FEDRESURS, MissingInput.INN),
+        )
+    )
+
+    gaps = "\n".join(view._gaps(report))
+
+    assert "добуду сам" not in gaps
+
+
+def test_no_promise_when_the_bridge_itself_waits_for_the_inn(settings: Settings) -> None:
+    """Мост, которому нужен тот же ИНН, — не мост, а ещё один источник в очереди."""
+    report = DebtorReport(subject=person())
+    report.provider_results.extend(
+        (
+            gap_result(ProviderName.INN_BRIDGE, MissingInput.INN),
+            gap_result(ProviderName.FEDRESURS, MissingInput.INN),
+        )
+    )
+
+    assert "добуду сам" not in "\n".join(view._gaps(report))
