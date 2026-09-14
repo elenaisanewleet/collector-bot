@@ -18,6 +18,7 @@ from datetime import date
 from typing import Any
 
 from app.bot import view
+from app.bot.markup import strip_tags
 from app.config import Settings
 from app.domain.enums import MissingInput, ProviderName, ProviderStatus, SearchType
 from app.domain.identity import PersonName, SearchSubject
@@ -43,6 +44,11 @@ def person(**overrides: Any) -> SearchSubject:
         "name": PersonName(last_name="Тестов", first_name="Андрей", middle_name="Сергеевич"),
     }
     return SearchSubject(**{**base, **overrides})
+
+
+def facts(report: DebtorReport) -> list[str]:
+    """Строки фактов без разметки: тесты про слова, а не про оформление."""
+    return [strip_tags(line) for line in view._facts(report)]
 
 
 def card(report: DebtorReport, settings: Settings) -> str:
@@ -179,7 +185,7 @@ def test_a_section_without_a_source_never_reaches_the_card(settings: Settings) -
     assert reporting.BANK_TITLE not in text
     assert reporting.BANK_NO_SOURCE_LINE not in text
     assert "счета" not in text.lower()
-    assert view._facts(report) == ["Исполнительные производства: нет"]
+    assert facts(report) == ["Исполнительные производства: нет"]
     assert view._gaps(report) == []
 
 
@@ -270,7 +276,8 @@ def test_the_demo_banner_stands_above_everything_about_the_person(settings: Sett
 
     assert lines[0] == DEMO_BANNER
     assert lines[1] == ""
-    assert lines[2] == report.subject.display_name
+    # Разметку снимаем: тест про ПОРЯДОК строк, а не про оформление.
+    assert strip_tags(lines[2]) == report.subject.display_name
     # Под именем — идентификаторы, и только потом оговорки. Раньше здесь не было
     # ни того ни другого: считалось, что «Принял: …» из сообщения о ходе
     # проверки достаточно. Оказалось наоборот — отчёт ПРАВИТ то самое
@@ -318,7 +325,7 @@ def test_a_namesake_in_the_wanted_registry_is_not_called_a_finding(
     report.wanted.append(namesake)
     report.provider_results.append(found(ProviderName.WANTED, [namesake]))
 
-    assert view._facts(report) == ["Розыск МВД: однофамилец, не должник"]
+    assert facts(report) == ["Розыск МВД: однофамилец, не должник"]
     assert "Розыск МВД: 1" not in card(report, settings)
 
 
@@ -336,7 +343,7 @@ def test_a_confirmed_wanted_record_is_counted(settings: Settings) -> None:
     report.wanted.append(debtor)
     report.provider_results.append(found(ProviderName.WANTED, [debtor]))
 
-    assert view._facts(report) == ["Розыск МВД: 1"]
+    assert facts(report) == ["Розыск МВД: 1"]
 
 
 def test_the_tax_debt_line_prints_the_sum_not_the_row_count(settings: Settings) -> None:
@@ -350,7 +357,7 @@ def test_the_tax_debt_line_prints_the_sum_not_the_row_count(settings: Settings) 
     report.tax_debts.append(debt)
     report.provider_results.append(found(ProviderName.TAX_DEBT, [debt]))
 
-    (line,) = view._facts(report)
+    (line,) = facts(report)
     assert line.startswith("Долг по налогам: ")
     assert "12" in line and "500" in line
     assert line != "Долг по налогам: 1"
@@ -371,7 +378,7 @@ def test_a_zero_tax_debt_is_a_real_answer_and_says_so(settings: Settings) -> Non
     report.tax_debts.append(debt)
     report.provider_results.append(found(ProviderName.TAX_DEBT, [debt]))
 
-    assert view._facts(report) == ["Долг по налогам: нет"]
+    assert facts(report) == ["Долг по налогам: нет"]
 
 
 def test_a_tax_answer_without_a_sum_is_not_a_zero(settings: Settings) -> None:
@@ -383,7 +390,7 @@ def test_a_tax_answer_without_a_sum_is_not_a_zero(settings: Settings) -> None:
     report.tax_debts.append(debt)
     report.provider_results.append(found(ProviderName.TAX_DEBT, [debt]))
 
-    assert view._facts(report) == ["Долг по налогам: сумма не названа"]
+    assert facts(report) == ["Долг по налогам: сумма не названа"]
 
 
 def test_self_employment_is_a_status_and_never_a_number(settings: Settings) -> None:
@@ -394,13 +401,13 @@ def test_self_employment_is_a_status_and_never_a_number(settings: Settings) -> N
     report = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
     report.self_employment.append(active)
     report.provider_results.append(found(ProviderName.SELF_EMPLOYED, [active]))
-    assert view._facts(report) == ["Самозанятость: да"]
+    assert facts(report) == ["Самозанятость: да"]
 
     former = SelfEmployedRecord(is_active=False, match_confidence=1.0)
     stale = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
     stale.self_employment.append(former)
     stale.provider_results.append(found(ProviderName.SELF_EMPLOYED, [former]))
-    assert view._facts(stale) == ["Самозанятость: нет"]
+    assert facts(stale) == ["Самозанятость: нет"]
 
 
 def test_account_blocks_are_counted_as_decisions(settings: Settings) -> None:
@@ -415,4 +422,4 @@ def test_account_blocks_are_counted_as_decisions(settings: Settings) -> None:
     report.account_blocks.extend(blocks)
     report.provider_results.append(found(ProviderName.ACCOUNT_BLOCK, blocks))
 
-    assert view._facts(report) == ["Блокировки счетов: 2"]
+    assert facts(report) == ["Блокировки счетов: 2"]

@@ -12,11 +12,13 @@ from collections.abc import Sequence
 from contextlib import suppress
 from datetime import timedelta
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.bot import report_actions, view
+from app.bot.markup import HTML, strip_tags
 from app.container import Container
 from app.db.repository import SearchRepository
 from app.domain.enums import SearchType
@@ -261,13 +263,39 @@ async def _edit_or_send(
     Правка на месте вместо нового сообщения: пользователь смотрит туда же, куда
     смотрел, и в чате не остаётся мусора. Если правка не прошла — сообщение
     удалили, прошло слишком много времени — отправляем обычным сообщением.
+
+    Карточка размечена, и обе отправки идут с ``parse_mode=HTML``. Отвергнутая
+    разметка карточку не теряет: текст уходит второй попыткой без тегов. Причина
+    в том, ради чего разметку так долго не включали, — в карточку едет чужой
+    текст, и достаточно одной строки, где забыли :func:`~app.bot.markup.esc`,
+    чтобы Telegram отверг сообщение целиком. Серая карточка — неприятность,
+    ненаступившая — потерянная проверка, за которую заплачено.
     """
     try:
-        await notice.edit_text(text, reply_markup=reply_markup)  # type: ignore[arg-type]
+        await _edit_html(notice, text, reply_markup)
     except Exception:
         logger.debug("report.edit_failed")
         await _safe_delete(notice)
-        await message.answer(text, reply_markup=reply_markup)  # type: ignore[arg-type]
+        await _answer_html(message, text, reply_markup)
+
+
+async def _edit_html(notice: Message, text: str, reply_markup: object) -> None:
+    try:
+        await notice.edit_text(text, parse_mode=HTML, reply_markup=reply_markup)  # type: ignore[arg-type]
+    except TelegramBadRequest:
+        # Разметка отвергнута — но только она. Сообщение, которое нельзя
+        # править вовсе (удалено, устарело), даёт ту же ошибку, и вторая
+        # попытка просто упадёт следом, уведя нас в отправку новым сообщением.
+        logger.warning("report.markup_rejected", where="edit")
+        await notice.edit_text(strip_tags(text), reply_markup=reply_markup)  # type: ignore[arg-type]
+
+
+async def _answer_html(message: Message, text: str, reply_markup: object) -> None:
+    try:
+        await message.answer(text, parse_mode=HTML, reply_markup=reply_markup)  # type: ignore[arg-type]
+    except TelegramBadRequest:
+        logger.warning("report.markup_rejected", where="answer")
+        await message.answer(strip_tags(text), reply_markup=reply_markup)  # type: ignore[arg-type]
 
 
 async def _safe_delete(message: Message) -> None:

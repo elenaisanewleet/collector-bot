@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from app.bot.markup import bold, esc
 from app.domain.enums import (
     MISSING_INPUT_TITLES,
     PROVIDER_TITLES,
@@ -238,7 +239,10 @@ def report_card(
         # Тот же баннер, что в текстовом отчёте: карточка с выдуманными данными
         # не должна быть неотличима от настоящей проверки.
         lines.extend((DEMO_BANNER, ""))
-    lines.append(report.subject.display_name)
+    # Имя — заголовок карточки, и набрано оно было тем же кеглем, что служебная
+    # строка про Росреестр. Экранируется обязательно: это чужая фамилия из чужой
+    # выгрузки, и «<» в ней уронил бы отправку целиком.
+    lines.append(bold(esc(report.subject.display_name)))
     # Идентификаторы — под именем. Раньше их здесь не было, с доводом «эхо уже
     # сказано сообщением о ходе проверки». Довод оказался неверным: отчёт ПРАВИТ
     # это самое сообщение, и всё, что в нём стояло, стирается. Паспорт и СНИЛС
@@ -246,15 +250,20 @@ def report_card(
     # позже, чем печаталось эхо.
     identifiers = identifiers_line(report.subject)
     if identifiers:
-        lines.append(identifiers)
-    lines.extend(notes)
-    lines.extend(("", VERDICT_LEAD[decision.verdict], decision.headline, ""))
+        lines.append(esc(identifiers))
+    # Эхо разбора — то, что оператор напечатал руками. Самый чужой текст во всей
+    # карточке, и экранировать его обязательно.
+    lines.extend(esc(note) for note in notes)
+    # Вердикт — это ответ на вопрос, ради которого проверку и запускали. Он и
+    # выделен; объяснение под ним остаётся обычным, иначе выделено всё сразу,
+    # то есть ничего.
+    lines.extend(("", bold(VERDICT_LEAD[decision.verdict]), esc(decision.headline), ""))
 
     if decision.debt_amount is not None:
-        lines.append(f"Наш долг: {format_amount(decision.debt_amount)}")
+        lines.append(f"Наш долг: {bold(format_amount(decision.debt_amount))}")
     if decision.state_fee is not None:
         basis = "не платится" if decision.fee_basis is FeeBasis.NONE else "к уплате"
-        lines.append(f"Пошлина: {format_amount(decision.state_fee)} — {basis}")
+        lines.append(f"Пошлина: {bold(format_amount(decision.state_fee))} — {basis}")
 
     score = report.recovery_score
     if score is not None:
@@ -263,13 +272,14 @@ def report_card(
         # ли пошлину. Формулировка из ТЗ дословно: «понял перспективу
         # взыскания».
         lines.append(
-            f"Перспектива взыскания: {score.score} из 100, "
+            f"Перспектива взыскания: {bold(f'{score.score} из 100')}, "
             f"данные полны на {round(score.confidence * 100)}%"
         )
 
     facts = _facts(report)
     if facts:
         lines.append("")
+        # Без esc: строки приходят уже размеченными и экранированными изнутри.
         lines.extend(facts)
 
     # Состояние источника определяет общая таблица (``reporting.source_state``);
@@ -279,7 +289,7 @@ def report_card(
     gaps = _gaps(report)
     if gaps:
         lines.append("")
-        lines.extend(gaps)
+        lines.extend(esc(gap) for gap in gaps)
 
     if report.from_cache:
         lines.append("")
@@ -341,6 +351,11 @@ def _facts(report: DebtorReport) -> list[str]:
     потому, что о нём говорят иначе: блоком ниже, причиной и сразу за всех
     («нужна дата рождения»). Пять строк «не спрашивали» подряд читаются как
     пять бед, хотя беда одна и чинится одним действием.
+
+    **Найденное выделено, ненайденное — нет.** Список из девяти строк, где
+    восемь «нет», глазами не читается: находка тонет среди них, а она и есть
+    ответ. Строки возвращаются уже размеченными и экранированными — карточке
+    остаётся вставить их как есть.
     """
     by_provider = {result.provider: result for result in report.provider_results}
     lines: list[str] = []
@@ -350,7 +365,8 @@ def _facts(report: DebtorReport) -> list[str]:
             continue
         state = source_state(result)
         if state.code is SourceStateCode.FOUND:
-            lines.append(f"{title}: {_found_value(provider, report, len(result.records))}")
+            value = _found_value(provider, report, len(result.records))
+            lines.append(f"{title}: {bold(esc(value))}")
         elif state.code is SourceStateCode.EMPTY:
             lines.append(f"{title}: нет")
         # Неспрошенное строкой не печатается вовсе, и это правило владелицы:
