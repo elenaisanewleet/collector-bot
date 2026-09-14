@@ -42,6 +42,7 @@ class NewDBAccountBlockProvider(NewDBMethodProvider):
     name = ProviderName.ACCOUNT_BLOCK
     title = "Блокировки счетов (ФНС)"
     methods = (NEWDB_METHOD,)
+    needs_individual_inn = True
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         inn = individual_inn(subject)

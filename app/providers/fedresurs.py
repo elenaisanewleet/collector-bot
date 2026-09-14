@@ -202,6 +202,7 @@ class NewDBBankruptcyProvider(NewDBMethodProvider):
     name = ProviderName.FEDRESURS
     title = "ЕФРСБ"
     methods = (NEWDB_METHOD,)
+    needs_individual_inn = True
 
     def missing_input_for(self, subject: SearchSubject) -> tuple[MissingInput, ...]:
         return () if individual_inn(subject) else (MissingInput.INN,)

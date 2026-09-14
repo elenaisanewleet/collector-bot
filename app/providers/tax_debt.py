@@ -51,6 +51,7 @@ class NewDBTaxDebtProvider(NewDBMethodProvider):
     name = ProviderName.TAX_DEBT
     title = "Налоговая задолженность"
     methods = (NEWDB_METHOD,)
+    needs_individual_inn = True
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         inn = individual_inn(subject)

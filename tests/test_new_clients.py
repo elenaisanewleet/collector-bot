@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import httpx
@@ -32,7 +33,7 @@ from app.db.repository import DebtorRepository, PhoneLookupRepository
 from app.domain.enums import MissingInput, ProviderName, ProviderStatus, SearchType
 from app.domain.identity import PersonName, SearchSubject
 from app.domain.models import InternalDebtorRecord, ProviderResult
-from app.providers.base import ProviderUnavailableError
+from app.providers.base import BaseProvider, ProviderUnavailableError
 from app.providers.identity_bridge import (
     InnBridgeProvider,
     InnBridgeResult,
@@ -685,14 +686,75 @@ async def test_the_bot_does_not_promise_to_skip_what_the_bridge_will_unlock(
 def test_the_promise_stays_when_there_is_no_passport_to_bridge_with(
     container: Container,
 ) -> None:
-    """А без паспорта оговорка обязана остаться: мост не пойдёт, и это правда."""
+    """А без паспорта оговорка обязана остаться: мост не пойдёт, и это правда.
+
+    Источники перечисляет реестр, а не эта строка: их было три, стало шесть, и
+    вписанный руками список успел устареть молча. Поэтому проверяется форма
+    обещания и один источник из списка, а не список целиком.
+    """
+    subject = SearchSubject(
+        search_type=SearchType.PERSON.value,
+        name=FOUND,
+        birth_date=date(1985, 7, 5),
+    )
+    inn_only = _with_inn_only_source(container)
+
+    note = common._progress_note(subject, inn_only)
+
+    assert note is not None
+    assert note.startswith("Без ИНН не спрошу ")
+    assert "блокировки счетов" in note
+
+
+def test_nothing_is_promised_away_when_no_source_needs_the_inn(
+    container: Container,
+) -> None:
+    """Терять нечего — и обещать оператору потерю не за что.
+
+    Демо-стенд как раз такой: его источники ищут по ФИО, и ИНН им не нужен. До
+    того как список стал приходить из реестра, строка была константой и обещала
+    неспрошенное банкротство там, где банкротство спрашивалось.
+    """
     subject = SearchSubject(
         search_type=SearchType.PERSON.value,
         name=FOUND,
         birth_date=date(1985, 7, 5),
     )
 
-    assert common._progress_note(subject, container) == common.NO_INN_NOTE
+    assert not container.registry.inn_only
+    assert common._progress_note(subject, container) is None
+
+
+class _InnOnlySource(BaseProvider):
+    """Подключённый источник, которому нужен ИНН физлица.
+
+    Заглушка, а не живой источник: проверяется фраза «без ИНН не спрошу …», а не
+    поведение конкретного реестра. Живой провайдер потребовал бы карту полей и
+    ключ — то есть настройку, к предмету теста отношения не имеющую.
+    """
+
+    # Блокировки счетов, а не банкротство: банкротство на демо-стенде уже есть,
+    # и второй провайдер с тем же именем реестр отвергает.
+    name = ProviderName.ACCOUNT_BLOCK
+    title = "Блокировки счетов (ФНС)"
+    needs_individual_inn = True
+
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def _fetch(self, subject: SearchSubject) -> ProviderResult:  # pragma: no cover
+        return ProviderResult(provider=self.name, status=ProviderStatus.NO_RESULTS)
+
+
+def _with_inn_only_source(container: Container) -> Container:
+    """Тот же контейнер, но с источником, которому нужен ИНН физлица."""
+    registry = ProviderRegistry(
+        internal=container.registry.internal,
+        external=[*container.registry.external, _InnOnlySource()],
+        inn_bridge=container.registry.inn_bridge,
+    )
+    return replace(container, registry=registry)
 
 
 # --------------------------------------- 6. что уже лежит в выгрузке — не терять

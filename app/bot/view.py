@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from app.bot.markup import bold, esc
 from app.domain.enums import (
     MISSING_INPUT_TITLES,
+    PROVIDER_SUBJECTS,
     PROVIDER_TITLES,
     MissingInput,
     ProviderName,
@@ -25,6 +26,7 @@ from app.domain.enums import (
 from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport
 from app.domain.verdict import FeeBasis, Verdict, VerdictDecision
+from app.providers.base import BaseProvider
 from app.providers.tax_debt import total_debt as total_tax_debt
 from app.services.reporting import DEMO_BANNER, SourceStateCode, source_state
 from app.utils.dates import format_date, format_datetime
@@ -375,6 +377,29 @@ def _facts(report: DebtorReport) -> list[str]:
         # сгруппированно: «нужна дата рождения» одной строкой на всех, а не
         # пять строк «не спрашивали» подряд.
     return lines
+
+
+def inn_only_sources(providers: Sequence[BaseProvider]) -> str:
+    """«банкротство, статус ИП и арбитраж» — из реестра, а не из памяти.
+
+    Перечисление собирается по :data:`PROVIDER_SUBJECTS`, то есть по вопросам, на
+    которые источники отвечают, а не по именам реестров: «без ИНН не спрошу
+    ЕФРСБ, ФНС и Суды» оператору не говорит ничего.
+
+    Принимает готовый список провайдеров (обычно ``registry.inn_only``), а не
+    контейнер: та же фраза нужна экрану «Откуда данные», справке и строке
+    ожидания, и ни одному из трёх не нужно знать, как устроен контейнер.
+    """
+    subjects = [
+        subject
+        for provider in providers
+        if (subject := PROVIDER_SUBJECTS.get(provider.name)) is not None
+    ]
+    if not subjects:
+        return ""
+    if len(subjects) == 1:
+        return subjects[0]
+    return ", ".join(subjects[:-1]) + f" и {subjects[-1]}"
 
 
 def _found_value(provider: ProviderName, report: DebtorReport, count: int) -> str:

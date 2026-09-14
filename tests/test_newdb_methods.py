@@ -1570,3 +1570,69 @@ async def test_a_broken_map_keeps_the_body_it_broke_on(
     assert result.error_code == "unexpected_schema"
     assert result.raw_response, "тело потеряно ровно там, где оно и нужно"
     assert "не та форма" in result.raw_response
+
+
+# ------------------------------------------- флаг «ищет только по ИНН»
+
+
+def test_every_source_gated_on_the_inn_declares_it() -> None:
+    """Флаг ``needs_individual_inn`` не имеет права разойтись с кодом.
+
+    Флаг читают экраны: справка, «Откуда данные», подпись моста и строка в
+    ожидании собирают по нему фразу «без ИНН не спрошу …». Пока фразы были
+    написаны словами, они устарели молча — источников стало вдвое больше, и все
+    четыре экрана начали обещать неверное. Флаг это чинит ровно до тех пор, пока
+    сам верен.
+
+    Проверяется по исходнику ``_fetch``: гейт на ИНН выглядит в этом проекте
+    одинаково — вызов :func:`individual_inn` с отказом ``insufficient_query``.
+    Тест грубый намеренно; тонкий здесь не нужен, нужен несбиваемый.
+    """
+    import inspect
+
+    from app.providers import (
+        account_block,
+        arbitr_legal,
+        court,
+        fedresurs,
+        fns,
+        fssp,
+        inheritance,
+        pledge,
+        self_employed,
+        tax_debt,
+        wanted,
+    )
+    from app.providers import (
+        property as property_module,
+    )
+    from app.providers.base import BaseProvider
+
+    modules = (
+        account_block,
+        arbitr_legal,
+        court,
+        fedresurs,
+        fns,
+        fssp,
+        inheritance,
+        pledge,
+        property_module,
+        self_employed,
+        tax_debt,
+        wanted,
+    )
+    for module in modules:
+        for name, member in vars(module).items():
+            if not isinstance(member, type) or not issubclass(member, BaseProvider):
+                continue
+            if member.__module__ != module.__name__ or inspect.isabstract(member):
+                continue
+            fetch = member.__dict__.get("_fetch")
+            if fetch is None:
+                continue
+            gated = "individual_inn(subject)" in inspect.getsource(fetch)
+            assert member.needs_individual_inn == gated, (
+                f"{name}: гейт на ИНН {'есть' if gated else 'отсутствует'}, "
+                f"а флаг needs_individual_inn = {member.needs_individual_inn}"
+            )

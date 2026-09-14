@@ -36,6 +36,7 @@ class NewDBSelfEmployedProvider(NewDBMethodProvider):
     name = ProviderName.SELF_EMPLOYED
     title = "Самозанятость (НПД)"
     methods = (NEWDB_METHOD,)
+    needs_individual_inn = True
 
     async def _fetch(self, subject: SearchSubject) -> ProviderResult:
         inn = individual_inn(subject)

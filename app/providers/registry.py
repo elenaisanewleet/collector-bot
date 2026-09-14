@@ -95,6 +95,25 @@ class ProviderRegistry:
         return list(self._external)
 
     @property
+    def inn_only(self) -> list[BaseProvider]:
+        """Подключённые источники, которые ищут ТОЛЬКО по ИНН физлица.
+
+        Существует ради экранов, а не ради кода. Четыре места — справка, экран
+        «Откуда данные», подпись моста и строка в ожидании — перечисляли эти
+        источники словами: «банкротство, ИП и арбитраж». Список был верен, пока
+        их было три; теперь их шесть, и все четыре экрана начали врать молча.
+
+        Отбор по ``is_configured`` намеренный. Экран отвечает на вопрос «что я
+        потеряю без ИНН», и неподключённый источник в этом ответе не участвует:
+        его не спросят в любом случае.
+        """
+        return [
+            provider
+            for provider in self._external
+            if provider.needs_individual_inn and provider.is_configured
+        ]
+
+    @property
     def name_bridge(self) -> PassportByNameProvider | None:
         """Мост «ФИО + дата рождения → паспорт», если он настроен.
 
