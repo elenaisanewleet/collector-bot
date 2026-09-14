@@ -590,3 +590,83 @@ def test_a_slow_provider_is_told_apart_from_an_empty_one() -> None:
     assert slow.label != empty.label
     assert "повтор" in slow.label
     assert not slow.answered and empty.answered
+
+
+# --------------------------------------------- отказ называет свою причину
+
+
+def test_a_code_with_one_cause_is_translated_by_the_dictionary() -> None:
+    """Причина одна на все вызовы — её и печатаем, сообщение ничего не добавит."""
+    result = ProviderResult(
+        provider=ProviderName.FSSP,
+        status=ProviderStatus.UNAVAILABLE,
+        error_code="unauthorized",
+        error_message="HTTP 401",
+    )
+
+    line = reporting.unanswered_line(result)
+
+    assert line == "Не проверено: поставщик данных отверг ключ доступа (unauthorized)."
+
+
+def test_an_upstream_error_speaks_in_the_words_of_the_source() -> None:
+    """«недоступно (upstream_error)» — код вместо ответа на вопрос «почему».
+
+    Так и пришло с прода: самозанятость отказала, и ни отчёт, ни лог не могли
+    сказать, чинится это повтором, настройкой или звонком поставщику. У этого
+    кода причина своя на каждый вызов и целиком лежит в сообщении — общая фраза
+    из словаря выбросила бы ровно то, ради чего строку читают.
+    """
+    result = ProviderResult(
+        provider=ProviderName.SELF_EMPLOYED,
+        status=ProviderStatus.UNAVAILABLE,
+        error_code="upstream_error",
+        error_message="Источник ответил 500 (service unavailable)",
+    )
+
+    line = reporting.unanswered_line(result)
+
+    assert line == ("Не проверено: источник ответил 500 (service unavailable) (upstream_error).")
+    assert "источник временно недоступен" not in line
+
+
+def test_an_abbreviation_keeps_its_capitals() -> None:
+    """Фраза со строчной, аббревиатура — нет: «hTTP 500» читалось бы опечаткой."""
+    result = ProviderResult(
+        provider=ProviderName.SELF_EMPLOYED,
+        status=ProviderStatus.UNAVAILABLE,
+        error_code="upstream_error",
+        error_message="HTTP 500",
+    )
+
+    assert reporting.unanswered_line(result) == "Не проверено: HTTP 500 (upstream_error)."
+
+
+def test_an_unknown_code_without_a_message_still_says_something() -> None:
+    """Ни словаря, ни сообщения — общая фраза лучше пустоты."""
+    result = ProviderResult(
+        provider=ProviderName.SELF_EMPLOYED,
+        status=ProviderStatus.UNAVAILABLE,
+        error_code="upstream_error",
+        error_message="",
+    )
+
+    assert reporting.unanswered_line(result) == (
+        f"Не проверено: {reporting.UNAVAILABLE_FALLBACK} (upstream_error)."
+    )
+
+
+def test_the_reason_never_runs_past_the_line() -> None:
+    """Поставщик умеет прислать простыню — в отчёт она едет обрезанной."""
+    result = ProviderResult(
+        provider=ProviderName.SELF_EMPLOYED,
+        status=ProviderStatus.UNAVAILABLE,
+        error_code="upstream_error",
+        error_message="Источник ответил 500 " + "и объяснил это очень длинно " * 20,
+    )
+
+    line = reporting.unanswered_line(result)
+
+    assert line is not None
+    assert len(line) < reporting.MAX_REASON_LENGTH + 60
+    assert line.endswith("(upstream_error).")

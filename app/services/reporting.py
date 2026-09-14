@@ -371,12 +371,49 @@ def unanswered_line(
             code = result.error_code if result else None
             if not code:
                 return "Не проверено: источник временно недоступен."
-            reason = ERROR_REASONS.get(code, "источник временно недоступен")
-            return f"Не проверено: {reason} ({code})."
+            return f"Не проверено: {_refusal_reason(code, result, UNAVAILABLE_FALLBACK)} ({code})."
         case _:
             code = (result.error_code if result else None) or "unknown"
-            reason = ERROR_REASONS.get(code, "ошибка обращения к источнику")
-            return f"Не проверено: {reason} ({code})."
+            return f"Не проверено: {_refusal_reason(code, result, ERROR_FALLBACK)} ({code})."
+
+
+UNAVAILABLE_FALLBACK = "источник временно недоступен"
+ERROR_FALLBACK = "ошибка обращения к источнику"
+#: Сколько букв причины помещается в строку отчёта.
+MAX_REASON_LENGTH = 120
+
+
+def _refusal_reason(code: str, result: ProviderResult | None, fallback: str) -> str:
+    """Почему источник не ответил — по возможности его собственными словами.
+
+    :data:`ERROR_REASONS` объясняет коды, у которых причина ОДНА на все вызовы:
+    кончился баланс, отвергнут ключ, не успел ответить. Такой код и переводится
+    словарём — сообщение к нему ничего не добавит.
+
+    Но есть коды, у которых причина СВОЯ на каждый вызов, и главный из них —
+    ``upstream_error``: источник за агрегатором ответил своей ошибкой, и вся
+    полезная часть («Источник ответил 500», «адрес не разобран») лежит в
+    сообщении. Словаря для него нет намеренно: любая общая фраза выбросила бы
+    ровно то, ради чего строку читают. Живьём это стоило одного прогона —
+    самозанятость вернула ``недоступно (upstream_error)``, и ни отчёт, ни лог не
+    могли сказать, чинится это повтором, настройкой или звонком поставщику.
+
+    Код в скобках остаётся в любом случае: по нему ищут в логах, и он обязан
+    совпадать с блоком ИСТОЧНИКИ.
+    """
+    reason = ERROR_REASONS.get(code)
+    if reason is not None:
+        return reason
+    message = (result.error_message if result else "") or ""
+    message = message.strip()
+    if not message:
+        return fallback
+    # Сообщение писалось как самостоятельная фраза и начинается с большой
+    # буквы, а здесь оно встаёт в середину строки. Аббревиатуру («HTTP 500»)
+    # это не трогает: у неё заглавная и вторая буква.
+    if message[:1].isupper() and not message[1:2].isupper():
+        message = message[0].lower() + message[1:]
+    return truncate(message, MAX_REASON_LENGTH)
 
 
 def answered_count(report: DebtorReport) -> tuple[int, int]:
