@@ -132,12 +132,18 @@ def _params_for(subject: SearchSubject, email: str) -> dict[str, str]:
 
     ``email`` источник использует для отправки формы МВД и обратно не
     возвращает.
+
+    Дата — ТОЛЬКО ``YYYY-MM-DD``. Спецификация поставщика обещает оба формата
+    («Допускается формат DD.MM.YYYY или YYYY-MM-DD»), живой сервис отвергает
+    точечный: ``dob is not valid (must be YYYY-MM-DD) - 20.12.1996``, HTTP 400.
+    Это второй раз, когда документация этого метода разошлась с ним самим, —
+    первым был обязательный ``email``, которого в примерах нет.
     """
     assert subject.name is not None and subject.birth_date is not None
     params = {
         "lastname": subject.name.last_name,
         "firstname": subject.name.first_name,
-        "dob": subject.birth_date.strftime("%d.%m.%Y"),
+        "dob": subject.birth_date.strftime("%Y-%m-%d"),
         "email": email,
     }
     if subject.name.middle_name:

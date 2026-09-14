@@ -224,7 +224,10 @@ def test_the_request_carries_the_email_the_contract_demands() -> None:
     assert params["lastname"] == "Тестов"
     assert params["firstname"] == "Андрей"
     assert params["secondname"] == "Сергеевич"
-    assert params["dob"] == "12.03.1985"
+    # Только ISO: живой сервис отвергает DD.MM.YYYY, хотя спецификация обещает
+    # оба формата. Проверяется формат, а не наличие ключа, — именно на нём
+    # источник падал с HTTP 400 на каждом должнике.
+    assert params["dob"] == "1985-03-12"
     assert "country" not in params
 
 
