@@ -291,3 +291,128 @@ def test_a_search_by_inn_alone_is_titled_by_the_masked_inn() -> None:
 
     assert subject.display_name != "—"
     assert subject.display_name == "77********01"
+
+
+# ------------------------------------------------ строки четырёх новых источников
+
+
+def found(provider: ProviderName, records: list[Any]) -> ProviderResult:
+    return ProviderResult(provider=provider, status=ProviderStatus.SUCCESS, records=list(records))
+
+
+def test_a_namesake_in_the_wanted_registry_is_not_called_a_finding(
+    settings: Settings,
+) -> None:
+    """«Розыск МВД: 1» под человеком, которого никто не ищет.
+
+    МВД ищет по строке имени, и полный тёзка попадает в выдачу наравне с
+    должником. Числом такая запись читается как «должник в розыске» — то есть
+    как «подавать бессмысленно», — и владелец закрыл бы дело, по которому можно
+    было взыскать. Это самая дорогая ошибка, какую карточка способна сделать,
+    поэтому числом печатаются только записи, подтверждённые датой рождения.
+    """
+    from app.domain.models import WantedRecord
+
+    namesake = WantedRecord(full_name="Тестов Андрей Сергеевич", match_confidence=0.5)
+    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12)))
+    report.wanted.append(namesake)
+    report.provider_results.append(found(ProviderName.WANTED, [namesake]))
+
+    assert view._facts(report) == ["Розыск МВД: однофамилец, не должник"]
+    assert "Розыск МВД: 1" not in card(report, settings)
+
+
+def test_a_confirmed_wanted_record_is_counted(settings: Settings) -> None:
+    """Совпала дата рождения — это должник, и число здесь на месте."""
+    from app.domain.models import WantedRecord
+
+    debtor = WantedRecord(
+        full_name="Тестов Андрей Сергеевич",
+        birth_date=date(1985, 3, 12),
+        birth_date_match=True,
+        match_confidence=1.0,
+    )
+    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12)))
+    report.wanted.append(debtor)
+    report.provider_results.append(found(ProviderName.WANTED, [debtor]))
+
+    assert view._facts(report) == ["Розыск МВД: 1"]
+
+
+def test_the_tax_debt_line_prints_the_sum_not_the_row_count(settings: Settings) -> None:
+    """«Долг по налогам: 1» не говорит ни о чём, сумма говорит всё."""
+    from decimal import Decimal
+
+    from app.domain.models import TaxDebtRecord
+
+    debt = TaxDebtRecord(amount=Decimal("12500"), match_confidence=1.0)
+    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
+    report.tax_debts.append(debt)
+    report.provider_results.append(found(ProviderName.TAX_DEBT, [debt]))
+
+    (line,) = view._facts(report)
+    assert line.startswith("Долг по налогам: ")
+    assert "12" in line and "500" in line
+    assert line != "Долг по налогам: 1"
+
+
+def test_a_zero_tax_debt_is_a_real_answer_and_says_so(settings: Settings) -> None:
+    """Ноль — утверждение «проверено, долгов нет», и печатается словом.
+
+    Записью он при этом остаётся: источник ответил, строка есть, и молча
+    выбросить её значило бы отдать читателю пустое место вместо ответа.
+    """
+    from decimal import Decimal
+
+    from app.domain.models import TaxDebtRecord
+
+    debt = TaxDebtRecord(amount=Decimal("0"), match_confidence=1.0)
+    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
+    report.tax_debts.append(debt)
+    report.provider_results.append(found(ProviderName.TAX_DEBT, [debt]))
+
+    assert view._facts(report) == ["Долг по налогам: нет"]
+
+
+def test_a_tax_answer_without_a_sum_is_not_a_zero(settings: Settings) -> None:
+    """Источник ответил, суммы не назвал. Это не ноль: молчание — не утверждение."""
+    from app.domain.models import TaxDebtRecord
+
+    debt = TaxDebtRecord(amount=None, match_confidence=1.0)
+    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
+    report.tax_debts.append(debt)
+    report.provider_results.append(found(ProviderName.TAX_DEBT, [debt]))
+
+    assert view._facts(report) == ["Долг по налогам: сумма не названа"]
+
+
+def test_self_employment_is_a_status_and_never_a_number(settings: Settings) -> None:
+    """Запись о снятом с учёта — такая же найденная запись, как о действующем."""
+    from app.domain.models import SelfEmployedRecord
+
+    active = SelfEmployedRecord(is_active=True, match_confidence=1.0)
+    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
+    report.self_employment.append(active)
+    report.provider_results.append(found(ProviderName.SELF_EMPLOYED, [active]))
+    assert view._facts(report) == ["Самозанятость: да"]
+
+    former = SelfEmployedRecord(is_active=False, match_confidence=1.0)
+    stale = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
+    stale.self_employment.append(former)
+    stale.provider_results.append(found(ProviderName.SELF_EMPLOYED, [former]))
+    assert view._facts(stale) == ["Самозанятость: нет"]
+
+
+def test_account_blocks_are_counted_as_decisions(settings: Settings) -> None:
+    """Блокировки — это решения ФНС, и число решений здесь значит именно число."""
+    from app.domain.models import AccountBlockRecord
+
+    blocks = [
+        AccountBlockRecord(bank_bic="044525225", decision_number="1", match_confidence=1.0),
+        AccountBlockRecord(bank_bic="044030653", decision_number="2", match_confidence=1.0),
+    ]
+    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
+    report.account_blocks.extend(blocks)
+    report.provider_results.append(found(ProviderName.ACCOUNT_BLOCK, blocks))
+
+    assert view._facts(report) == ["Блокировки счетов: 2"]

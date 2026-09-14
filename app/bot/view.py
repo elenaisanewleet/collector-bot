@@ -24,6 +24,7 @@ from app.domain.enums import (
 from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport
 from app.domain.verdict import FeeBasis, Verdict, VerdictDecision
+from app.providers.tax_debt import total_debt as total_tax_debt
 from app.services.reporting import DEMO_BANNER, SourceStateCode, source_state
 from app.utils.dates import format_date, format_datetime
 from app.utils.formatting import format_phone, truncate
@@ -292,10 +293,19 @@ def report_card(
 
 
 #: Что показывать строкой в карточке и как это назвать. Порядок — по тому, что
-#: решает судьбу взыскания: сперва производства и банкротство (они и есть ответ
-#: на «есть ли смысл»), потом остальное. Источники, которых нет в этом списке,
-#: в карточку не идут: их место в полном отчёте по кнопке.
+#: решает судьбу взыскания: сперва розыск, производства и банкротство (они и
+#: есть ответ на «есть ли смысл»), потом остальное.
+#:
+#: **Список обязан покрывать всё, что считает кнопка «Открыть отчёт (N
+#: записей)»** (:attr:`DebtorReport.fact_count`). Разошлись они однажды и сразу
+#: дали жалобу: кнопка называла число, которого в карточке не было видно, и
+#: сложить его владельцу было не из чего. Подключая источник, заводите строку
+#: здесь — или не считайте его там.
 _FACT_TITLES: tuple[tuple[ProviderName, str], ...] = (
+    # Розыск стоит первым по той же логике, по которой список вообще
+    # упорядочен: человек в розыске — это не «сложный должник», это «повестку
+    # вручать некому», и дальше карточку можно не читать.
+    (ProviderName.WANTED, "Розыск МВД"),
     (ProviderName.FSSP, "Исполнительные производства"),
     (ProviderName.FEDRESURS, "Банкротство"),
     (ProviderName.INHERITANCE, "Наследственные дела"),
@@ -309,6 +319,12 @@ _FACT_TITLES: tuple[tuple[ProviderName, str], ...] = (
     (ProviderName.PLEDGE, "Залоги"),
     (ProviderName.FNS, "Бизнес"),
     (ProviderName.COURT, "Суды"),
+    # Счета заказчик назвал в сценарии прямым текстом. Остатков не покажет
+    # никто, а решения ФНС о приостановлении операций — покажут, и в них стоит
+    # БИК банка: именно то, что нужно приставу.
+    (ProviderName.ACCOUNT_BLOCK, "Блокировки счетов"),
+    (ProviderName.TAX_DEBT, "Долг по налогам"),
+    (ProviderName.SELF_EMPLOYED, "Самозанятость"),
 )
 
 
@@ -334,7 +350,7 @@ def _facts(report: DebtorReport) -> list[str]:
             continue
         state = source_state(result)
         if state.code is SourceStateCode.FOUND:
-            lines.append(f"{title}: {len(result.records)}")
+            lines.append(f"{title}: {_found_value(provider, report, len(result.records))}")
         elif state.code is SourceStateCode.EMPTY:
             lines.append(f"{title}: нет")
         # Неспрошенное строкой не печатается вовсе, и это правило владелицы:
@@ -343,6 +359,43 @@ def _facts(report: DebtorReport) -> list[str]:
         # сгруппированно: «нужна дата рождения» одной строкой на всех, а не
         # пять строк «не спрашивали» подряд.
     return lines
+
+
+def _found_value(provider: ProviderName, report: DebtorReport, count: int) -> str:
+    """Что написать после двоеточия, когда источник что-то нашёл.
+
+    По умолчанию — число записей: «Исполнительные производства: 3» отвечает на
+    вопрос сразу. Но у трёх источников число записей не значит ничего полезного
+    и в двух случаях из трёх врёт.
+
+    **Розыск.** МВД ищет по строке имени, и полный тёзка попадает в выдачу
+    наравне с должником. «Розыск МВД: 1» под карточкой человека, которого никто
+    не ищет, — самая дорогая ошибка, какую этот бот может сделать: владелец
+    закроет дело, по которому можно было взыскать. Поэтому число печатается
+    только для записей, подтверждённых датой рождения, а однофамилец назван
+    однофамильцем.
+
+    **Налоговый долг.** Это сумма, а не счётчик: «Долг по налогам: 1» не говорит
+    ни о чём, «12 500 ₽» говорит всё. Ноль здесь — значащий ответ («проверено,
+    долгов нет»), и он тоже печатается словом.
+
+    **Самозанятость.** Это статус, и запись о снятом с учёта — такая же
+    найденная запись, как о действующем. Числа здесь быть не может вовсе.
+    """
+    if provider is ProviderName.WANTED:
+        confirmed = [item for item in report.wanted if item.is_confirmed]
+        return str(len(confirmed)) if confirmed else "однофамилец, не должник"
+    if provider is ProviderName.TAX_DEBT:
+        total = total_tax_debt([item for item in report.tax_debts if item.is_usable])
+        if total is None:
+            # Источник ответил, но суммы не назвал. Это не ноль: ноль —
+            # утверждение, а молчание о сумме утверждением не является.
+            return "сумма не названа"
+        return format_amount(total) if total else "нет"
+    if provider is ProviderName.SELF_EMPLOYED:
+        active = any(item.is_active is True for item in report.self_employment if item.is_usable)
+        return "да" if active else "нет"
+    return str(count)
 
 
 def _gaps(report: DebtorReport) -> list[str]:
