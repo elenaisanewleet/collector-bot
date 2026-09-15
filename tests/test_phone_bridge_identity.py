@@ -548,3 +548,46 @@ def test_a_long_value_is_cut_before_it_becomes_a_fingerprint() -> None:
 
     assert len(shape) <= MAX_SHAPE + 1
     assert shape.endswith("…")
+
+
+def test_an_empty_key_is_told_apart_from_a_format_we_do_not_read() -> None:
+    """Два случая, которые в логе выглядели одинаково и лечатся противоположным.
+
+    Оба видены живьём на одном и том же поставщике, по разным должникам:
+
+    *   ``birth_date`` пришёл ключом без значения — поставщик про этого человека
+        даты не знает, и чинить у нас нечего;
+    *   ``birth_date`` пришёл значением, которого разбор не понял — это наша
+        беда и одна строка в разборе.
+
+    До этой правки различить их можно было только пересечением трёх списков
+    вручную. Расшифровывать пришлось трижды.
+    """
+    from app.providers.phone_bridge import _absent, _shapes
+
+    fields = ("birth_date", "inn", "passport", "snils", "passport_issued", "address")
+    found = ["address", "passport"]
+
+    blank = [{"fio": "Х", "passport": "7314041057", "birth_date": "", "inn": None}]
+    assert _shapes(blank, fields, found) == {}
+    assert _absent(fields, found, _shapes(blank, fields, found)) == ["birth_date", "inn", "snils"]
+
+    odd = [{"fio": "Х", "birth_date": "1986-04-19T00:00:00"}]
+    shapes = _shapes(odd, fields, found)
+    assert shapes == {"birth_date": "9999-99-99A99:99:99"}
+    # Поле с непонятым значением в «пришло пустым» не попадает: это другой случай.
+    assert "birth_date" not in _absent(fields, found, shapes)
+
+
+def test_a_field_without_a_key_table_is_not_called_empty() -> None:
+    """Про что разбор не спрашивал, про то и «пришло пустым» — домысел.
+
+    ``passport_issued`` собирается не по одному ключу, а из блока паспорта, и
+    таблицы синонимов у него нет. Назвать его пустым значило бы утверждать за
+    поставщика то, чего мы у него не спрашивали.
+    """
+    from app.providers.phone_bridge import _absent
+
+    fields = ("birth_date", "passport_issued")
+
+    assert _absent(fields, [], {}) == ["birth_date"]

@@ -280,6 +280,7 @@ def _read_rows(
     # другого, а лог живёт дольше и расходится шире, чем отчёт.
     fields = ("birth_date", "inn", "passport", "snils", "passport_issued", "address")
     found = sorted(field for field in fields if getattr(result, field) is not None)
+    shapes = _shapes(kin, fields, found)
     logger.info(
         "phone_bridge.parsed",
         rows=len(rows),
@@ -306,7 +307,15 @@ def _read_rows(
         # Печатается ШАБЛОН, а не значение: цифры заменены девятками, буквы —
         # латинской A, разделители оставлены как есть. «9999-99-99» и
         # «99.99.9999» называют формат точно и не говорят о человеке ничего.
-        shapes=_shapes(kin, fields, found),
+        shapes=shapes,
+        # И ПРЯМОЙ ВЫВОД, потому что три списка выше приходится сверять между
+        # собой, а вывод из них каждый раз один и тот же. Поле здесь, когда
+        # ключ в ответе ЕСТЬ, а непустого значения нет ни в одном блоке: то
+        # есть поставщик про этого человека поля не знает, и чинить нечего.
+        #
+        # Расшифровывать «found без birth_date, но birth_date в keys, и shapes
+        # пустой» пришлось трижды. На третий раз дешевле написать словами.
+        empty=_absent(fields, found, shapes),
     )
     return result
 
@@ -316,23 +325,33 @@ def _read_rows(
 MAX_SHAPE = 24
 
 
-def _shapes(kin: list[RecordDict], fields: tuple[str, ...], found: list[str]) -> dict[str, str]:
-    """Форма первого непустого значения — для полей, которые не разобрались.
+def _field_keys() -> dict[str, tuple[str, ...]]:
+    """Под какими ключами лежит каждое поле ответа поставщика.
 
-    Только для неразобравшихся: у остальных форма ничего не объясняет, а лог
-    ради неё становится вдвое длиннее.
+    Функция, а не модульная константа, по той же причине, что и список в
+    :func:`_marks`: ``_ADDRESS_KEYS`` объявлен ниже по файлу, и константа упала
+    бы при импорте. Тело же вычисляется при вызове, когда объявлено всё.
 
-    Таблица ключей собирается внутри функции, а не рядом с ней, — по той же
-    причине, что и в :func:`_marks`: ``_ADDRESS_KEYS`` объявлен ниже по файлу, и
-    модульная константа упала бы при импорте.
+    Один источник правды на два потребителя — форму значения и вывод «поле
+    пришло пустым». Разойдись они, лог сообщал бы одно про одни поля и другое
+    про другие.
     """
-    field_keys: dict[str, tuple[str, ...]] = {
+    return {
         "birth_date": ("birth_date", "dob"),
         "inn": ("inn", "innfiz"),
         "passport": ("passport", "passport_number"),
         "snils": ("snils",),
         "address": _ADDRESS_KEYS,
     }
+
+
+def _shapes(kin: list[RecordDict], fields: tuple[str, ...], found: list[str]) -> dict[str, str]:
+    """Форма первого непустого значения — для полей, которые не разобрались.
+
+    Только для неразобравшихся: у остальных форма ничего не объясняет, а лог
+    ради неё становится вдвое длиннее.
+    """
+    field_keys = _field_keys()
     shapes: dict[str, str] = {}
     for field in fields:
         if field in found:
@@ -346,6 +365,25 @@ def _shapes(kin: list[RecordDict], fields: tuple[str, ...], found: list[str]) ->
                 shapes[field] = _shape(raw)
                 break
     return shapes
+
+
+def _absent(fields: tuple[str, ...], found: list[str], shapes: dict[str, str]) -> list[str]:
+    """Поля, у которых ключ в ответе есть, а непустого значения нет нигде.
+
+    Прямой вывод вместо сверки трёх списков. «Поставщик не знает» и «мы не
+    поняли формат» лечатся противоположным, а в логе различались только
+    пересечением ``found``, ``keys`` и ``shapes`` — расшифровывать это вручную
+    пришлось трижды, прежде чем стало ясно, что дешевле написать словами.
+
+    Поле без таблицы ключей сюда не попадает: про него разбор ничего не
+    спрашивал, и «пришло пустым» про него — не утверждение, а домысел.
+    """
+    field_keys = _field_keys()
+    return sorted(
+        field
+        for field in fields
+        if field not in found and field not in shapes and field in field_keys
+    )
 
 
 def _shape(raw: object) -> str:
