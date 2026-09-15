@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,12 @@ from app.domain.enums import ProviderStatus, SearchType
 from app.domain.identity import SearchSubject
 from app.providers.base import NO_CONTEXT
 from app.providers.identity_bridge import InnBridgeProvider
-from app.providers.phone_bridge import PhoneNameProvider, PhoneNameResult, build_phone_bridge
+from app.providers.phone_bridge import (
+    PhoneNameProvider,
+    PhoneNameResult,
+    _read_rows,
+    build_phone_bridge,
+)
 from app.providers.registry import build_inn_bridge
 
 BASE = "https://bridge.example.test"
@@ -591,3 +597,56 @@ def test_a_field_without_a_key_table_is_not_called_empty() -> None:
     fields = ("birth_date", "passport_issued")
 
     assert _absent(fields, [], {}) == ["birth_date"]
+
+
+def test_the_birth_date_is_read_from_every_key_the_vendor_uses() -> None:
+    """Дата рождения под ключом ``bday`` — и она берётся.
+
+    Живой ответ разложен по блокам из разных утечек, и дата пришла в блоке, где
+    ключ называется ``bday``, а имя записано заглавными. В соседнем блоке
+    ``birth_date`` есть, но пустой — поэтому бот сообщил «дату рождения
+    поставщик не знает» про человека, у которого она в ответе лежит.
+
+    Данные синтетические: живой ответ несёт персональные данные третьего лица и
+    в репозиторий не попадает ни в каком виде.
+    """
+    rows = [
+        {
+            "full_name": "Тестов Олег Иванович",
+            "phone": "79990001122",
+            "passport": "1234567890",
+            "birth_date": "",
+        },
+        {"bday": "1994-03-17", "phone": "79990001122", "name": "ТЕСТОВ ОЛЕГ ИВАНОВИЧ"},
+    ]
+
+    result = _read_rows(rows, phone="+79990001122", provider=_provider())
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.birth_date == date(1994, 3, 17)
+    assert result.passport == "1234567890"
+
+
+def test_one_table_of_synonyms_serves_the_parse_and_the_contradiction_check() -> None:
+    """Синоним, известный разбору и неизвестный сверке блоков, страшнее пропуска.
+
+    Список ключей лежал четырьмя копиями — в разборе поля, в выборе якоря, в
+    сверке блоков на противоречие и в диагностике. Добавить синоним в одну
+    копию значило бы: дату разбор берёт, а сверка её не видит — и к якорю
+    попадает блок с ЧУЖОЙ датой рождения, из которого доберутся остальные поля.
+    Личность собралась бы из двух разных людей, и по отчёту это не проверить.
+
+    Поэтому проверяется не наличие ключа в таблице, а то, что сверка блоков
+    НА САМОМ ДЕЛЕ отвергает чужую дату, записанную любым из синонимов.
+    """
+    from app.providers.phone_bridge import _field_keys, _marks
+
+    for key in _field_keys()["birth_date"]:
+        marks = _marks({"full_name": "Тестов Олег Иванович", key: "1994-03-17"})
+        assert marks.get("birth_date") == date(1994, 3, 17), f"ключ {key} не опознан сверкой"
+
+
+def _provider() -> PhoneNameProvider:
+    from app.config import get_settings
+
+    return PhoneNameProvider(get_settings())

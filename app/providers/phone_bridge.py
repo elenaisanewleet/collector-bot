@@ -260,7 +260,7 @@ def _read_rows(
         status=ProviderStatus.SUCCESS,
         records=(),
         name=name,
-        birth_date=_pick(kin, _read_day, "birth_date", "dob"),
+        birth_date=_pick(kin, _read_day, *_field_keys()["birth_date"]),
         inn=_pick(kin, _individual_inn, "inn", "innfiz"),
         passport=passport,
         snils=_pick(kin, _read_snils, "snils"),
@@ -332,17 +332,39 @@ def _field_keys() -> dict[str, tuple[str, ...]]:
     :func:`_marks`: ``_ADDRESS_KEYS`` объявлен ниже по файлу, и константа упала
     бы при импорте. Тело же вычисляется при вызове, когда объявлено всё.
 
-    Один источник правды на два потребителя — форму значения и вывод «поле
-    пришло пустым». Разойдись они, лог сообщал бы одно про одни поля и другое
-    про другие.
+    Один источник правды на ЧЕТЫРЁХ потребителей: разбор поля, выбор якоря,
+    сверку блоков на противоречие и диагностику. До этой правки список синонимов
+    лежал в каждом из четырёх мест своей копией — и стоило это ровно того, чего
+    и должно было: живой ответ прислал дату рождения под ключом ``bday``,
+    которого не было ни в одной копии, и бот сообщил «дату рождения поставщик не
+    знает» про человека, у которого она в ответе есть.
+
+    Добавить синоним в одно место и забыть про три — та же беда с отсрочкой:
+    разбор бы дату взял, а сверка блоков на противоречие её бы не увидела и
+    пустила бы к якорю блок с ЧУЖОЙ датой рождения.
     """
     return {
-        "birth_date": ("birth_date", "dob"),
+        # ``bday`` подтверждён живым ответом: блок из утечки банка несёт
+        # ``bday``, ``phone`` и ``name`` заглавными, а соседний блок — тот же
+        # ``birth_date``, но пустым.
+        "birth_date": ("birth_date", "bday", "dob"),
         "inn": ("inn", "innfiz"),
         "passport": ("passport", "passport_number"),
         "snils": ("snils",),
+        "fio": ("fio", "full_name", "name"),
         "address": _ADDRESS_KEYS,
     }
+
+
+def _identity_keys() -> tuple[str, ...]:
+    """Все ключи, по которым узнаётся личность, — из той же таблицы.
+
+    По их числу в одной записи выбирается якорь: блок, где признаки стоят
+    вместе, — это человек, а не обрывок чужой утечки. Адрес сюда не идёт: он
+    личность не опознаёт, а блок с одним адресом якорем быть не должен.
+    """
+    keys = _field_keys()
+    return tuple(key for field, group in keys.items() if field != "address" for key in group)
 
 
 def _shapes(kin: list[RecordDict], fields: tuple[str, ...], found: list[str]) -> dict[str, str]:
@@ -404,10 +426,6 @@ def _shape(raw: object) -> str:
 #: в русской выгрузке транслитерацией — то же самое, что не искать.
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
 
-#: Признаки личности. По их числу в одной записи выбирается якорь: блок, где
-#: они стоят вместе, — это человек, а не обрывок чужой утечки.
-_IDENTITY_KEYS = ("fio", "full_name", "name", "birth_date", "dob", "passport", "snils", "inn")
-
 
 def _pick_anchor(rows: list[RecordDict]) -> tuple[PersonName | None, RecordDict | None]:
     """Блок, вокруг которого собирается личность, и разобранное из него имя.
@@ -444,7 +462,7 @@ def _pick_anchor(rows: list[RecordDict]) -> tuple[PersonName | None, RecordDict 
         # первый, а не последний.
         rank = (
             1 if _CYRILLIC.search(str(raw)) else 0,
-            sum(1 for key in _IDENTITY_KEYS if row.get(key)),
+            sum(1 for key in _identity_keys() if row.get(key)),
             -order,
         )
         if best is None or rank > best[0]:
@@ -460,18 +478,21 @@ def _marks(row: RecordDict) -> dict[str, object]:
     девять. Негодное значение не должно ни приниматься, ни служить поводом
     отвергнуть чужой блок: мусор не идентифицирует никого.
 
-    Список собирается внутри функции, а не рядом с ней: читатели объявлены
-    ниже по файлу, и модульная константа падала бы при импорте.
+    Ключи берутся из :func:`_field_keys` — той же таблицы, по которой поля и
+    разбираются. Своя копия здесь была опаснее прочих: синоним, известный
+    разбору и неизвестный этой сверке, пустил бы к якорю блок с чужой датой
+    рождения, и личность собралась бы из двух разных людей.
     """
-    kinds: tuple[tuple[str, Callable[[object], object | None], tuple[str, ...]], ...] = (
-        ("passport", _read_passport, ("passport", "passport_number")),
-        ("snils", _read_snils, ("snils",)),
-        ("birth_date", _read_day, ("birth_date", "dob")),
-        ("fio", _read_fio_mark, ("fio", "full_name", "name")),
+    keys_by_field = _field_keys()
+    readers: tuple[tuple[str, Callable[[object], object | None]], ...] = (
+        ("passport", _read_passport),
+        ("snils", _read_snils),
+        ("birth_date", _read_day),
+        ("fio", _read_fio_mark),
     )
     found: dict[str, object] = {}
-    for kind, read, keys in kinds:
-        raw = _first(row, *keys)
+    for kind, read in readers:
+        raw = _first(row, *keys_by_field[kind])
         if raw is not None and (value := read(raw)) is not None:
             found[kind] = value
     return found
