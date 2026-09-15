@@ -202,17 +202,17 @@ class IdentityMatcher:
         record_inn = _record_inn(record)
         record_phone = _record_phone(record)
 
-        if _died_before_birth(subject, record):
+        if _died_before_known_life(subject, record):
             # Второй различитель, и единственный, который вообще работает при
             # пустой дате рождения в записи. Дата смерти в реестре
             # наследственных дел есть всегда; человек, умерший раньше, чем
-            # родился должник, — это заведомо другой человек, и никакое
-            # совпадение ФИО этого не перевешивает. Ветка симметрична
+            # должник заведомо был жив, — это заведомо другой человек, и
+            # никакое совпадение ФИО этого не перевешивает. Ветка симметрична
             # несовпадению дат рождения ниже и стоит перед ним намеренно:
             # у записи с пустой BirthDate до той ветки дело не доходит.
             return MatchAssessment(
                 confidence=CONFLICTING_BIRTH_DATE_CONFIDENCE,
-                reasons=("дата смерти раньше даты рождения должника",),
+                reasons=(_death_contradiction(subject, record),),
             )
 
         if _contested_probate(record):
@@ -382,9 +382,24 @@ def _record_birth_date(record: SourcedFact) -> date | None:
     return None
 
 
-def _died_before_birth(subject: SearchSubject, record: SourcedFact) -> bool:
+def _died_before_known_life(subject: SearchSubject, record: SourcedFact) -> bool:
     """Дисквалификация по дате смерти. Правило живёт в самой записи."""
-    return isinstance(record, InheritanceCase) and record.contradicts_birth_date(subject.birth_date)
+    return isinstance(record, InheritanceCase) and record.died_before(subject.known_alive_at)
+
+
+def _death_contradiction(subject: SearchSubject, record: SourcedFact) -> str:
+    """Какой именно датой опровергнута запись.
+
+    Два разных довода, и подменять один другим нельзя: «раньше рождения» —
+    это арифметика, а «раньше выдачи паспорта» — вывод из документа, и читающий
+    отчёт вправе знать, какой из них применён. Живьём сработал второй: смерть
+    27.04.1996 против рождения 24.11.1994 не опровергается, а против паспорта,
+    выданного 29.01.2015, — опровергается.
+    """
+    assert isinstance(record, InheritanceCase)
+    if record.died_before(subject.birth_date):
+        return "дата смерти раньше даты рождения должника"
+    return "дата смерти раньше даты выдачи паспорта должника"
 
 
 def _contested_probate(record: SourcedFact) -> bool:

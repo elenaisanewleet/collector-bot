@@ -46,6 +46,7 @@ from app.providers.inheritance import (
     _parse_compact_date,
 )
 from app.services.aggregation import Aggregator
+from app.services.identity import IdentityMatcher
 from app.services.scoring import RecoveryScoreEngine
 from app.services.verdict import VerdictEngine
 from app.utils.dates import parse_date
@@ -1114,3 +1115,77 @@ def test_stub_steps_aside_for_the_real_provider(inheritance_settings: Settings) 
     assert len(by_name) == len(providers)
     assert isinstance(by_name[ProviderName.INHERITANCE], NotariatInheritanceProvider)
     assert by_name[ProviderName.INHERITANCE].is_configured
+
+
+# ------------------------- смерть раньше, чем должник заведомо был жив
+
+
+def test_a_death_before_the_passport_was_issued_is_someone_else() -> None:
+    """Умершим паспорта не выдают — значит запись о другом человеке.
+
+    Живой случай, на котором это и всплыло. Реестр называет смерть 27.04.1996,
+    должник родился 24.11.1994: по рождению запись не отсеять — младенец умереть
+    может, — и она оставалась «возможным совпадением» под именем живого
+    человека. Но паспорт должника выдан 29.01.2015.
+
+    Владелец увидел это на проверке самой себя и сказал прямо: «я не умерла
+    через два года как родилась… непонятно, как этот кейс обрабатывать».
+    """
+    subject = SearchSubject(
+        search_type=SearchType.PERSON.value,
+        name=PersonName(last_name="Клочкова", first_name="Елена", middle_name="Николаевна"),
+        birth_date=date(1994, 11, 24),
+        passport="4514964173",
+        passport_issued=date(2015, 1, 29),
+    )
+    case = InheritanceCase(
+        deceased_name="Клочкова Елена Николаевна",
+        death_date=date(1996, 4, 27),
+        case_number="241/1996",
+    )
+
+    assessment = IdentityMatcher().assess(subject, case)
+    judged = case.model_copy(update={"match_confidence": assessment.confidence})
+
+    assert not judged.is_usable, "запись осталась показанной как возможное совпадение"
+    assert not judged.is_confirmed
+    assert assessment.reasons == ("дата смерти раньше даты выдачи паспорта должника",)
+
+
+def test_the_reason_names_which_date_settled_it() -> None:
+    """Два разных довода, и подменять один другим нельзя.
+
+    «Раньше рождения» — арифметика, «раньше выдачи паспорта» — вывод из
+    документа. Читающий отчёт вправе знать, какой применён.
+    """
+    subject = SearchSubject(
+        search_type=SearchType.PERSON.value,
+        name=PersonName(last_name="Клочкова", first_name="Елена"),
+        birth_date=date(1994, 11, 24),
+        passport_issued=date(2015, 1, 29),
+    )
+    older = InheritanceCase(deceased_name="Клочкова Елена", death_date=date(1976, 5, 1))
+
+    assert IdentityMatcher().assess(subject, older).reasons == (
+        "дата смерти раньше даты рождения должника",
+    )
+
+
+def test_a_death_after_the_passport_is_still_a_possible_match() -> None:
+    """Правило не должно съедать записи, которые оно опровергнуть не может.
+
+    Смерть ПОСЛЕ выдачи паспорта — это ровно тот случай, ради которого раздел и
+    существует: должник мог умереть, и прятать такую запись нельзя ни под каким
+    предлогом.
+    """
+    subject = SearchSubject(
+        search_type=SearchType.PERSON.value,
+        name=PersonName(last_name="Клочкова", first_name="Елена"),
+        birth_date=date(1994, 11, 24),
+        passport_issued=date(2015, 1, 29),
+    )
+    recent = InheritanceCase(deceased_name="Клочкова Елена", death_date=date(2024, 3, 2))
+
+    assessment = IdentityMatcher().assess(subject, recent)
+
+    assert "раньше" not in " ".join(assessment.reasons)

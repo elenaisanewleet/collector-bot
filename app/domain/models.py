@@ -550,16 +550,23 @@ class InheritanceCase(SourcedFact):
             return not self.case_closed
         return self.case_close_date is None
 
-    def contradicts_birth_date(self, birth_date: date | None) -> bool:
-        """Умереть до собственного рождения нельзя — значит, это другой человек.
+    def died_before(self, alive_at: date | None) -> bool:
+        """Запись о смерти РАНЬШЕ, чем должник заведомо был жив, — это другой человек.
 
         Единственный различитель, который работает там, где реестр не назвал
         дату рождения, а таких записей большинство. Догадок здесь нет вовсе:
         должник 1985 года рождения не может быть человеком, умершим в 1976-м,
         а реестр ведётся с семидесятых, и таких записей среди однофамильцев
         много.
+
+        Дату «заведомо был жив» считает сам субъект
+        (:attr:`SearchSubject.known_alive_at`), и он берёт не только рождение.
+        Живой случай, на котором это и всплыло: реестр называет смерть
+        27.04.1996, должник родился 24.11.1994 — по рождению запись не отсеять,
+        она «возможное совпадение». Но паспорт должника выдан 29.01.2015, а
+        умершим паспорта не выдают, и это столь же твёрдый довод.
         """
-        return bool(birth_date and self.death_date and self.death_date < birth_date)
+        return bool(alive_at and self.death_date and self.death_date < alive_at)
 
 
 FactRecord = Annotated[
