@@ -457,10 +457,41 @@ def test_bank_section_names_no_source_and_no_setting() -> None:
             assert name not in output
 
 
-def test_bank_section_stays_short() -> None:
-    """Владелица много раз возвращала лишний текст. Четыре строки — потолок."""
+def test_the_bank_refusal_stays_short() -> None:
+    """Отказ про остатки — три строки, и лишний текст сюда не возвращается.
+
+    Владелица много раз убирала из этого раздела лишнее, и предел держится. Но
+    он про ОТКАЗ: ответ источника считается отдельным тестом ниже — у него
+    другое назначение и другой потолок.
+    """
     body = reporting._bank_block(_empty_report()).split("\n")[1:]
-    assert len(body) <= 4
+    assert len(body) <= 3
+
+
+def test_the_answer_of_the_source_is_set_apart_from_the_refusal() -> None:
+    """Ответ ФНС — не четвёртая строка подряд, а отдельный абзац с выводом.
+
+    Предел в четыре строки здесь СОЗНАТЕЛЬНО превышен, и это правка владельца:
+    «мы же делаем запрос в ФНС и получаем ответ, может это выделить… где мы
+    получаем ответ на полноценный запрос, надо выделять ответ и расписывать
+    его». До неё оплаченный ответ стоял последней строкой после служебного
+    текста и читался как его продолжение.
+
+    Проверяется не длина, а устройство: пустая строка отделяет ответ, и в нём
+    есть вывод, а не только «не найдено».
+    """
+    report = _empty_report()
+    report.provider_results.append(
+        ProviderResult(provider=ProviderName.ACCOUNT_BLOCK, status=ProviderStatus.NO_RESULTS)
+    )
+
+    text = reporting._bank_block(report)
+    refusal, answer = text.split("\n\n", 1)
+
+    assert reporting.BANK_NO_SOURCE_LINE in refusal
+    assert answer.startswith("ФНС ответила:")
+    # Вывод, а не только факт: банк не опознан — зато и налоговая счета не брала.
+    assert "не узнать" in answer and "не блокировала" in answer
 
 
 def test_bank_section_reads_the_same_on_the_page_and_in_the_file() -> None:
@@ -694,3 +725,27 @@ def test_the_reason_never_runs_past_the_line() -> None:
     assert line is not None
     assert len(line) < reporting.MAX_REASON_LENGTH + 60
     assert line.endswith("(upstream_error).")
+
+
+def test_the_page_marks_an_answer_as_an_answer_not_as_absence() -> None:
+    """На странице ответ источника отрисован иначе, чем отказ рядом с ним.
+
+    Оба стояли классом ``empty``, то есть одним приглушённым серым: оплаченный
+    ответ ФНС выглядел отсутствием. Это та же подмена, от которой заведён весь
+    набор состояний источника, только наоборот — и владелец указал на неё
+    первым же взглядом.
+
+    Проверяется и разметка, и стиль: класс без правила в таблице стилей ничего
+    не выделяет, а правило без класса не применяется ни к чему.
+    """
+    report = _empty_report()
+    report.provider_results.append(
+        ProviderResult(provider=ProviderName.ACCOUNT_BLOCK, status=ProviderStatus.NO_RESULTS)
+    )
+
+    html = render.bank_section(report)
+
+    assert 'class="empty answered"' in html
+    assert ".empty.answered{" in CSS
+    # И на бумаге: цвет там не различает ничего, различает полоса слева.
+    assert ".empty.answered{border-left" in CSS

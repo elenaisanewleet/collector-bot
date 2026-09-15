@@ -1112,7 +1112,10 @@ def _account_blocks(report: DebtorReport) -> str:
 
     usable = [item for item in report.account_blocks if item.is_usable]
     if not usable:
-        return f'<p class="empty">{e(BANK_NO_BLOCKS_LINE)}</p>'
+        # ``answered``, а не просто ``empty``: источник спросили, и он ответил.
+        # Тем же приглушённым серым, что отказ рядом, оплаченный ответ выглядел
+        # отсутствием — см. ``BANK_NO_BLOCKS_LINE``.
+        return f'<p class="empty answered">{e(BANK_NO_BLOCKS_LINE)}</p>'
 
     rows = [
         (

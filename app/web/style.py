@@ -274,6 +274,17 @@ button.copy[data-done="1"]{border-color:var(--good);color:var(--good)}
 .empty{color:var(--ink-2)}
 .empty.unchecked{color:var(--warn);font-weight:600;
   border-left:3px solid var(--warn);padding-left:var(--s-3)}
+/* «Источник спросили, и он ОТВЕТИЛ» — третье состояние, и до сих пор его не
+   было: ответ ФНС о блокировках счетов рисовался классом .empty, то есть
+   приглушённым серым, ровно как отказ рядом с ним. Владелец на это и указал:
+   «мы же делаем запрос в ФНС и получаем ответ, может это выделить». Оплаченный
+   ответ, выглядящий как отсутствие, — та же подмена, от которой заведён весь
+   набор состояний, только наоборот.
+   Рамка того же рисунка, что у .unchecked, и другого цвета: идиома «слева
+   полоса» уже читается как «это про состояние источника», а --good отличает
+   ответ от тревоги. */
+.empty.answered{color:var(--ink);border-left:3px solid var(--good);
+  padding-left:var(--s-3)}
 .note{color:var(--ink-3);font-size:var(--t-2xs);margin:var(--s-2) 0 0}
 .note.scope{border-left:2px solid var(--line);padding-left:var(--s-3)}
 
@@ -574,6 +585,9 @@ tbody tr[data-tone]{cursor:default}
      которой раздел заведён, и ровно на том листе, который подшивают. */
   .tag.nosource{border:2.5pt double #000}
   .empty.unchecked{border-left:2pt solid #000;color:#000}
+  /* На бумаге цвет не различает ничего, а полоса различает: ответ источника
+     обязан остаться отличимым от отказа и на подшитом листе. */
+  .empty.answered{border-left:2pt solid #000;color:#000}
   .plate,button.copy{border:.5pt solid #000;background:#fff}
   /* Таблицы не рвутся, шапка повторяется, заголовок не висит в конце листа. */
   .scroll{overflow:visible;border:.5pt solid #000;border-radius:0}
