@@ -1108,7 +1108,7 @@ def _account_blocks(report: DebtorReport) -> str:
 
     unanswered = unanswered_line(result)
     if unanswered:
-        return f'<p class="empty">Блокировки счетов (ФНС): {e(unanswered)}</p>'
+        return f'<p class="empty unchecked">Блокировки счетов (ФНС): {e(unanswered)}</p>'
 
     usable = [item for item in report.account_blocks if item.is_usable]
     if not usable:
@@ -1510,7 +1510,12 @@ def _empty_body(
     найдено», и оценка ещё начисляла за это плюс.
     """
     lines = empty_reason(result, found=found, noun=noun, empty_line=empty_line)
-    body = "".join(f'<p class="empty">{e(line)}</p>' for line in lines)
+    # ``answered``, а не просто ``empty``: сюда попадают только разделы, чей
+    # источник ОТВЕТИЛ — каждый из них проверяет молчание раньше и уходит в
+    # ``unanswered`` ветку. Приглушённым серым ответ выглядел отсутствием, и
+    # владелец прочитал «проверено — ничего не найдено» как «ответа не было»:
+    # «адрес же есть, почему в ЕГРН не получили ответ?».
+    body = "".join(f'<p class="empty answered">{e(line)}</p>' for line in lines)
     return body + _checked_note(result, scope=scope, notes=False)
 
 

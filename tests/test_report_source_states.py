@@ -749,3 +749,46 @@ def test_the_page_marks_an_answer_as_an_answer_not_as_absence() -> None:
     assert ".empty.answered{" in CSS
     # И на бумаге: цвет там не различает ничего, различает полоса слева.
     assert ".empty.answered{border-left" in CSS
+
+
+def test_an_empty_answer_says_it_is_an_answer() -> None:
+    """Ответ источника не имеет права читаться как отсутствие ответа.
+
+    Раздел ЕГРН стоял с подписью «проверено — ничего не найдено» и строкой
+    «объект не найден», а владелец спросил: «адрес же есть, почему в ЕГРН не
+    получили ответ?». То есть ответ прочитался как молчание — та же подмена,
+    против которой построен весь продукт, только в обратную сторону.
+
+    И вторая половина, не менее важная: владелец ЗНАЛ, что квартира существует.
+    «Объект не найден» без оговорки читается как «у должника нет имущества» —
+    факт в пользу должника, которого никто не устанавливал. Росреестр ищет по
+    строке адреса и мог её не сопоставить.
+    """
+    report = report_with(ProviderName.PROPERTY, "no_results", address=ADDRESS)
+
+    text = reporting._property_block(report)
+    page = plain(render.property_section(report))
+
+    for output in (text, page):
+        assert "Росреестр ответил" in output
+        assert "Это не значит, что у должника нет имущества" in output
+        assert "кадастровый номер" in output
+
+
+def test_the_page_tells_an_answer_from_a_silence_by_style() -> None:
+    """Ответ и молчание помечены разными классами, а не одним серым.
+
+    Проверяется на двух состояниях одного раздела: ответил и не ответил.
+    Одинаковая пометка означала бы, что различие есть только в словах, а
+    владелец читает страницу глазами прежде, чем текст.
+    """
+    answered = render.property_section(
+        report_with(ProviderName.PROPERTY, "no_results", address=ADDRESS)
+    )
+    silent = render.property_section(
+        report_with(ProviderName.PROPERTY, "poll_timeout", address=ADDRESS)
+    )
+
+    assert 'class="empty answered"' in answered
+    assert 'class="empty unchecked"' in silent
+    assert 'class="empty answered"' not in silent
