@@ -30,6 +30,8 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
+from collections.abc import Iterable
 
 #: Слово, называющее помещение, и число за ним.
 _PREMISES_WORD = re.compile(
@@ -74,4 +76,60 @@ def _ends_with_house_and_flat(address: str) -> bool:
     return not _NUMBER.match(head[-1])
 
 
-__all__ = ["has_premises"]
+#: Короче этого адресом не бывает: «Москва» или обрывок поля.
+MIN_ADDRESS_LENGTH = 10
+
+
+def pick_address(candidates: Iterable[str]) -> str | None:
+    """Самый подтверждённый адрес из ответа — или ``None``, если годных нет.
+
+    ПОЧЕМУ НЕ «ПЕРВЫЙ». Поставщик отвечает свалкой блоков из разных утечек, и
+    адресов в ответе несколько: прописка, фактический, старый. Правило «первый с
+    квартирой» опиралось на порядок выдачи, то есть на случайность — порядок
+    задаёт поставщик, а не жизнь должника.
+
+    Владелец предложил лучшее: «он в ответе встречается чаще всего». Это не
+    вкус, а довод — блоки собраны из НЕЗАВИСИМЫХ источников, и адрес,
+    повторившийся в нескольких, подтверждён несколькими утечками сразу, а
+    одиночный не подтверждён ничем. Порядок остаётся, но только как способ
+    разрешить равенство.
+
+    Адрес с квартирой по-прежнему сильнее адреса до дома, и это не про
+    подтверждённость, а про деньги: только такой примет Росреестр. Поэтому
+    сначала выбирается из тех, что доходят до помещения, и лишь когда таких нет
+    — из остальных, чтобы показать в карточке хоть что-то.
+    """
+    seen: list[tuple[str, str]] = []
+    for raw in candidates:
+        text = " ".join(str(raw).split())
+        if len(text) >= MIN_ADDRESS_LENGTH:
+            seen.append((_comparable(text), text))
+    if not seen:
+        return None
+    with_premises = [pair for pair in seen if has_premises(pair[1])]
+    return _most_confirmed(with_premises or seen)
+
+
+def _most_confirmed(pairs: list[tuple[str, str]]) -> str:
+    """Чаще всего встреченный, при равенстве — встреченный раньше."""
+    counts = Counter(key for key, _ in pairs)
+    best_key = max(counts, key=lambda key: (counts[key], -_first_index(pairs, key)))
+    return next(text for key, text in pairs if key == best_key)
+
+
+def _first_index(pairs: list[tuple[str, str]], key: str) -> int:
+    return next(index for index, (candidate, _) in enumerate(pairs) if candidate == key)
+
+
+def _comparable(address: str) -> str:
+    """Ключ сравнения: одно и то же место, записанное по-разному, — один адрес.
+
+    Регистр и пробелы вокруг запятых различают не адреса, а тех, кто их
+    записывал. Без приведения «г Ульяновск, б-р Фестивальный,17,151» и
+    «г Ульяновск, б-р Фестивальный, 17, 151» считались бы двумя разными
+    адресами, и частота — главный здесь довод — считалась бы неверно.
+    """
+    return re.sub(r"\s*,\s*", ",", address.strip().lower())
+
+
+__all__ = ["MIN_ADDRESS_LENGTH", "has_premises", "pick_address"]

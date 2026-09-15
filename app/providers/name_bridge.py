@@ -65,7 +65,7 @@ from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import RecordDict
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
-from app.utils.address import has_premises
+from app.utils.address import pick_address
 from app.utils.dates import parse_date
 from app.utils.hashing import normalize_token
 
@@ -295,25 +295,13 @@ _ADDRESS_KEYS = (
 
 
 def _pick_address(rows: list[RecordDict]) -> str | None:
-    """Адрес с квартирой, если он есть; иначе первый попавшийся.
+    """Самый подтверждённый адрес из ответа.
 
-    То же правило, что в телефонном мосте, и по той же причине: адрес до дома
-    ЕГРН не примет, а показать его в карточке всё равно полезно. Отсеет
-    негодный сам провайдер и бесплатно.
+    То же правило и та же функция, что в телефонном мосте: поставщик один, и
+    два правила выбора на один ответ разошлись бы. Подробности — в
+    :func:`~app.utils.address.pick_address`.
     """
-    fallback: str | None = None
-    for row in rows:
-        raw = _first(row, *_ADDRESS_KEYS)
-        if not raw:
-            continue
-        text = " ".join(str(raw).split())
-        if len(text) < 10:
-            continue
-        if has_premises(text):
-            return text
-        if fallback is None:
-            fallback = text
-    return fallback
+    return pick_address(str(raw) for row in rows for key in _ADDRESS_KEYS if (raw := row.get(key)))
 
 
 def _read_passport(raw: object) -> str | None:

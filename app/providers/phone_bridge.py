@@ -73,7 +73,7 @@ from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import RecordDict
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
-from app.utils.address import has_premises
+from app.utils.address import pick_address
 from app.utils.dates import parse_date
 from app.utils.masking import mask_phone
 
@@ -513,34 +513,23 @@ _ADDRESS_KEYS = (
 
 
 def _pick_address(kin: list[RecordDict]) -> str | None:
-    """Адрес нашего человека — с квартирой, если он вообще есть.
+    """Адрес нашего человека — самый подтверждённый из тех, что в ответе.
 
-    Правило владелицы было «берём первый адрес», и на трёх живых ответах
-    первый действительно оказался верным по улице. Но для ЕГРН этого мало:
-    Росреестр по адресу до дома отвечает ошибкой, а вызов всё равно оплачен —
-    и ни у одного из трёх номеров первый адрес до квартиры не доходил.
+    Правило владелицы было «берём первый адрес», и на трёх живых ответах первый
+    действительно оказался верным по улице. Но порядок выдачи задаёт поставщик,
+    а не жизнь должника, и опираться на него значит опираться на случайность.
+    Владелец сам это и назвал: «он в ответе встречается чаще всего». Выбор
+    считает :func:`~app.utils.address.pick_address` — он же у моста по ФИО.
 
-    Поэтому сначала ищется адрес с квартирой, и только если такого нет —
-    первый попавшийся. Второй годится показать в карточке, но не для ЕГРН;
-    отсеет его сам провайдер, бесплатно (см. ``property._query_for``).
+    Собираются ВСЕ адреса КАЖДОГО блока, а не по одному на блок. Раньше брался
+    первый непустой ключ из шести, и второй адрес того же блока — прописка
+    рядом с фактическим — не участвовал ни в выборе, ни в подсчёте частоты.
 
     Ищется только среди РОДНИ — записей, не противоречащих опорной. Адрес
     чужого человека из той же выдачи отправил бы платный запрос в Росреестр
     про чужую квартиру.
     """
-    fallback: str | None = None
-    for row in kin:
-        raw = _first(row, *_ADDRESS_KEYS)
-        if not raw:
-            continue
-        text = " ".join(str(raw).split())
-        if len(text) < 10:
-            continue
-        if has_premises(text):
-            return text
-        if fallback is None:
-            fallback = text
-    return fallback
+    return pick_address(str(raw) for row in kin for key in _ADDRESS_KEYS if (raw := row.get(key)))
 
 
 def _read_fio_mark(raw: object) -> str | None:
