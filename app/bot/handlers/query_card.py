@@ -514,6 +514,10 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
     inn = getattr(result, "inn", None)
     birth = getattr(result, "birth_date", None)
     issued = getattr(result, "passport_issued", None)
+    # Адрес — единственное поле отсюда, которое ОТКРЫВАЕТ ещё один источник:
+    # без него ЕГРН не спрашивается вовсе. Читался он тут и раньше — для лога, —
+    # а до карточки не доезжал: в ``fill_from_bridge`` не было параметра.
+    address = getattr(result, "address", None)
     # Переносится ВСЁ, что пришло одним ответом, а не только имя с датой. Раньше
     # здесь стояли четыре строки про ФИО и дату, и паспорт со СНИЛСом из того же
     # оплаченного ответа терялись молча: карточка их не показывала, отчёт не
@@ -527,6 +531,7 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
         passport=passport,
         snils=snils,
         passport_issued=issued,
+        address=address,
     )
     # Журнал находок. Пишется здесь, а не при показе страницы, потому что
     # отметка «новый клиент» — замер СВОЕГО дня: следующий импорт выгрузки

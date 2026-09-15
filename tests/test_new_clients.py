@@ -1036,3 +1036,50 @@ async def test_the_bot_speaks_before_the_phone_bridge_not_after(
     pretty = format_phone(PHONE)
     assert pretty is not None
     assert pretty in sent.sends[0]
+
+
+def test_the_address_from_the_bridge_reaches_the_card(container: Container) -> None:
+    """Адрес, добытый мостом, доезжает до карточки — и открывает ЕГРН.
+
+    Он терялся тем же способом, что паспорт и СНИЛС месяцем раньше: мост его
+    добывал, причём с разбором — из всех адресов ответа выбирал тот, что доходит
+    до квартиры, потому что только такой примет Росреестр, — а параметра под
+    него в ``fill_from_bridge`` не было. Раздел ЕГРН у каждого должника,
+    найденного по телефону, писал «нужен адрес или кадастровый номер» про
+    должника, чей адрес лежал в оплаченном ответе.
+
+    Цена пропажи выше, чем у прочих полей: адрес — единственное, что ОТКРЫВАЕТ
+    ещё один источник.
+    """
+    from app.providers.property import _query_for
+    from app.services.query_card import Card
+
+    address = "г Москва, проезд Тестовый,8,139"
+    card = Card(telegram_user_id=OPERATOR_ID, chat_id=CHAT_ID, phone=PHONE)
+    fill_from_bridge(card, name=FOUND, address=address)
+
+    assert card.address == address
+    subject = card.subject(allow_phone_only=True)
+    assert subject is not None
+    assert subject.address == address
+    # И до самого источника: адрес с квартирой Росреестр согласится спросить.
+    assert _query_for(subject) == {"country": "ru", "address": address}
+
+
+def test_the_operators_own_address_is_not_overwritten(container: Container) -> None:
+    """Введённое оператором старше найденного — правило общее для всех полей.
+
+    Оператор держит договор в руках, а мост собирает личность из чужих находок,
+    объединённых одним номером телефона.
+    """
+    from app.services.query_card import Card
+
+    card = Card(
+        telegram_user_id=OPERATOR_ID,
+        chat_id=CHAT_ID,
+        phone=PHONE,
+        address="г Москва, ул Своя, д 1, кв 2",
+    )
+    fill_from_bridge(card, name=FOUND, address="г Москва, проезд Чужой,8,139")
+
+    assert card.address == "г Москва, ул Своя, д 1, кв 2"
