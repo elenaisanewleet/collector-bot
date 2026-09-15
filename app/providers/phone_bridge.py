@@ -73,6 +73,7 @@ from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import RecordDict
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
+from app.utils.address import has_premises
 from app.utils.dates import parse_date
 from app.utils.masking import mask_phone
 
@@ -509,7 +510,6 @@ _ADDRESS_KEYS = (
     "address_fact",
     "residence",
 )
-_PREMISES = re.compile(r"(?:кв|квартира|помещ\w*|пом\.?|оф(?:ис)?)\.?\s*№?\s*\d", re.IGNORECASE)
 
 
 def _pick_address(kin: list[RecordDict]) -> str | None:
@@ -536,7 +536,7 @@ def _pick_address(kin: list[RecordDict]) -> str | None:
         text = " ".join(str(raw).split())
         if len(text) < 10:
             continue
-        if _PREMISES.search(text):
+        if has_premises(text):
             return text
         if fallback is None:
             fallback = text

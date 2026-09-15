@@ -37,6 +37,7 @@ from app.domain.models import PropertyRecord, ProviderResult
 from app.providers.base import NO_CONTEXT, FetchContext
 from app.providers.mapping import as_text, dig
 from app.providers.newdb import COUNTRY_RU, NewDBMethodProvider
+from app.utils.address import has_premises
 from app.utils.dates import parse_date, utcnow
 from app.utils.money import parse_amount
 
@@ -45,12 +46,6 @@ MAX_RECORDS = 20
 
 # 64:47:040605:229 — округ:район:квартал:объект.
 CADASTRAL_NUMBER = re.compile(r"^\d{2}:\d{2}:\d{6,7}:\d+$")
-# Адрес годится, только если он доходит до помещения. Проверено живьём: адрес до
-# дома возвращает 500 и пустую data, и вызов всё равно оплачен.
-_PREMISES_MARKERS = ("кв", "квартира", "помещ", "пом.", "оф")
-_PREMISES_WITH_NUMBER = re.compile(
-    r"(?:кв|квартира|помещ\w*|пом\.?|оф(?:ис)?)\.?\s*№?\s*\d", re.IGNORECASE
-)
 
 HOUSE_LEVEL_REFUSAL = (
     "Для запроса в Росреестр нужен адрес с квартирой или кадастровый номер: "
@@ -127,16 +122,9 @@ def _query_for(subject: SearchSubject) -> dict[str, Any] | None:
         return None
     if CADASTRAL_NUMBER.match(address):
         return {"country": COUNTRY_RU, "cadastral_number": address}
-    if _has_premises(address):
+    if has_premises(address):
         return {"country": COUNTRY_RU, "address": address}
     return None
-
-
-def _has_premises(address: str) -> bool:
-    lowered = address.lower()
-    if not any(marker in lowered for marker in _PREMISES_MARKERS):
-        return False
-    return bool(_PREMISES_WITH_NUMBER.search(lowered))
 
 
 def _to_property(row: Any) -> PropertyRecord | None:
