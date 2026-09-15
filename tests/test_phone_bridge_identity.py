@@ -650,3 +650,32 @@ def _provider() -> PhoneNameProvider:
     from app.config import get_settings
 
     return PhoneNameProvider(get_settings())
+
+
+def test_the_shipped_maps_declare_every_key_the_parser_can_read() -> None:
+    """Карта отбрасывает необъявленное — значит синоним в коде без неё мёртв.
+
+    Это и вышло живьём. Поставщик присылает дату рождения под ``bday``, разбор
+    научили её читать, а карта объявляла только ``birth_date`` — и ключ до
+    разбора не доходил вовсе. Синоним в коде оказался мёртвым кодом, а бот
+    сообщал «дату рождения поставщик не знает» про человека, у которого она в
+    ответе есть.
+
+    Хуже того, две карты ОДНОГО поставщика объявляли разное: телефонная
+    ``birth_date``, ФИО-карта ``dob``. Каждую писали по одному наблюдению, и
+    каждая теряла то, что видела другая.
+
+    Замок держит обе стороны: всё, что разбор умеет прочитать, обязано быть
+    объявлено в поставляемых картах. Объявление отсутствующего у поставщика
+    ключа безвредно — поле просто будет пустым.
+    """
+    import json
+    from pathlib import Path
+
+    from app.providers.phone_bridge import _field_keys
+
+    readable = {key for group in _field_keys().values() for key in group}
+    for name in ("depsearch.json", "depsearch_fio.json"):
+        declared = set(json.loads(Path("config/field_maps", name).read_text())["fields"])
+        missing = sorted(readable - declared)
+        assert not missing, f"{name} не объявляет читаемые разбором ключи: {missing}"
