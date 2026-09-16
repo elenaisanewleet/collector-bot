@@ -56,6 +56,8 @@ QC_TEN_PASSPORT = f"{QC}:ten:p"
 QC_TEN_PHONE = f"{QC}:ten:t"
 QC_NEW_PERSON = f"{QC}:new"
 QC_FIX_NAME = f"{QC}:keep"
+#: Выбросить из карточки то, что вывел мост, и спросить источники заново.
+QC_RESET = f"{QC}:reset"
 #: «Дальше» на каждом из трёх основных шагов.
 QC_NEXT = f"{QC}:next"
 
@@ -188,6 +190,18 @@ ASK_MARK = "✎"
 #: Подпись кнопки выбора источников. Без числа выбранных: оно менялось бы
 #: на каждом нажатии, а сама кнопка нужна затем, чтобы выбор УВИДЕТЬ.
 SOURCES_LABEL = "Источники и цена"
+
+#: Подпись сброса. «По этому человеку» — дословно из просьбы владельца: «как-то
+#: надо очевидно — сбросить данные по этому человеку».
+RESET_LABEL = "Сбросить данные по этому человеку"
+#: Всплывающий ответ на нажатие и строка в самой карточке. Вторая объясняет,
+#: ЧТО осталось и что будет дальше: сброс, о котором нечего прочитать, читается
+#: как «ничего не произошло».
+RESET_DONE = "Сброшено"
+RESET_NOTICE = (
+    "Сбросил всё, что бот вывел сам. Ваш ввод остался. "
+    "Следующая проверка пойдёт в источники заново, мимо кэша."
+)
 
 FILLED_MARK = "✅"
 
@@ -408,6 +422,7 @@ def screen(
     store_sensitive: bool = False,
     notice: str | None = None,
     conflict: PersonName | None = None,
+    derived: bool = False,
 ) -> Screen:
     """Собрать карточку: текст и кнопки под ним.
 
@@ -420,7 +435,7 @@ def screen(
         text=_text(
             card, registry, notice=notice, conflict=conflict, store_sensitive=store_sensitive
         ),
-        markup=keyboard(card, conflict=conflict),
+        markup=keyboard(card, conflict=conflict, derived=derived),
     )
 
 
@@ -718,7 +733,9 @@ def _lead(card: Card) -> str:
 # ---------------------------------------------------------------- кнопки
 
 
-def keyboard(card: Card, *, conflict: PersonName | None = None) -> InlineKeyboardMarkup:
+def keyboard(
+    card: Card, *, conflict: PersonName | None = None, derived: bool = False
+) -> InlineKeyboardMarkup:
     """Кнопки под карточкой.
 
     Позиции постоянны: сотня должников в день делается мышечной памятью, и
@@ -738,7 +755,7 @@ def keyboard(card: Card, *, conflict: PersonName | None = None) -> InlineKeyboar
                     _button("Это исправление", QC_FIX_NAME),
                 ],
                 *_field_rows(card),
-                *_run_row(card),
+                *_run_row(card, derived),
             ]
         )
     if card.awaiting_field == _AWAITING_TEN:
@@ -762,7 +779,7 @@ def keyboard(card: Card, *, conflict: PersonName | None = None) -> InlineKeyboar
         # означала бы «а нажми-ка вместо ответа что-нибудь ещё».
         return _rows_markup([[_button("Пропустить", QC_SKIP)], [_button("Назад", QC_CANCEL)]])
 
-    return _rows_markup([*_field_rows(card), *_run_row(card)])
+    return _rows_markup([*_field_rows(card), *_run_row(card, derived)])
 
 
 def _field_rows(card: Card) -> list[list[InlineKeyboardButton]]:
@@ -796,7 +813,7 @@ def _field_rows(card: Card) -> list[list[InlineKeyboardButton]]:
     ]
 
 
-def _run_row(card: Card) -> list[list[InlineKeyboardButton]]:
+def _run_row(card: Card, derived: bool = False) -> list[list[InlineKeyboardButton]]:
     """Главное действие отдельной строкой, второстепенные — под ним.
 
     «Проверить» занимает всю ширину и стоит одно: это единственная кнопка,
@@ -813,6 +830,10 @@ def _run_row(card: Card) -> list[list[InlineKeyboardButton]]:
         # ниже «Новой проверки» ей нельзя: там кнопки уводят с экрана, а
         # эта на него возвращает.
         [_button(SOURCES_LABEL, sources_pick.SP_OPEN)],
+        # «Сбросить данные» появляется только когда есть что сбрасывать — то
+        # есть когда мост что-то вывел. На карточке, собранной руками, кнопка
+        # обещала бы действие без последствий.
+        *([[_button(RESET_LABEL, QC_RESET)]] if derived else []),
         [_button(wipe, QC_WIPE), _button(BACK_LABEL, MENU_HOME)],
     ]
 

@@ -163,6 +163,9 @@ async def show(
         store_sensitive=container.settings.store_sensitive_identifiers,
         notice=notice,
         conflict=conflict,
+        # Есть ли что сбрасывать: кнопка сброса показывается только когда мост
+        # что-то вывел сам.
+        derived=container.query_cards.has_derived(card),
     )
     if answering:
         # ОТВЕТ НА СООБЩЕНИЕ ВСЕГДА ПЕРЕЕЗЖАЕТ ВНИЗ, и это не расточительство.
@@ -532,7 +535,10 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
     # оплаченного ответа терялись молча: карточка их не показывала, отчёт не
     # получал, владелец шёл искать документы руками. Правила переноса — в
     # :func:`~app.services.query_card.fill_from_bridge`.
-    fill_from_bridge(
+    # Что именно заполнил МОСТ, а не оператор. Список нужен «Сбросить данные»:
+    # без него выведенное неотличимо от введённого, и однажды неверно
+    # выбранный адрес остаётся в карточке навсегда.
+    derived = fill_from_bridge(
         card,
         name=name,
         birth_date=birth,
@@ -542,6 +548,7 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
         passport_issued=issued,
         address=address,
     )
+    container.query_cards.remember_derived(card, derived)
     # Журнал находок. Пишется здесь, а не при показе страницы, потому что
     # отметка «новый клиент» — замер СВОЕГО дня: следующий импорт выгрузки
     # изменит ответ, и посчитанный задним числом он соврал бы молча.
@@ -811,6 +818,10 @@ async def run_card(
         # Выбор источников, если оператор его делал. Без выбора это
         # ``EVERYTHING``, то есть та же полная проверка, что и всегда.
         plan=container.query_cards.plan(card),
+        # Сброс данных по человеку требует обхода кэша: карточка после сброса
+        # задаёт ТОТ ЖЕ вопрос (тот же номер), и ответ пришёл бы из кэша — со
+        # старым адресом, ради замены которого сброс и делали.
+        force_refresh=container.query_cards.take_force_next(card),
     )
     if report is None:
         # Квота на сегодня выбрана. Карточка не помечается проверенной: ничего
@@ -1139,6 +1150,34 @@ def build_router() -> Router:
             plan=container.query_cards.plan(card), registry=container.registry
         )
         await edit_or_send(message, message, text, reply_markup=markup)
+
+    @router.callback_query(F.data == card_view.QC_RESET)
+    async def reset_derived(callback: CallbackQuery, container: Container, user_id: int) -> None:
+        """«Сбросить данные по этому человеку» — дословная просьба владельца.
+
+        Выбрасывает из карточки то, что вывел мост, оставляет введённое и
+        велит следующей проверке идти МИМО кэша. Три шага, и без любого из них
+        сброс не работает:
+
+        * без выброса выведенного мост не будет вызван вовсе — он зовётся
+          только когда в карточке нет имени, а имя он же туда и положил;
+        * без обхода кэша ответ придёт из него: вопрос тот же (тот же номер),
+          а ключ кэша считается по вопросу;
+        * без сброса ``last_run_hash`` кнопка «Проверить» ответила бы
+          «Ничего не изменилось».
+
+        Проверка НЕ запускается сама. Она платная, и решение платить остаётся
+        за оператором — карточка после сброса показывает, что осталось, и ждёт
+        нажатия.
+        """
+        message = callback_message(callback)
+        await answer_callback(callback, card_view.RESET_DONE)
+        if message is None:
+            return
+        card = await container.query_cards.load(user_id, message.chat.id)
+        card = await container.query_cards.drop_derived(card)
+        container.query_cards.force_next_run(card)
+        await show(message, container, card, notice=card_view.RESET_NOTICE)
 
     @router.callback_query(F.data == sources_pick.SP_OPEN)
     async def open_sources(callback: CallbackQuery, container: Container, user_id: int) -> None:

@@ -898,3 +898,81 @@ async def test_the_phone_button_adds_to_the_same_person(
     # последним сообщением уходит отчёт, а не карточка.
     assert "Тестов" in sent.joined, "нажатие «Телефон» стёрло набранного человека"
     assert "+7 (916) 123-45-67" in sent.joined, "номер не дописался к тому же человеку"
+
+
+# ------------------------------------------- сброс выведенного мостом
+
+
+async def test_a_reset_drops_what_the_bridge_derived_and_keeps_what_was_typed(
+    container: Container,
+) -> None:
+    """«Как-то надо очевидно — сбросить данные по этому человеку».
+
+    Петля, которая стоила владельцу вечера. Мост однажды выбрал неверный адрес
+    и положил его в карточку вместе с именем. После этого адрес стал
+    несменяемым: мост зовётся только когда имени нет, а имя положил он же.
+    «Спросить заново» не спасала — она повторяет прогон по тому, что в
+    карточке, а в карточке лежал он.
+
+    Сброс выбрасывает ровно выведенное. Введённое оператором неприкосновенно:
+    номер он держит в руках, а мост собирает личность из чужих утечек.
+    """
+    from app.domain.identity import PersonName as Name
+    from app.services.query_card import fill_from_bridge
+
+    cards = container.query_cards
+    card = await cards.load(OPERATOR_ID, CHAT_ID)
+    # Оператор ввёл номер и договор сам.
+    card.phone = "+79990000000"
+    card.contract_number = "ЭВ-2026/000082"
+    await cards.save(card)
+
+    derived = fill_from_bridge(
+        card,
+        name=Name(last_name="Тестова", first_name="Елена", middle_name="Николаевна"),
+        birth_date=date(1994, 11, 24),
+        address="г Москва, проспект Иной, д 73/2, кв 1",
+    )
+    cards.remember_derived(card, derived)
+    await cards.save(card)
+
+    assert cards.has_derived(card) is True
+
+    card = await cards.drop_derived(card)
+
+    # Выведенное ушло — значит мост будет вызван заново и выберет адрес сам.
+    assert card.address is None
+    assert card.last_name is None
+    assert card.birth_date is None
+    # Введённое осталось: сброс не наказывает оператора за нашу ошибку.
+    assert card.contract_number == "ЭВ-2026/000082"
+    assert card.phone == "+79990000000"
+    # И «Ничего не изменилось» не встанет поперёк повторной проверки.
+    assert card.last_run_hash is None
+    assert cards.has_derived(card) is False
+
+
+async def test_a_reset_sends_the_next_check_past_the_cache(container: Container) -> None:
+    """Сброшенная карточка задаёт ТОТ ЖЕ вопрос — без обхода кэша он бесполезен.
+
+    Оператор вводит тот же номер, ключ кэша считается по вопросу, и ответ
+    пришёл бы из кэша: со старым адресом, ради замены которого сброс и делали.
+    """
+    cards = container.query_cards
+    card = await cards.load(OPERATOR_ID, CHAT_ID)
+
+    cards.force_next_run(card)
+
+    assert cards.take_force_next(card) is True
+    # Ровно на одну проверку: флаг, забытый включённым, тратил бы деньги молча.
+    assert cards.take_force_next(card) is False
+
+
+async def test_a_card_filled_by_hand_offers_no_reset(container: Container) -> None:
+    """Сбрасывать нечего — кнопки нет: она обещала бы действие без последствий."""
+    cards = container.query_cards
+    card = await cards.load(OPERATOR_ID, CHAT_ID)
+    card.last_name = "Тестов"
+    await cards.save(card)
+
+    assert cards.has_derived(card) is False

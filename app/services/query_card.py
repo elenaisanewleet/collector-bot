@@ -568,6 +568,12 @@ class QueryCardService:
         self._secrets = CardSecrets()
         self._screens: dict[tuple[int, int], _Screen] = {}
         self._plans: dict[tuple[int, int], SourcePlan] = {}
+        #: Какие поля карточки заполнил мост, а не оператор. См.
+        #: :meth:`drop_derived` — без этого списка выведенное неотличимо от
+        #: введённого, и однажды неверно выбранный адрес становится вечным.
+        self._derived: dict[tuple[int, int], frozenset[str]] = {}
+        #: У кого следующая проверка обязана пройти мимо кэша.
+        self._force_next: set[tuple[int, int]] = set()
 
     # -------------------------------------------------------------- выбор
 
@@ -595,6 +601,94 @@ class QueryCardService:
             # Полный план не хранится: его отсутствие и есть полный план, и
             # два способа сказать одно разъехались бы при первой правке.
             self._plans.pop(card.key, None)
+
+    # ------------------------------------------- введённое против выведенного
+
+    def remember_derived(self, card: Card, fields: frozenset[str]) -> None:
+        """Отметить поля, которые заполнил мост, а не оператор.
+
+        В памяти процесса, и порча безопасна: забытое считается введённым, то
+        есть неприкосновенным — ровно то поведение, которое было до появления
+        этой пометки. Потерять можно возможность сбросить, но не сами данные.
+        """
+        if fields:
+            self._derived[card.key] = self._derived.get(card.key, frozenset()) | fields
+
+    def has_derived(self, card: Card) -> bool:
+        """Есть ли в карточке что-то, выведенное мостом. Решает показ кнопки.
+
+        Кнопка сброса на карточке, собранной руками, обещала бы действие без
+        последствий: сбрасывать там нечего, а введённое оператором сброс не
+        трогает.
+        """
+        return bool(self._derived.get(card.key))
+
+    async def drop_derived(self, card: Card) -> Card:
+        """Выбросить из карточки всё, что вывел мост. Введённое остаётся.
+
+        ЭТО И ЕСТЬ «СБРОСИТЬ ДАННЫЕ ПО ЭТОМУ ЧЕЛОВЕКУ», и без такого сброса
+        продукт попадал в петлю, стоившую владельцу вечера.
+
+        Мост зовётся только когда в карточке нет имени (``_resolve_name``).
+        Один раз выбрав неверный адрес, он кладёт в карточку и адрес, и имя —
+        после чего переспросить его нечем: имя есть, значит мост пропускается,
+        значит адрес остаётся прежним навсегда. «Спросить заново» тоже не
+        спасала: она повторяет прогон по тому, что в карточке, а в карточке
+        лежал он. Владелец правил код, обновлял сервер, жал кнопки — и трижды
+        получал тот же чужой адрес.
+
+        Полная очистка (``wipe``) от этого лечит, но вместе с выведенным сносит
+        и введённое: номер, договор, дату из документа на руках. Здесь
+        выбрасывается ровно выведенное — по списку, собранному
+        :func:`fill_from_bridge`.
+        """
+        derived = self._derived.pop(card.key, frozenset())
+        if not derived:
+            return card
+        if "name" in derived:
+            card.last_name = None
+            card.first_name = None
+            card.middle_name = None
+        if "birth_date" in derived:
+            card.birth_date = None
+        if "inn" in derived:
+            card.inn = None
+        if "passport" in derived:
+            # И маска, и сам номер: ``save`` ниже перепишет секреты по карточке,
+            # поэтому достаточно очистить поле.
+            card.passport_masked = None
+            card.passport = None
+        if "snils" in derived:
+            card.snils_masked = None
+        if "passport_issued" in derived:
+            card.passport_issued = None
+        if "address" in derived:
+            card.address = None
+        # Отпечаток прошлого прогона тоже сбрасывается: набор полей изменился,
+        # и «Ничего не изменилось» встало бы поперёк повторной проверки.
+        card.last_run_hash = None
+        await self.save(card)
+        return card
+
+    def force_next_run(self, card: Card) -> None:
+        """Следующая проверка этого оператора идёт МИМО кэша.
+
+        Нужно затем, что сброшенная карточка задаёт ТОТ ЖЕ вопрос, что и час
+        назад: оператор ввёл тот же номер. Ключ кэша считается по вопросу,
+        значит ответ пришёл бы из кэша — со старым адресом, ради замены
+        которого сброс и делали.
+        """
+        self._force_next.add(card.key)
+
+    def take_force_next(self, card: Card) -> bool:
+        """Съесть отметку: обход кэша действует ровно на одну проверку.
+
+        Одну, а не до конца сеанса: мимо кэша каждая проверка стоит денег, и
+        флаг, забытый включённым, тратил бы их молча.
+        """
+        forced = card.key in self._force_next
+        self._force_next.discard(card.key)
+        return forced
 
     # ------------------------------------------------------------ хранение
 
@@ -684,6 +778,8 @@ class QueryCardService:
         # унаследованный от предыдущего выбор дал бы по нему неполный отчёт,
         # о котором оператор не просил и которого не ждёт.
         self._plans.pop((telegram_user_id, chat_id), None)
+        self._derived.pop((telegram_user_id, chat_id), None)
+        self._force_next.discard((telegram_user_id, chat_id))
         return Card(telegram_user_id=telegram_user_id, chat_id=chat_id)
 
     # ------------------------------------------------------------ экран
@@ -1249,7 +1345,7 @@ def fill_from_bridge(
     snils: str | None = None,
     passport_issued: date | None = None,
     address: str | None = None,
-) -> None:
+) -> frozenset[str]:
     """Положить в карточку всё, что мост поднял по номеру телефона.
 
     Раньше отсюда переносились только ФИО и дата рождения, а паспорт, ИНН и
@@ -1278,20 +1374,41 @@ def fill_from_bridge(
     Имя — исключение и ставится целиком: мост зовут только тогда, когда имени в
     карточке нет вовсе (см. ``_resolve_name``), так что затирать здесь нечего.
 
+    ВОЗВРАЩАЕТ ИМЕНА ПОЛЕЙ, КОТОРЫЕ ЗАПОЛНИЛ САМ, и это не диагностика.
+    Карточка не различала введённое оператором и выведенное мостом, а разница
+    решающая: выведенное надо уметь ВЫБРОСИТЬ, введённое — никогда.
+
+    Цена неразличимости вышла наружу трижды одним и тем же. Мост однажды выбрал
+    неверный адрес, положил его в карточку, и дальше адрес стал несменяемым:
+    мост зовётся только когда в карточке нет имени (``_resolve_name``), имя в
+    ней было, значит переспросить его было нечем. Владелец правил код, обновлял
+    сервер, нажимал «Спросить заново» — и каждый раз получал тот же чужой
+    адрес, потому что кнопка повторяла прогон по карточке, а в карточке лежал
+    он. «Как-то надо очевидно — сбросить данные по этому человеку»: вот по
+    этому списку :meth:`QueryCardService.drop_derived` и сбрасывает.
     """
-    _set_name(card, name)
+    filled: set[str] = set()
+    if _set_name(card, name).changed:
+        filled.add("name")
     if birth_date is not None and card.birth_date is None:
         card.birth_date = birth_date
+        filled.add("birth_date")
     if inn and not card.inn:
         card.inn = inn
+        filled.add("inn")
     if passport and not card.passport_masked:
         _set_passport(card, passport)
+        filled.add("passport")
     if snils and not card.snils_masked:
         _set_snils(card, snils)
+        filled.add("snils")
     if passport_issued is not None and card.passport_issued is None:
         card.passport_issued = passport_issued
+        filled.add("passport_issued")
     if address and not card.address:
         card.address = address
+        filled.add("address")
+    return frozenset(filled)
 
 
 __all__ = [

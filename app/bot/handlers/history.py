@@ -213,7 +213,20 @@ def build_router() -> Router:
         if subject is None:
             await message.answer(STALE_TOKEN)
             return
-        await run_and_send_report(message, container, subject, user_id=user_id, force_refresh=True)
+        # Выбор источников действует и здесь. Владелец заметил обратное:
+        # «он не предложил отдельные источники и пошёл сразу во все». Кнопка
+        # повторяет проверку того же человека, а выбор — часть того, КАК его
+        # проверяют, и терять его на повторе значило бы платить за источники,
+        # которые оператор снял минуту назад.
+        card = await container.query_cards.load(user_id, message.chat.id)
+        await run_and_send_report(
+            message,
+            container,
+            subject,
+            user_id=user_id,
+            force_refresh=True,
+            plan=container.query_cards.plan(card),
+        )
 
     return router
 
