@@ -199,7 +199,12 @@ def build_router() -> Router:
         callback: CallbackQuery, container: Container, user_id: int
     ) -> None:
         token = (callback.data or "").split(":", maxsplit=1)[-1]
-        subject = container.subject_store.get(token)
+        # ВОПРОС, а не ответ. Повтор с обогащённым субъектом — это не «спросить
+        # заново»: мост по телефону зовётся только когда имени нет, имя там
+        # есть, и личность вместе с адресом остаётся той же, какой её вывели в
+        # первый раз. Владелец прочитал это как «данные закешировались» — и был
+        # прав по сути: кнопка возвращала прежний ответ за новые деньги.
+        subject = container.subject_store.question(token)
         await answer_callback(callback)
         message = callback_message(callback)
         if message is None:

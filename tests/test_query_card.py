@@ -415,7 +415,7 @@ async def test_a_field_sent_after_the_report_keeps_the_person(
     assert "Дата рождения: 12.03.1985" in last(sent)
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
-    subject = next(reversed(container.subject_store._items.values()))[0]
+    subject = next(reversed(container.subject_store._items.values())).answer
     assert subject.inn == "770912345601"
     assert subject.birth_date == date(1985, 3, 12)
     assert subject.name is not None

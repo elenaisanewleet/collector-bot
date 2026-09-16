@@ -185,7 +185,7 @@ async def test_region_is_never_asked_and_defaults_to_all(
     await collect_and_run(dispatcher, bot)
 
     assert not sent.contains("Выберите регион")
-    subject = next(iter(container.subject_store._items.values()))[0]
+    subject = next(iter(container.subject_store._items.values())).answer
     assert subject.regions == ()
 
 
@@ -214,7 +214,7 @@ async def test_the_phone_has_its_own_button_and_opens_nothing_external(
     assert sent.contains("+7 (999) 000-11-22")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
-    subject = next(iter(container.subject_store._items.values()))[0]
+    subject = next(iter(container.subject_store._items.values())).answer
     assert subject.phone == "+79990001122"
 
 
@@ -367,7 +367,7 @@ async def test_ambiguous_ten_digits_ask_instead_of_guessing(
     assert sent.contains("Паспорт: 9204384710")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
-    subject = next(iter(container.subject_store._items.values()))[0]
+    subject = next(iter(container.subject_store._items.values())).answer
     assert subject.passport == "9204384710"
 
 
@@ -453,7 +453,7 @@ async def test_a_field_added_after_the_report_keeps_the_same_person(
     assert sent.contains("ИНН: 770912345601")
 
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
-    subject = next(reversed(container.subject_store._items.values()))[0]
+    subject = next(reversed(container.subject_store._items.values())).answer
     assert subject.inn == "770912345601"
     assert subject.name is not None
     assert subject.name.last_name == "Тестов"
@@ -668,7 +668,7 @@ async def test_an_inn_from_the_line_skips_the_bridge_entirely(
 
     await collect_and_run(dispatcher, bot, f"{FULL_LINE} 770912345601")
 
-    subject = next(iter(enabled.subject_store._items.values()))[0]
+    subject = next(iter(enabled.subject_store._items.values())).answer
     assert subject.inn == "770912345601"
     bridge = enabled.registry.inn_bridge
     assert bridge is not None
@@ -683,14 +683,14 @@ async def test_adding_an_inn_reruns_with_a_different_query_hash(
     from app.services.search import build_query_hash
 
     await collect_and_run(dispatcher, bot)
-    before = next(iter(container.subject_store._items.values()))[0]
+    before = next(iter(container.subject_store._items.values())).answer
 
     await feed(dispatcher, bot, callback_query=make_callback("qc:ask:inn"))
     assert sent.contains("✎ ИНН")
 
     await feed(dispatcher, bot, message=make_message("770912345601"))
     await feed(dispatcher, bot, callback_query=make_callback(RUN))
-    after = next(reversed(container.subject_store._items.values()))[0]
+    after = next(reversed(container.subject_store._items.values())).answer
 
     assert after.inn == "770912345601"
     assert build_query_hash(before) != build_query_hash(after)
@@ -732,7 +732,7 @@ async def test_the_region_is_an_offer_never_a_step(
 
     await feed(dispatcher, bot, callback_query=make_callback(f"region:moscow:{token}"))
 
-    narrowed = next(reversed(container.subject_store._items.values()))[0]
+    narrowed = next(reversed(container.subject_store._items.values())).answer
     assert narrowed.regions == ("moscow",)
 
 
@@ -1113,7 +1113,7 @@ async def test_a_bare_plate_in_a_free_line_is_a_vehicle_not_a_person(
     """
     await collect_and_run(dispatcher, bot, "Х999ХХ99")
 
-    subject = next(iter(container.subject_store._items.values()))[0]
+    subject = next(iter(container.subject_store._items.values())).answer
     assert subject.search_type == "vehicle_plate"
     assert subject.vehicle is not None
     assert subject.vehicle.plate == "Х999ХХ99"
