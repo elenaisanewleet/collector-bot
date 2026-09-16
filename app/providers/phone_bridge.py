@@ -317,6 +317,12 @@ def _read_rows(
         # Расшифровывать «found без birth_date, но birth_date в keys, и shapes
         # пустой» пришлось трижды. На третий раз дешевле написать словами.
         empty=_absent(fields, found, shapes),
+        # ОТКУДА ВЗЯТ АДРЕС. Он единственный открывает платный источник, и
+        # правило его выбора переписывалось трижды — каждый раз по отчёту, то
+        # есть вслепую. Имя ключа и число вариантов различают три разные беды,
+        # которые в отчёте выглядят одинаково: адрес не в опорном блоке; опорный
+        # блок опознан не тот; в блоке два адреса и выбран не тот ключ.
+        **_address_choice(kin, anchor, result.address),
     )
     return result
 
@@ -541,6 +547,52 @@ def _pick_address(kin: list[RecordDict], anchor: RecordDict | None) -> str | Non
             else ()
         ),
     )
+
+
+def _address_choice(
+    kin: list[RecordDict], anchor: RecordDict | None, chosen: str | None
+) -> dict[str, object]:
+    """Откуда взят адрес — ИМЕНАМИ КЛЮЧЕЙ И ЧИСЛАМИ, без единого значения.
+
+    Заведено потому, что по отчёту правило выбора не отладить. Владелец трижды
+    показывал неверный адрес, и каждый раз оставалось гадать: то ли адрес лежит
+    не в опорном блоке, то ли опорный блок опознан не тот, то ли в одном блоке
+    два адреса и выбран не тот ключ. Три разные починки — и ни одного способа
+    отличить их друг от друга.
+
+    Значений здесь нет и быть не может: лог живёт дольше отчёта и расходится
+    шире, а адрес — это персональные данные. Имени ключа хватает, чтобы решить,
+    какое правило неверно.
+    """
+    if chosen is None:
+        return {}
+    target = " ".join(chosen.split())
+    where = "none"
+    key_name = "none"
+    for label, rows in (("anchor", [anchor] if anchor else []), ("kin", kin)):
+        for row in rows:
+            for key in _ADDRESS_KEYS:
+                raw = row.get(key)
+                if raw is not None and " ".join(str(raw).split()) == target:
+                    where, key_name = label, key
+                    break
+            if key_name != "none":
+                break
+        if key_name != "none":
+            break
+    distinct = {
+        " ".join(str(raw).split()).lower()
+        for row in kin
+        for key in _ADDRESS_KEYS
+        if (raw := row.get(key))
+    }
+    return {
+        "address_from": f"{where}:{key_name}",
+        "address_variants": len(distinct),
+        "anchor_address_keys": sorted(
+            key for key in _ADDRESS_KEYS if anchor is not None and anchor.get(key)
+        ),
+    }
 
 
 def _read_fio_mark(raw: object) -> str | None:

@@ -729,3 +729,48 @@ def test_the_shipped_maps_declare_every_key_the_parser_can_read() -> None:
         declared = set(json.loads(Path("config/field_maps", name).read_text())["fields"])
         missing = sorted(readable - declared)
         assert not missing, f"{name} не объявляет читаемые разбором ключи: {missing}"
+
+
+def test_the_log_says_which_key_the_address_came_from_and_never_its_value() -> None:
+    """Имя ключа и число вариантов — без единого значения адреса.
+
+    Правило выбора адреса переписывалось трижды, и каждый раз по отчёту, то
+    есть вслепую: три разные беды выглядели в нём одинаково — адрес не в
+    опорном блоке, опорный блок опознан не тот, в блоке два адреса и выбран не
+    тот ключ. Имя ключа их различает.
+
+    Значения в логе быть не может: он живёт дольше отчёта и расходится шире, а
+    адрес — персональные данные.
+    """
+    from app.providers.phone_bridge import _address_choice
+
+    anchor = {"address": HER_ADDRESS, "address_reg": OTHER_ADDRESS}
+    kin = [anchor, {"address": OTHER_ADDRESS}]
+
+    choice = _address_choice(kin, anchor, HER_ADDRESS)
+
+    assert choice["address_from"] == "anchor:address"
+    assert choice["anchor_address_keys"] == ["address", "address_reg"]
+    assert choice["address_variants"] == 2
+    printed = " ".join(str(value) for value in choice.values())
+    for secret in (HER_ADDRESS, OTHER_ADDRESS):
+        assert secret not in printed, "значение адреса утекло в лог"
+
+
+def test_the_log_names_the_kin_key_when_the_anchor_had_no_address() -> None:
+    """Опорный блок без адреса — и видно, что адрес взят из родни."""
+    from app.providers.phone_bridge import _address_choice
+
+    anchor = {"fio": "Тестова Елена Николаевна"}
+    kin = [anchor, {"address_reg": OTHER_ADDRESS}]
+
+    choice = _address_choice(kin, anchor, OTHER_ADDRESS)
+
+    assert choice["address_from"] == "kin:address_reg"
+    assert choice["anchor_address_keys"] == []
+
+
+def test_no_address_means_nothing_to_log() -> None:
+    from app.providers.phone_bridge import _address_choice
+
+    assert _address_choice([{"fio": "Тестова Елена"}], None, None) == {}
