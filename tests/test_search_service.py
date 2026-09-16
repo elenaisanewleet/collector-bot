@@ -684,3 +684,47 @@ def test_the_plan_changes_the_cache_key_but_a_full_plan_does_not() -> None:
     forward = SourcePlan.only([ProviderName.FSSP, ProviderName.PROPERTY])
     backward = SourcePlan.only([ProviderName.PROPERTY, ProviderName.FSSP])
     assert build_query_hash(subject, plan=forward) == build_query_hash(subject, plan=backward)
+
+
+# ---------------------------------------------------------------- забыть кэш
+
+
+async def test_forgetting_a_question_makes_the_next_check_go_to_the_sources(
+    container: Container,
+) -> None:
+    """Сброс данных по человеку обязан убрать и ОТВЕТ, а не только карточку.
+
+    Обход кэша на одну проверку («следующая идёт мимо») жил отметкой в памяти
+    процесса, и между «Сбросить» и «Проверить» оператор уходит на другой экран,
+    меняет выбор источников, дописывает поле — а бот между этим может и
+    перезапуститься. Владелец трижды получал прежний отчёт после сброса.
+    Удалённая запись кэша не переживает ничего: её просто нет.
+    """
+    from app.db.repository import SearchRepository
+
+    subject = subject_for("Тестов Андрей Сергеевич", date(1985, 3, 12))
+    await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+    assert (await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)).from_cache
+
+    async with container.database.session() as session:
+        forgotten = await SearchRepository(session).forget_cached(build_query_hash(subject))
+
+    assert forgotten >= 1
+    again = await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+    assert not again.from_cache, "забытый вопрос всё ещё отвечает из кэша"
+
+
+async def test_forgetting_one_question_leaves_the_others_alone(container: Container) -> None:
+    """Забывается ВОПРОС, а не история оператора и не чужие проверки."""
+    from app.db.repository import SearchRepository
+
+    mine = subject_for("Тестов Андрей Сергеевич", date(1985, 3, 12))
+    other = subject_for("Демов Максим Игоревич", date(1990, 11, 3))
+    await container.search_service.search(mine, telegram_user_id=OPERATOR_ID)
+    await container.search_service.search(other, telegram_user_id=OPERATOR_ID)
+
+    async with container.database.session() as session:
+        await SearchRepository(session).forget_cached(build_query_hash(mine))
+
+    kept = await container.search_service.search(other, telegram_user_id=OPERATOR_ID)
+    assert kept.from_cache, "забыт чужой вопрос"

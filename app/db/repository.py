@@ -552,6 +552,46 @@ class SearchRepository:
         found: SearchRequest | None = await self._session.scalar(stmt)
         return found
 
+    async def forget_cached(self, normalized_query_hash: str) -> int:
+        """Убрать этот вопрос из кэша. Возвращает число забытых проверок.
+
+        ЗАЧЕМ ЭТО НУЖНО ОТДЕЛЬНО ОТ ``force_refresh``. Обход кэша — это про
+        ОДНУ проверку, и он работает, когда мы точно знаем, что следующее
+        нажатие наше. Сброс данных по человеку так знать не может: между
+        нажатием «Сбросить» и нажатием «Проверить» оператор уходит на другой
+        экран, меняет выбор источников, дописывает поле, а бот между этим
+        может и перезапуститься. Отметка «следующая проверка мимо кэша»,
+        живущая в памяти процесса, любой из этих шагов не переживает — и
+        владелец трижды получал прежний отчёт после сброса.
+        Удалённая запись кэша не переживает ничего: её просто нет.
+
+        Удаляются ИМЕННО записи этого вопроса, а не история оператора. Строка
+        истории — след того, что проверку делали, и снос её был бы потерей;
+        здесь же снимается только пригодность записи для повторной выдачи.
+        Результаты источников и отчёт уносит каскадом (``ON DELETE CASCADE``,
+        внешние ключи включены на каждом соединении — см. :mod:`app.db.session`).
+
+        Кэш общий для операторов намеренно (см. :meth:`find_cached_request`), и
+        забывается он тоже для всех: вопрос один и тот же, и оставить его
+        второму оператору значило бы отдать ему ровно тот ответ, который первый
+        только что признал негодным.
+        """
+        # Число считается отдельным запросом, а не берётся из ``rowcount``:
+        # у него нет типа в асинхронном интерфейсе SQLAlchemy, и приводить его
+        # к int пришлось бы через игнорирование проверки типов — ради цифры,
+        # которая уходит в лог.
+        doomed = select(func.count()).select_from(SearchRequest)
+        count = await self._session.scalar(
+            doomed.where(SearchRequest.normalized_query_hash == normalized_query_hash)
+        )
+        await self._session.execute(
+            delete(SearchRequest).where(
+                SearchRequest.normalized_query_hash == normalized_query_hash
+            )
+        )
+        await self._session.flush()
+        return int(count or 0)
+
     async def results_for_request(self, request_id: int) -> list[SearchResult]:
         stmt = select(SearchResult).where(SearchResult.search_request_id == request_id)
         result = await self._session.scalars(stmt)

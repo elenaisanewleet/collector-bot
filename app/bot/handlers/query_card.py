@@ -54,6 +54,7 @@ from app.bot.report_actions import (
 )
 from app.bot.view import missing_reason
 from app.container import Container
+from app.db.repository import SearchRepository
 from app.domain.enums import (
     PROVIDER_TITLES,
     MissingInput,
@@ -67,6 +68,7 @@ from app.domain.models import DebtorReport, InternalDebtorRecord
 from app.logging_setup import get_logger
 from app.services import card_identify, coverage
 from app.services.query_card import Card, fill_from_bridge
+from app.services.search import build_query_hash
 from app.utils.dates import utcnow
 from app.utils.formatting import format_phone
 
@@ -1175,8 +1177,13 @@ def build_router() -> Router:
         if message is None:
             return
         card = await container.query_cards.load(user_id, message.chat.id)
+        # ЗАПИСЬ КЭША УДАЛЯЕТСЯ, И ХЭШ СЧИТАЕТСЯ ДО СБРОСА — иначе считать его
+        # будет не из чего: после сброса в карточке нет ни имени, ни адреса,
+        # то есть нет того вопроса, ответ на который лежит в кэше.
+        forgotten = await _forget_cached_answer(container, card, user_id)
         card = await container.query_cards.drop_derived(card)
         container.query_cards.force_next_run(card)
+        logger.info("card.reset", user_id=user_id, forgotten=forgotten)
         await show(message, container, card, notice=card_view.RESET_NOTICE)
 
     @router.callback_query(F.data == sources_pick.SP_OPEN)
@@ -1264,6 +1271,32 @@ def regions_for(choice: str) -> tuple[str, ...]:
         return (Region(choice).value,)
     except ValueError:
         return (Region.OTHER.value,)
+
+
+async def _forget_cached_answer(container: Container, card: Card, user_id: int) -> int:
+    """Убрать из кэша ответы на вопрос, который задаёт эта карточка.
+
+    Вопросов два, и забыть надо оба: тот, что карточка задаёт сейчас (с
+    выбором источников, если он сделан), и тот же вопрос без выбора. Иначе
+    сброс, сделанный при одном выборе, оставил бы в кэше ответ для другого — и
+    первое же переключение галочки вернуло бы старый отчёт.
+
+    Ошибка базы здесь не должна ронять сброс: карточку мы всё равно очистим, а
+    обход кэша на одну проверку останется отметкой в памяти. Сброс станет
+    слабее, но не превратится в «ничего не произошло».
+    """
+    subject = card.subject(allow_phone_only=True)
+    if subject is None:
+        return 0
+    plan = container.query_cards.plan(card)
+    hashes = {build_query_hash(subject), build_query_hash(subject, plan=plan)}
+    try:
+        async with container.database.session() as session:
+            repo = SearchRepository(session)
+            return sum([await repo.forget_cached(value) for value in hashes])
+    except SQLAlchemyError:
+        logger.exception("card.reset_cache_failed", user_id=user_id)
+        return 0
 
 
 def _merge_subject(card: Card, subject: SearchSubject) -> None:
