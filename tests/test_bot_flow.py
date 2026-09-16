@@ -1118,3 +1118,71 @@ async def test_a_bare_plate_in_a_free_line_is_a_vehicle_not_a_person(
     assert subject.vehicle is not None
     assert subject.vehicle.plate == "Х999ХХ99"
     assert sent.contains("Авто — не подключено")
+
+
+# ---------------------------------------------------------------- выбор источников
+
+
+async def test_the_sources_screen_drives_a_selective_run(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Снятая галочка доходит до прогона: источник не спрашивается.
+
+    Путь целиком, как у оператора: собрал строку, открыл «Источники и цена»,
+    снял всё, отметил один, вернулся и нажал «Проверить».
+    """
+    from app.bot import sources_pick
+    from app.domain.enums import PROVIDER_TITLES, ProviderName
+    from app.services.reporting import SELECTIVE_LEAD
+
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
+    await feed(dispatcher, bot, callback_query=make_callback(sources_pick.SP_OPEN))
+    await feed(dispatcher, bot, callback_query=make_callback(sources_pick.SP_NONE))
+    await feed(
+        dispatcher,
+        bot,
+        callback_query=make_callback(f"{sources_pick.SP_TOGGLE}:{ProviderName.FSSP.value}"),
+    )
+    await feed(dispatcher, bot, callback_query=make_callback(sources_pick.SP_DONE))
+    await feed(dispatcher, bot, callback_query=make_callback(RUN))
+
+    card = next(text for text in reversed(sent.texts) if SELECTIVE_LEAD in text)
+
+    # Отмеченный назван, снятые — нет: карточка говорит, что спрашивали, а не
+    # перечисляет по строке на каждый невыбранный источник.
+    assert PROVIDER_TITLES[ProviderName.FSSP] in card
+    assert PROVIDER_TITLES[ProviderName.FEDRESURS] not in card.split("\n\n")[0]
+
+
+async def test_the_screen_shows_the_price_before_the_money_is_spent(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """Цена называется ДО нажатия — то же правило, что в массовом прогоне."""
+    from app.bot import sources_pick
+
+    await feed(dispatcher, bot, message=make_message(FULL_LINE))
+    await feed(dispatcher, bot, callback_query=make_callback(sources_pick.SP_OPEN))
+
+    assert any("Стоимость:" in text for text in sent.texts)
+
+
+async def test_changing_only_the_plan_still_lets_the_check_run(
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+) -> None:
+    """«Ничего не изменилось» не имеет права блокировать новый выбор.
+
+    Поля те же, а вопрос другой: спрашивается меньше источников. Без плана в
+    отпечатке кнопка отказывала бы ровно в том, ради чего выбор и заведён.
+    """
+    from app.bot import sources_pick
+
+    await collect_and_run(dispatcher, bot)
+    before = len(sent.texts)
+
+    await feed(dispatcher, bot, callback_query=make_callback(sources_pick.SP_OPEN))
+    await feed(dispatcher, bot, callback_query=make_callback(sources_pick.SP_NONE))
+    await feed(dispatcher, bot, callback_query=make_callback(sources_pick.SP_DONE))
+    await feed(dispatcher, bot, callback_query=make_callback(RUN))
+
+    assert len(sent.texts) > before
+    assert not any("Ничего не изменилось" in text for text in sent.texts[before:])

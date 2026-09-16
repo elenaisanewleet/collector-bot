@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.bot import sources_pick
 from app.bot.identifiers import Field
 from app.bot.keyboards import BACK_LABEL, MENU_HOME
 from app.bot.view import missing_reason
@@ -184,6 +185,10 @@ FORM_LEAD = "Заполните что знаете и нажмите «Пров
 ASK_MARK = "✎"
 #: Значок заполненного поля на кнопке. Не эмодзи-украшение, а состояние формы:
 #: «видно и в тексте, и на кнопках» — дословный ориентир владелицы.
+#: Подпись кнопки выбора источников. Без числа выбранных: оно менялось бы
+#: на каждом нажатии, а сама кнопка нужна затем, чтобы выбор УВИДЕТЬ.
+SOURCES_LABEL = "Источники и цена"
+
 FILLED_MARK = "✅"
 
 #: Опознали в выгрузке ровно одного — вопросов больше нет.
@@ -802,6 +807,12 @@ def _run_row(card: Card) -> list[list[InlineKeyboardButton]]:
     wipe = "Новая проверка" if card.checked_at else "Очистить"
     return [
         [_button(run, QC_RUN)],
+        # «Источники» стоит НАД «Проверить»? Нет — под ним, и намеренно.
+        # Выбор источников нужен меньшинству проверок, а «Проверить» —
+        # всем; кнопка, которую жмут всегда, обязана стоять первой. Но и
+        # ниже «Новой проверки» ей нельзя: там кнопки уводят с экрана, а
+        # эта на него возвращает.
+        [_button(SOURCES_LABEL, sources_pick.SP_OPEN)],
         [_button(wipe, QC_WIPE), _button(BACK_LABEL, MENU_HOME)],
     ]
 

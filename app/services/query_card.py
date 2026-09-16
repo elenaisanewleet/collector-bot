@@ -70,6 +70,7 @@ from app.domain.identity import (
     capitalize_name,
     parse_fio,
 )
+from app.domain.source_plan import EVERYTHING, SourcePlan
 from app.utils.dates import utcnow
 from app.utils.formatting import format_phone
 from app.utils.hashing import stable_hash
@@ -566,6 +567,34 @@ class QueryCardService:
         self._settings = settings
         self._secrets = CardSecrets()
         self._screens: dict[tuple[int, int], _Screen] = {}
+        self._plans: dict[tuple[int, int], SourcePlan] = {}
+
+    # -------------------------------------------------------------- выбор
+
+    def plan(self, card: Card) -> SourcePlan:
+        """Что оператор выбрал спрашивать. По умолчанию — всё.
+
+        В ПАМЯТИ, А НЕ В БАЗЕ, и направление порчи здесь важнее удобства.
+        Забытый выбор восстанавливается как :data:`EVERYTHING` — то есть как
+        полная честная проверка. Такая порча стоит денег и только денег:
+        оператор заплатит за источники, которые не собирался спрашивать, и
+        сразу это увидит. Обратное направление — выбор, случайно уцелевший или
+        случайно сузившийся, — стоило бы неполного отчёта, выглядящего полным,
+        а это уже неверное решение по взысканию.
+
+        Колонка в базе (как ``guided``) потребовала бы миграции ради состояния
+        одного нажатия, и платили бы за неё тем самым опасным направлением.
+        """
+        return self._plans.get(card.key, EVERYTHING)
+
+    def set_plan(self, card: Card, plan: SourcePlan) -> None:
+        """Запомнить выбор до следующей проверки этого же оператора."""
+        if plan.is_selective:
+            self._plans[card.key] = plan
+        else:
+            # Полный план не хранится: его отсутствие и есть полный план, и
+            # два способа сказать одно разъехались бы при первой правке.
+            self._plans.pop(card.key, None)
 
     # ------------------------------------------------------------ хранение
 
@@ -651,6 +680,10 @@ class QueryCardService:
             await QueryCardRepository(session).delete(telegram_user_id, chat_id)
         self._secrets.drop((telegram_user_id, chat_id))
         self._screens.pop((telegram_user_id, chat_id), None)
+        # Выбор источников уходит вместе с карточкой. Это следующий должник, и
+        # унаследованный от предыдущего выбор дал бы по нему неполный отчёт,
+        # о котором оператор не просил и которого не ждёт.
+        self._plans.pop((telegram_user_id, chat_id), None)
         return Card(telegram_user_id=telegram_user_id, chat_id=chat_id)
 
     # ------------------------------------------------------------ экран
@@ -671,11 +704,20 @@ class QueryCardService:
 
         Считается по значениям, а не по «сколько полей заполнено»: исправленная
         фамилия — это другой запрос, хотя полей столько же.
+
+        ВЫБОР ИСТОЧНИКОВ ВХОДИТ В ОТПЕЧАТОК. Иначе оператор, снявший галочки и
+        нажавший «Проверить», получал бы «Ничего не изменилось» — поля и правда
+        те же, а вопрос уже другой: спрашивается меньше источников, и ответ
+        будет другим. Кнопка отказывала бы ровно в том, ради чего выбор и
+        заведён.
         """
+        plan = self.plan(card)
         return stable_hash(
             *(str(card.shown(name) or "") for name in FIELD_ORDER),
             card.passport or "",
             card.phone or "",
+            "all" if plan.sources is None else ",".join(sorted(plan.sources)),
+            f"{plan.buy_inn:d}",
         )
 
     # ------------------------------------------------------------ пополнение

@@ -24,6 +24,7 @@ from app.db.repository import SearchRepository
 from app.domain.enums import SearchType
 from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport
+from app.domain.source_plan import EVERYTHING, SourcePlan
 from app.logging_setup import get_logger
 from app.providers.newdb import individual_inn
 from app.services.reporting import render_report
@@ -100,6 +101,7 @@ async def run_and_send_report(
     user_id: int,
     force_refresh: bool = False,
     notes: Sequence[str] = (),
+    plan: SourcePlan = EVERYTHING,
 ) -> DebtorReport | None:
     """Проверить должника и показать результат. ``None`` — квота на сегодня выбрана.
 
@@ -132,7 +134,7 @@ async def run_and_send_report(
     ticker = asyncio.create_task(_tick_stages(notice, subject.display_name, accepted, note))
     try:
         outcome = await container.search_service.search_detailed(
-            subject, telegram_user_id=user_id, force_refresh=force_refresh
+            subject, telegram_user_id=user_id, force_refresh=force_refresh, plan=plan
         )
     finally:
         ticker.cancel()
@@ -192,7 +194,7 @@ async def run_and_send_report(
         await message.answer(chunks[-1], reply_markup=keyboard)
         return report
 
-    await _edit_or_send(
+    await edit_or_send(
         notice,
         message,
         view.report_card(report, decision, notes=notes, demo_mode=container.settings.is_demo),
@@ -273,7 +275,7 @@ async def _tick_stages(
         pass
 
 
-async def _edit_or_send(
+async def edit_or_send(
     notice: Message, message: Message, text: str, *, reply_markup: object = None
 ) -> None:
     """Заменить сообщение о ходе работы результатом.

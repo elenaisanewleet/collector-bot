@@ -29,14 +29,20 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from contextlib import suppress
+from dataclasses import replace
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.bot import card_view
+from app.bot import card_view, sources_pick
 from app.bot.card_view import Screen
-from app.bot.common import answer_callback, callback_message, run_and_send_report
+from app.bot.common import (
+    answer_callback,
+    callback_message,
+    edit_or_send,
+    run_and_send_report,
+)
 from app.bot.identifiers import Field, FragmentKind, classify_fragment
 from app.bot.keyboards import MENU_PREFIX, REGION_COMBINED, REGION_PREFIX, region_keyboard
 from app.bot.report_actions import (
@@ -67,6 +73,9 @@ from app.utils.formatting import format_phone
 logger = get_logger(__name__)
 
 STALE_TOKEN = "Данные устарели, запустите поиск заново."
+
+#: Имена подключаемых источников — для проверки кнопки из старой клавиатуры.
+_PROVIDER_NAMES = frozenset(item.value for item in ProviderName)
 
 #: Как называется поле в старых кнопках ``padd:*`` и как — в карточке. Старые
 #: кнопки живут в чате бесконечно и обязаны продолжать работать.
@@ -128,7 +137,7 @@ async def show(
     «сообщение удалено» и отправил карточку заново, в конец чата.
 
     Правка не прошла — сообщение и правда удалили руками. Тогда шлём новое и
-    запоминаем его номер. Не переиспользуем ``common._edit_or_send``: он делает
+    запоминаем его номер. Не переиспользуем ``common.edit_or_send``: он делает
     delete + send и молча теряет ``message_id``, а карточке он нужен, чтобы
     после перезапуска бота править то же самое сообщение.
 
@@ -799,6 +808,9 @@ async def run_card(
         subject,
         user_id=user_id,
         notes=[*extra_notes, *run_notes(subject, container)],
+        # Выбор источников, если оператор его делал. Без выбора это
+        # ``EVERYTHING``, то есть та же полная проверка, что и всегда.
+        plan=container.query_cards.plan(card),
     )
     if report is None:
         # Квота на сегодня выбрана. Карточка не помечается проверенной: ничего
@@ -1102,6 +1114,98 @@ def build_router() -> Router:
             return
         narrowed = subject.model_copy(update={"regions": regions_for(parts[1])})
         await run_and_send_report(message, container, narrowed, user_id=user_id)
+
+    # ------------------------------------------------- выбор источников
+
+    async def _show_sources(message: Message, container: Container, card: Card) -> None:
+        """Перерисовать экран выбора на месте.
+
+        Своим сообщением, а не карточкой: экран живёт ровно на время выбора, и
+        править ради него запомненное сообщение карточки значило бы потерять
+        карточку при выходе. Субъект берётся из карточки неполным — это
+        нормально: цену считает ``planned_calls``, и источник, которому не
+        хватает данных, честно планирует ноль обращений.
+        """
+        subject = card.subject(allow_phone_only=True) or SearchSubject(
+            search_type=SearchType.PERSON.value
+        )
+        text = sources_pick.screen(
+            plan=container.query_cards.plan(card),
+            registry=container.registry,
+            subject=subject,
+            settings=container.settings,
+        )
+        markup = sources_pick.keyboard(
+            plan=container.query_cards.plan(card), registry=container.registry
+        )
+        await edit_or_send(message, message, text, reply_markup=markup)
+
+    @router.callback_query(F.data == sources_pick.SP_OPEN)
+    async def open_sources(callback: CallbackQuery, container: Container, user_id: int) -> None:
+        message = callback_message(callback)
+        await answer_callback(callback)
+        if message is None:
+            return
+        card = await container.query_cards.load(user_id, message.chat.id)
+        await _show_sources(message, container, card)
+
+    @router.callback_query(F.data.startswith(f"{sources_pick.SP_TOGGLE}:"))
+    async def toggle_source(callback: CallbackQuery, container: Container, user_id: int) -> None:
+        raw = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+        message = callback_message(callback)
+        await answer_callback(callback)
+        if message is None:
+            return
+        card = await container.query_cards.load(user_id, message.chat.id)
+        # Неизвестное имя — кнопка из устаревшей клавиатуры, оставшейся в
+        # истории чата. Экран перерисовывается как есть: сделать вид, что выбор
+        # изменился, хуже, чем показать нынешний.
+        if raw in _PROVIDER_NAMES:
+            container.query_cards.set_plan(
+                card,
+                sources_pick.toggled(
+                    container.query_cards.plan(card), ProviderName(raw), container.registry
+                ),
+            )
+        await _show_sources(message, container, card)
+
+    @router.callback_query(F.data == sources_pick.SP_INN)
+    async def toggle_inn(callback: CallbackQuery, container: Container, user_id: int) -> None:
+        message = callback_message(callback)
+        await answer_callback(callback)
+        if message is None:
+            return
+        card = await container.query_cards.load(user_id, message.chat.id)
+        current = container.query_cards.plan(card)
+        container.query_cards.set_plan(card, replace(current, buy_inn=not current.buy_inn))
+        await _show_sources(message, container, card)
+
+    @router.callback_query(F.data.in_({sources_pick.SP_ALL, sources_pick.SP_NONE}))
+    async def pick_all_or_none(callback: CallbackQuery, container: Container, user_id: int) -> None:
+        message = callback_message(callback)
+        await answer_callback(callback)
+        if message is None:
+            return
+        card = await container.query_cards.load(user_id, message.chat.id)
+        current = container.query_cards.plan(card)
+        chosen = (
+            sources_pick.all_sources(current)
+            if callback.data == sources_pick.SP_ALL
+            else sources_pick.no_sources(current)
+        )
+        container.query_cards.set_plan(card, chosen)
+        await _show_sources(message, container, card)
+
+    @router.callback_query(F.data == sources_pick.SP_DONE)
+    async def close_sources(callback: CallbackQuery, container: Container, user_id: int) -> None:
+        """Назад к карточке. Экран выбора уходит вместе с нажатием."""
+        message = callback_message(callback)
+        await answer_callback(callback)
+        if message is None:
+            return
+        await _drop(message)
+        card = await container.query_cards.load(user_id, message.chat.id)
+        await show(message, container, card)
 
     return router
 
