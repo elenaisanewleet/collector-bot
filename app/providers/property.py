@@ -34,12 +34,15 @@ from typing import Any
 from app.domain.enums import ProviderName, ProviderStatus, SearchType
 from app.domain.identity import SearchSubject
 from app.domain.models import PropertyRecord, ProviderResult
-from app.providers.base import NO_CONTEXT, FetchContext
+from app.logging_setup import get_logger
+from app.providers.base import NO_CONTEXT, FetchContext, ProviderUnavailableError
 from app.providers.mapping import as_text, dig
 from app.providers.newdb import COUNTRY_RU, NewDBMethodProvider
 from app.utils.address import has_premises
 from app.utils.dates import parse_date, utcnow
 from app.utils.money import parse_amount
+
+logger = get_logger(__name__)
 
 NEWDB_METHOD = "rosreestr"
 MAX_RECORDS = 20
@@ -85,13 +88,38 @@ class NewDBPropertyProvider(NewDBMethodProvider):
             )
 
         rows, raw = await self.raw_rows_for(NEWDB_METHOD, query)
-        records = [
-            record for row in rows[:MAX_RECORDS] if (record := _to_property(row)) is not None
-        ]
+        records, unreadable = _parse_objects(rows)
+        if unreadable:
+            # Тот же счёт потерь, что у ФССП и у методов с картой полей, и по той
+            # же причине — но здесь он появился позже всех, и это стоило прямого
+            # недоумения владельца: «странно, что по моей квартире ничего не
+            # нашлось». Строка без ``cadNumber`` просто пропускалась, и ответ,
+            # который мы не сумели прочесть, печатался как «объекта по этому
+            # адресу нет» — то есть как факт в пользу должника. Отличить это от
+            # настоящей пустоты было нельзя ничем: ни в отчёте, ни в логе.
+            logger.warning("property.unreadable_rows", unreadable=unreadable, parsed=len(records))
+            raise ProviderUnavailableError(
+                "unexpected_schema",
+                f"Не удалось разобрать {unreadable} из {unreadable + len(records)} "
+                "строк ответа ЕГРН",
+                # Тело — вместе с отказом: починить разбор можно только по нему,
+                # а второй запрос к ЕГРН стоит ещё два рубля.
+                raw_response=raw,
+            )
+        notes: tuple[str, ...] = ()
+        if len(records) > MAX_RECORDS:
+            # Обрезка — тоже неполнота, и признаётся она так же, как у ФССП.
+            notes = (
+                f"Показаны первые {MAX_RECORDS} объектов из {len(records)}, "
+                "полученных от источника",
+            )
+            records = records[:MAX_RECORDS]
         return ProviderResult(
             provider=self.name,
             status=ProviderStatus.SUCCESS if records else ProviderStatus.NO_RESULTS,
             records=list(records),
+            is_partial=bool(notes),
+            notes=notes,
             raw_response=self.raw_for(raw),
         )
 
@@ -127,11 +155,32 @@ def _query_for(subject: SearchSubject) -> dict[str, Any] | None:
     return None
 
 
+def _parse_objects(rows: list[Any]) -> tuple[list[PropertyRecord], int]:
+    """Объекты и число строк, которые прочитать не удалось.
+
+    Второе значение и есть смысл функции — ровно как в
+    :func:`app.providers.fssp._parse_proceedings`. Считаются строки, пришедшие
+    от источника и потерянные нами, а не отсутствие строк: пустой ``data`` — это
+    ноль и ноль, честная пустота.
+    """
+    records: list[PropertyRecord] = []
+    unreadable = 0
+    for row in rows:
+        record = _to_property(row)
+        if record is None:
+            unreadable += 1
+        else:
+            records.append(record)
+    return records, unreadable
+
+
 def _to_property(row: Any) -> PropertyRecord | None:
     """Одна строка ``data`` — один объект ЕГРН.
 
     Пути проверены на живом ответе. Строка без кадастрового номера не является
-    объектом, который можно показать или проверить.
+    объектом, который можно показать или проверить, — и ``None`` здесь теперь
+    значит «потеряли строку», а не «пропустили пустую»: считает их
+    :func:`_parse_objects`.
     """
     if not isinstance(row, Mapping):
         return None

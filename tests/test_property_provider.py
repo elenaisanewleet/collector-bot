@@ -161,6 +161,55 @@ async def test_empty_data_with_status_200_is_no_results(
     assert result.status is ProviderStatus.NO_RESULTS
 
 
+@respx.mock
+async def test_a_row_we_cannot_read_is_not_an_empty_register(
+    provider: NewDBPropertyProvider,
+) -> None:
+    """Строку, которую мы не прочли, нельзя печатать как отсутствие объекта.
+
+    Это последний источник, где потеря строки была молчаливой. ФССП и методы с
+    картой полей роняют вызов в ``unexpected_schema`` на ЛЮБОЙ непрочитанной
+    строке, а ЕГРН строку без ``cadNumber`` просто пропускал — и ответ, который
+    мы не сумели разобрать, выходил в отчёт как «по этому адресу объекта нет»,
+    то есть как факт в пользу должника.
+
+    Цена различия здесь выше, чем у остальных: владелец читает раздел про
+    собственную квартиру, знает, что она существует, и не имеет ни одного
+    способа отличить «реестр не сопоставил адрес» от «мы выбросили ответ».
+    """
+    payload = live_fixture("rosreestr.json")
+    payload["results"]["rosreestr"]["result"]["data"] = [{"address": {"readableAddress": FLAT}}]
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=payload))
+
+    result = await provider.fetch(address_subject(FLAT))
+
+    assert result.status is not ProviderStatus.NO_RESULTS
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert result.error_code == "unexpected_schema"
+    # Сколько потеряно из сколького — иначе отказ нечем починить.
+    assert "1 из 1" in (result.error_message or "")
+
+
+@respx.mock
+async def test_one_lost_row_beside_a_good_one_still_fails_the_source(
+    provider: NewDBPropertyProvider,
+) -> None:
+    """Потеря ОДНОЙ строки роняет вызов, хотя вторая разобралась.
+
+    Тот же счёт, что в ``newdb._mapped``: список короче ответа ничем не
+    отличается от полного, а «не проверено» — отличается и видно.
+    """
+    payload = live_fixture("rosreestr.json")
+    good = payload["results"]["rosreestr"]["result"]["data"][0]
+    payload["results"]["rosreestr"]["result"]["data"] = [good, {"area": "31.2"}]
+    respx.post(NEWDB_URL).mock(return_value=httpx.Response(200, json=payload))
+
+    result = await provider.fetch(address_subject(FLAT))
+
+    assert result.status is ProviderStatus.UNAVAILABLE
+    assert "1 из 2" in (result.error_message or "")
+
+
 # ---------------------------------------------------------------- настройка
 
 
