@@ -39,6 +39,7 @@ from app.domain.models import (
     ProviderResult,
     RecoveryScore,
 )
+from app.domain.source_plan import EVERYTHING, SourcePlan
 from app.logging_setup import get_logger
 from app.providers.base import NO_CONTEXT, BaseProvider, FetchContext
 from app.providers.identity_bridge import InnBridgeResult
@@ -113,6 +114,7 @@ class SearchService:
         telegram_user_id: int,
         force_refresh: bool = False,
         batch: bool = False,
+        plan: SourcePlan = EVERYTHING,
     ) -> DebtorReport:
         """Run a full check and store it. Returns a cached report when fresh.
 
@@ -120,12 +122,17 @@ class SearchService:
         источники, чья цена считается на должника, читают его и решают, звать ли
         себя вообще — чтобы прогон на восемьсот строк не стоил восемьсот лишних
         вызовов молча.
+
+        ``plan`` — выбор оператора: какие источники спрашивать и покупать ли
+        ИНН. По умолчанию спрашивается всё, то есть проверка без выбора
+        остаётся той же, какой была.
         """
         outcome = await self.search_detailed(
             subject,
             telegram_user_id=telegram_user_id,
             force_refresh=force_refresh,
             batch=batch,
+            plan=plan,
         )
         return outcome.report
 
@@ -136,9 +143,17 @@ class SearchService:
         telegram_user_id: int,
         force_refresh: bool = False,
         batch: bool = False,
+        plan: SourcePlan = EVERYTHING,
     ) -> SearchOutcome:
         """То же, что :meth:`search`, но с идентификатором запроса для ссылки."""
-        query_hash = build_query_hash(subject)
+        # ПЛАН ВХОДИТ В КЛЮЧ КЭША, и это не оптимизация, а корректность.
+        # Выборочная проверка кладёт в кэш отчёт, в котором половина источников
+        # «не опрашивалась». Без плана в ключе следующая ПОЛНАЯ проверка того же
+        # человека получила бы этот отчёт — неполный, но подписанный как
+        # обычный, — и владелец увидел бы «не опрашивался» там, где заплатил за
+        # ответ. Ровно наоборот тоже: выборочная проверка молча возвращала бы
+        # полный отчёт, и понять, работает ли выбор, было бы нельзя.
+        query_hash = build_query_hash(subject, plan=plan)
         context = FetchContext(batch=batch)
 
         if not force_refresh and self._settings.cache_enabled:
@@ -149,7 +164,11 @@ class SearchService:
                     user_id=telegram_user_id,
                     search_type=subject.search_type,
                 )
-                return SearchOutcome(cached.report, cached.request_id)
+                # Выбор проставляется и на этом пути: план входит в ключ кэша,
+                # значит отчёт из кэша снят ровно этим планом, и умолчать о
+                # выборочности было бы неверно именно тогда, когда отчёт
+                # неполон.
+                return SearchOutcome(self._stamp_plan(cached.report, plan), cached.request_id)
 
         # Мост «телефон → ФИО» — раньше всех, и это не выбор порядка, а
         # единственный возможный порядок. Оператор вводит номер, а в выгрузке
@@ -180,8 +199,13 @@ class SearchService:
         # Мост паспорт→ИНН строго после ключа кэша (он считается по вопросу
         # оператора), после внутренней базы (вдруг ИНН уже там — это платный
         # вызов) и строго до внешней волны: три источника ищут только по ИНН.
-        subject, bridge_result = await self._resolve_inn(subject)
-        provider_results = await self._run_external(subject, context)
+        # Выключенный планом, мост НЕ ЗОВЁТСЯ и строки в отчёте не оставляет:
+        # объяснять нечего, а три источника, которым нужен ИНН, скажут за него
+        # сами — «недостаточно данных: нужен ИНН», бесплатно и честно.
+        subject, bridge_result = (
+            await self._resolve_inn(subject) if plan.buy_inn else (subject, None)
+        )
+        provider_results = await self._run_external(subject, context, plan)
         for extra in (bridge_result, name_result, phone_result):
             if extra is not None:
                 provider_results = [extra, *provider_results]
@@ -189,6 +213,7 @@ class SearchService:
         report = self._aggregator.build(
             subject, [internal_result, *provider_results], internal_records=internal_records
         )
+        self._stamp_plan(report, plan)
         report.recovery_score = self._score_engine.evaluate(report)
 
         await self._keep_identifiers(report, subject)
@@ -199,6 +224,23 @@ class SearchService:
             query_hash=query_hash,
         )
         return SearchOutcome(report, request_id)
+
+    def _stamp_plan(self, report: DebtorReport, plan: SourcePlan) -> DebtorReport:
+        """Записать в отчёт, что проверка была выборочной.
+
+        Только для ОДНОЙ сводной строки в отчёте. Обычная проверка не пишет
+        ничего: ``queried_sources`` остаётся ``None``, и отчёт выглядит и
+        читается ровно как прежде.
+
+        Список — пересечение выбора с подключённым, а не сам выбор: выбранный,
+        но неподключённый источник в строке «спрошены только …» обещал бы
+        ответ, которого не будет.
+        """
+        if not plan.is_selective:
+            return report
+        report.queried_sources = tuple(plan.narrowed_to(self._registry.configured_names))
+        report.bought_inn = plan.buy_inn
+        return report
 
     async def lookup_internal(self, subject: SearchSubject) -> list[InternalDebtorRecord]:
         """Query our own records using whichever identifiers we have.
@@ -454,7 +496,7 @@ class SearchService:
         return candidates, False
 
     async def _run_external(
-        self, subject: SearchSubject, context: FetchContext
+        self, subject: SearchSubject, context: FetchContext, plan: SourcePlan = EVERYTHING
     ) -> list[ProviderResult]:
         """Query every directly-addressable provider concurrently.
 
@@ -464,8 +506,19 @@ class SearchService:
 
         Chained sources sit out this phase: their input is another source's
         answer, so they cannot run beside it.
+
+        Невыбранный планом источник не спрашивается и **результата не даёт
+        вовсе**. Это не умолчание: отсутствие результата — уже состояние
+        (``NOT_QUERIED``, «не опрашивался»), и отчёт печатает его наравне с
+        остальными. Подделывать здесь пустой ответ было бы ровно той подменой,
+        против которой построен продукт: «не спрашивали» превратилось бы в
+        «спросили, и ничего нет».
         """
-        providers = [item for item in self._registry.external if not item.is_chained]
+        providers = [
+            item
+            for item in self._registry.external
+            if not item.is_chained and plan.includes(item.name)
+        ]
         if not providers:
             return []
         results = await asyncio.gather(
@@ -478,6 +531,7 @@ class SearchService:
         subject: SearchSubject,
         results: Sequence[ProviderResult],
         context: FetchContext,
+        plan: SourcePlan = EVERYTHING,
     ) -> list[ProviderResult]:
         """Second phase: sources fed by what the first phase found.
 
@@ -487,7 +541,9 @@ class SearchService:
         report lists it beside the rest whether it ran, was switched off, or had
         nothing to work with.
         """
-        providers = [item for item in self._registry.external if item.is_chained]
+        providers = [
+            item for item in self._registry.external if item.is_chained and plan.includes(item.name)
+        ]
         if not providers:
             return []
         chained_context = FetchContext(batch=context.batch, upstream=tuple(results))
@@ -856,7 +912,7 @@ def _dedupe_internal(records: Sequence[InternalDebtorRecord]) -> list[InternalDe
     return unique
 
 
-def build_query_hash(subject: SearchSubject) -> str:
+def build_query_hash(subject: SearchSubject, *, plan: SourcePlan = EVERYTHING) -> str:
     """Stable identity of a query, used as the cache key.
 
     One-way: the stored hash cannot be turned back into the query.
@@ -868,9 +924,16 @@ def build_query_hash(subject: SearchSubject) -> str:
     поля ``None``, и **любые** два поиска по паспорту делят одну запись кэша:
     при ``CACHE_TTL_HOURS=24`` второй оператор получил бы чужой отчёт с пометкой
     «из кэша». Хэш односторонний, так что паспорт в него можно класть.
+
+    ``plan`` входит в ключ, потому что выбор источников — часть вопроса, а не
+    способ на него ответить. Выборочная проверка кладёт в кэш отчёт с
+    «не опрашивался» у половины источников; без плана в ключе следующая полная
+    проверка получила бы его как свой. Полный план не добавляет в ключ ничего —
+    отчёты, снятые до появления выбора, остаются в кэше своими.
     """
     vehicle = subject.vehicle
     return stable_hash(
+        *_plan_key(plan),
         subject.search_type,
         subject.name.normalized if subject.name else None,
         iso_or_none(subject.birth_date),
@@ -885,6 +948,23 @@ def build_query_hash(subject: SearchSubject) -> str:
         vehicle.vin if vehicle else None,
         ",".join(sorted(subject.regions)),
     )
+
+
+def _plan_key(plan: SourcePlan) -> tuple[str, ...]:
+    """Часть ключа кэша, отвечающая за выбор источников.
+
+    Полный план не добавляет НИЧЕГО, и это условие совместимости: отчёты,
+    снятые до появления выбора, обязаны остаться в кэше своими. Иначе первая же
+    выкладка обнулила бы кэш целиком и превратила сутки бесплатных повторов в
+    сутки платных.
+
+    Список источников сортируется: множество неупорядоченно, а ключ обязан быть
+    одним и тем же для одного и того же выбора.
+    """
+    if not plan.is_selective:
+        return ()
+    names = "all" if plan.sources is None else ",".join(sorted(plan.sources))
+    return (f"plan:{names}", f"inn:{plan.buy_inn:d}")
 
 
 def redact_subject(subject: SearchSubject, *, store_sensitive: bool) -> dict[str, Any]:

@@ -285,6 +285,12 @@ button.copy[data-done="1"]{border-color:var(--good);color:var(--good)}
    ответ от тревоги. */
 .empty.answered{color:var(--ink);border-left:3px solid var(--good);
   padding-left:var(--s-3)}
+/* «Проверка выборочная» в шапке, у вердикта. Та же полоса того же цвета, что у
+   .empty.unchecked, и по той же причине: это утверждение о НЕПОЛНОТЕ, и читать
+   его надо той же идиомой, какой читаются непроверенные источники ниже.
+   Вердикт по трём источникам и вердикт по одиннадцати — разной цены. */
+.sub.unchecked{color:var(--warn);font-weight:600;
+  border-left:3px solid var(--warn);padding-left:var(--s-3)}
 .note{color:var(--ink-3);font-size:var(--t-2xs);margin:var(--s-2) 0 0}
 .note.scope{border-left:2px solid var(--line);padding-left:var(--s-3)}
 

@@ -695,6 +695,18 @@ class DebtorReport(BaseModel):
     recovery_score: RecoveryScore | None = None
     from_cache: bool = False
     cached_at: datetime | None = None
+    # Какие источники спрашивали, когда оператор выбрал их сам, и покупался ли
+    # ИНН. ``None`` — спрашивали всё, то есть обычная проверка.
+    #
+    # Поле нужно ОДНОЙ строке: «Проверка выборочная: спрошены только …».
+    # Состояния самих источников от него не зависят и честны без него —
+    # невыбранный источник результата не даёт и печатается как «не опрашивался»
+    # (``SourceStateCode.NOT_QUERIED``). Поэтому поле и не хранится в базе: у
+    # отчёта, открытого по ссылке позже, сводной строки не будет, а построчная
+    # правда останется. Это осознанный размен на миграцию, которой иначе
+    # потребовала бы одна поясняющая фраза.
+    queried_sources: tuple[ProviderName, ...] | None = None
+    bought_inn: bool = True
 
     @property
     def internal_record(self) -> InternalDebtorRecord | None:

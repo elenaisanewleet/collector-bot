@@ -522,6 +522,10 @@ def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
     if demo_mode:
         blocks.append(DEMO_BANNER)
     blocks.append(_header(report))
+    # Сразу за именем и до первого раздела. Читатель, не знающий, что половину
+    # источников не спрашивали, прочитает отчёт как полный — и «не опрашивался»
+    # у восьми разделов примет за особенность вёрстки.
+    blocks.append(selective_note(report))
     if report.from_cache:
         blocks.append(
             "♻️ Использованы кэшированные данные.\n"
@@ -552,6 +556,41 @@ def render_report(report: DebtorReport, *, demo_mode: bool = False) -> str:
 
 
 # ---------------------------------------------------------------- sections
+
+
+SELECTIVE_LEAD = "Проверка выборочная — по вашему выбору источников."
+SELECTIVE_NOBODY = "Ни один внешний источник не спрашивали: показано только то, что есть у вас."
+SELECTIVE_NO_INN = "ИНН по паспорту не покупали, поэтому источники, ищущие только по ИНН, молчат."
+
+
+def selective_note(report: DebtorReport) -> str:
+    """Чем эта проверка отличается от полной. Пусто, когда ничем.
+
+    ОДНОЙ СТРОКОЙ НА ВСЕХ, а не пометкой у каждого невыбранного источника. Это
+    то же правило, по которому в карточке не печатаются подряд пять «не
+    спрашивали»: девять строк «вы его не выбрали» читаются как девять бед, хотя
+    беда одна и она — решение оператора, принятое сознательно минуту назад.
+
+    Состояния источников при этом честны и без этой строки: невыбранный
+    результата не даёт и печатается как «не опрашивался». Строка не заменяет
+    построчную правду, а избавляет от необходимости складывать её глазами.
+    """
+    asked = report.queried_sources
+    if asked is None and report.bought_inn:
+        return ""
+    lines = [SELECTIVE_LEAD]
+    if asked is not None:
+        titles = [PROVIDER_TITLES.get(name, name.value) for name in asked]
+        if titles:
+            lines.append("Спрошены: " + ", ".join(titles) + ".")
+        else:
+            # Законный выбор: посмотреть, что даёт своя база и мосты, не
+            # потратив ни рубля. Молчать о нём нельзя — отчёт без единого
+            # внешнего ответа иначе читается как полный и пустой.
+            lines.append(SELECTIVE_NOBODY)
+    if not report.bought_inn:
+        lines.append(SELECTIVE_NO_INN)
+    return "\n".join(lines)
 
 
 def _header(report: DebtorReport) -> str:

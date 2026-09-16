@@ -28,7 +28,12 @@ from app.domain.models import DebtorReport
 from app.domain.verdict import FeeBasis, Verdict, VerdictDecision
 from app.providers.base import BaseProvider
 from app.providers.tax_debt import total_debt as total_tax_debt
-from app.services.reporting import DEMO_BANNER, SourceStateCode, source_state
+from app.services.reporting import (
+    DEMO_BANNER,
+    SourceStateCode,
+    selective_note,
+    source_state,
+)
 from app.utils.dates import format_date, format_datetime
 from app.utils.formatting import format_phone, truncate
 from app.utils.money import format_amount
@@ -296,6 +301,14 @@ def report_card(
             f"Перспектива взыскания: {bold(f'{score.score} из 100')}, "
             f"данные полны на {round(score.confidence * 100)}%"
         )
+
+    # Что именно спрашивали — до списка фактов, а не после. Список из трёх
+    # строк под карточкой выборочной проверки читается как «источников всего
+    # три», и порядок здесь единственная защита от этого чтения.
+    selective = selective_note(report)
+    if selective:
+        lines.append("")
+        lines.extend(esc(line) for line in selective.splitlines())
 
     facts = _facts(report)
     if facts:

@@ -14,8 +14,15 @@ from app.db.repository import SearchRepository
 from app.domain.enums import ProviderName, ProviderStatus, Region, ScoreCategory, SearchType
 from app.domain.identity import PersonName, SearchSubject, VehicleDescriptor, parse_fio
 from app.domain.models import ProviderResult
+from app.domain.source_plan import EVERYTHING, SourcePlan
 from app.providers.base import BaseProvider
-from app.services.reporting import PLEDGE_EMPTY_LINE, render_report
+from app.services.reporting import (
+    PLEDGE_EMPTY_LINE,
+    SELECTIVE_LEAD,
+    SourceStateCode,
+    render_report,
+    source_state,
+)
 from app.services.search import _enrich_from_internal, build_query_hash
 
 OPERATOR_ID = 111
@@ -588,3 +595,92 @@ async def test_what_the_operator_typed_beats_what_the_cache_remembers(
 
     assert again.subject.name is not None
     assert again.subject.name.last_name == "Королёва"
+
+
+# ---------------------------------------------------------------- выбор источников
+
+
+async def test_a_plan_asks_only_the_sources_it_names(container: Container) -> None:
+    """Выбор доходит до волны: неспрошенный источник результата не даёт.
+
+    Это и есть экономия, о которой просил владелец: «делать запросы отдельными
+    и не получить ИНН, чтобы не расходовать запросы в NewDB».
+    """
+    report = await container.search_service.search(
+        subject_for("Тестов Андрей Сергеевич", date(1985, 3, 12)),
+        telegram_user_id=OPERATOR_ID,
+        plan=SourcePlan.only([ProviderName.FSSP]),
+    )
+
+    asked = {result.provider for result in report.provider_results}
+    assert ProviderName.FSSP in asked
+    # Внутренняя база бесплатна и планом не управляется — она всегда своя.
+    assert asked <= {ProviderName.FSSP, ProviderName.INTERNAL}
+
+
+async def test_an_unasked_source_is_not_queried_never_empty(container: Container) -> None:
+    """ГЛАВНОЕ ТРЕБОВАНИЕ: экономия не делает отчёт лживым.
+
+    Невыбранный источник обязан читаться как «не опрашивался», а не как
+    «проверено, записей нет». Первое честно, второе — утверждение в пользу
+    должника, которого никто не делал.
+    """
+    report = await container.search_service.search(
+        subject_for("Тестов Андрей Сергеевич", date(1985, 3, 12)),
+        telegram_user_id=OPERATOR_ID,
+        plan=SourcePlan.only([ProviderName.FSSP]),
+    )
+
+    state = source_state(report.result_for(ProviderName.FEDRESURS))
+
+    assert state.code is SourceStateCode.NOT_QUERIED
+    assert state.answered is False, "неспрошенный источник не имеет права считаться отвеченным"
+
+
+async def test_a_selective_report_says_so_in_the_text(container: Container) -> None:
+    report = await container.search_service.search(
+        subject_for("Тестов Андрей Сергеевич", date(1985, 3, 12)),
+        telegram_user_id=OPERATOR_ID,
+        plan=SourcePlan.only([ProviderName.FSSP]),
+    )
+
+    assert SELECTIVE_LEAD in render_report(report)
+
+
+async def test_a_selective_check_never_serves_a_full_one_from_cache(
+    container: Container,
+) -> None:
+    """План входит в ключ кэша, и это корректность, а не экономия.
+
+    Без него полная проверка получила бы отчёт выборочной — неполный, но
+    подписанный как обычный, — и владелец увидел бы «не опрашивался» там, где
+    заплатил за ответ.
+    """
+    subject = subject_for("Тестов Андрей Сергеевич", date(1985, 3, 12))
+
+    await container.search_service.search(
+        subject, telegram_user_id=OPERATOR_ID, plan=SourcePlan.only([ProviderName.FSSP])
+    )
+    full = await container.search_service.search(subject, telegram_user_id=OPERATOR_ID)
+
+    assert not full.from_cache, "полная проверка подхватила кэш выборочной"
+    assert full.result_for(ProviderName.FEDRESURS) is not None
+
+
+def test_the_plan_changes_the_cache_key_but_a_full_plan_does_not() -> None:
+    """Полный план обязан дать ТОТ ЖЕ ключ, что и его отсутствие.
+
+    Это условие совместимости: иначе первая выкладка обнулила бы кэш целиком и
+    превратила сутки бесплатных повторов в сутки платных.
+    """
+    subject = subject_for("Тестов Андрей Сергеевич", date(1985, 3, 12))
+
+    assert build_query_hash(subject) == build_query_hash(subject, plan=EVERYTHING)
+    assert build_query_hash(subject) != build_query_hash(
+        subject, plan=SourcePlan.only([ProviderName.FSSP])
+    )
+    assert build_query_hash(subject) != build_query_hash(subject, plan=SourcePlan(buy_inn=False))
+    # Один и тот же выбор — один и тот же ключ, как бы его ни перечислили.
+    forward = SourcePlan.only([ProviderName.FSSP, ProviderName.PROPERTY])
+    backward = SourcePlan.only([ProviderName.PROPERTY, ProviderName.FSSP])
+    assert build_query_hash(subject, plan=forward) == build_query_hash(subject, plan=backward)

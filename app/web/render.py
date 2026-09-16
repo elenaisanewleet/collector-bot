@@ -80,6 +80,7 @@ from app.services.reporting import (
     SourceStateCode,
     empty_reason,
     property_unanswered_line,
+    selective_note,
     source_state,
     unanswered_line,
 )
@@ -398,12 +399,23 @@ def hero(
         if report.from_cache
         else ""
     )
+    # Выборочность стоит в шапке, у вердикта, а не под таблицей источников.
+    # Вердикт по трём источникам и вердикт по одиннадцати — разной цены, и
+    # разница обязана быть видна там, где читают вердикт.
+    selective = selective_note(report)
+    selected = (
+        '<p class="sub unchecked">'
+        + "<br>".join(e(line) for line in selective.splitlines())
+        + "</p>"
+        if selective
+        else ""
+    )
     return (
         f'<header class="hero">'
         f'<div class="badge {e(decision.verdict.value)}"><i></i>'
         f"{e(VERDICT_TITLES[decision.verdict])}</div>"
         f"<h1>{e(report.subject.display_name)}</h1>"
-        f'<p class="sub">{e(_subject_line(report))}</p>{cached}'
+        f'<p class="sub">{e(_subject_line(report))}</p>{cached}{selected}'
         f'<p class="why">{e(decision.headline)}</p>{reason_list}'
         f'<div class="nums">{"".join(numbers)}</div>'
         f"{coverage_line(report)}{_export_actions(exports)}</header>"
