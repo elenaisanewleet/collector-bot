@@ -12,7 +12,13 @@
 
 services:
   bot:
-    build: .
+    build:
+      context: .
+      args:
+        # Коммит запекается в образ, чтобы работающий контейнер сам называл
+        # свою версию: `git log` в каталоге говорит, что скачано, а не что
+        # запущено. Значение подставляет `make deploy`.
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     restart: unless-stopped
     env_file: .env
     environment:

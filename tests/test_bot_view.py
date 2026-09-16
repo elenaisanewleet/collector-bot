@@ -378,7 +378,9 @@ def test_a_zero_tax_debt_is_a_real_answer_and_says_so(settings: Settings) -> Non
     report.tax_debts.append(debt)
     report.provider_results.append(found(ProviderName.TAX_DEBT, [debt]))
 
-    assert facts(report) == ["Долг по налогам: нет"]
+    # «Долгов нет», а не «нет»: пустое «нет» в этом списке значит «источник
+    # ответил пусто», и утверждение сливалось бы с отсутствием записей.
+    assert facts(report) == ["Долг по налогам: долгов нет"]
 
 
 def test_a_tax_answer_without_a_sum_is_not_a_zero(settings: Settings) -> None:
@@ -394,20 +396,92 @@ def test_a_tax_answer_without_a_sum_is_not_a_zero(settings: Settings) -> None:
 
 
 def test_self_employment_is_a_status_and_never_a_number(settings: Settings) -> None:
-    """Запись о снятом с учёта — такая же найденная запись, как о действующем."""
+    """Три состояния статуса, и все три названы по-разному.
+
+    ``is_active`` равен ``None``, пока источник не сказал, и это НЕ «не
+    самозанятый» — так написано в самой модели. Все три состояния печатались
+    одним словом «нет», и «источник статуса не назвал» было не отличить от
+    «источник ответил, что статуса нет».
+    """
     from app.domain.models import SelfEmployedRecord
 
-    active = SelfEmployedRecord(is_active=True, match_confidence=1.0)
-    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
-    report.self_employment.append(active)
-    report.provider_results.append(found(ProviderName.SELF_EMPLOYED, [active]))
-    assert facts(report) == ["Самозанятость: да"]
+    def status(is_active: bool | None) -> list[str]:
+        record = SelfEmployedRecord(is_active=is_active, match_confidence=1.0)
+        report = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
+        report.self_employment.append(record)
+        report.provider_results.append(found(ProviderName.SELF_EMPLOYED, [record]))
+        return facts(report)
+
+    assert status(True) == ["Самозанятость: да"]
+    assert status(False) == ["Самозанятость: снят с учёта"]
+    assert status(None) == ["Самозанятость: статус не назван"]
+
+
+ADDRESS = "г Москва, проезд Тестовый,8,139"
+
+
+def test_the_card_keeps_every_field_the_echo_showed(settings: Settings) -> None:
+    """Карточка обязана донести то, что стояло в «Принял», — и адрес прежде всего.
+
+    Жалоба владельца: «вообще не все поля». Карточка правит то же сообщение, в
+    котором стояло эхо разбора, поэтому всё, чего в ней нет, из чата исчезает.
+    Паспорт, СНИЛС и ИНН она доносила, а адрес, телефон, госномер и VIN теряла.
+
+    Дороже всех терялся адрес: он единственный открывает ЕГРН, и по нему уходит
+    ПЛАТНЫЙ запрос. Владелец поймал подставленный чужой адрес только по
+    сообщению о ходе проверки — то есть единственный способ это заметить жил до
+    конца ожидания и стирался вместе с ним.
+    """
+    subject = person(
+        birth_date=date(1985, 3, 12),
+        inn="770912345601",
+        passport="4510123456",
+        passport_issued=date(2015, 1, 29),
+        snils="11223344595",
+        address=ADDRESS,
+        phone="+79990000000",
+    )
+    report = DebtorReport(subject=subject)
+
+    text = strip_tags(card(report, settings))
+
+    for expected in ("дата рождения", "ИНН 770912345601", "паспорт 4510123456", "выдан 29.01.2015"):
+        assert expected in text
+    assert ADDRESS in text, "адрес, по которому уходит платный запрос, не доехал до карточки"
+    assert "телефон" in text
+
+
+def test_only_a_real_finding_is_set_in_bold(settings: Settings) -> None:
+    """Выделение значит «находка» — и не имеет права стоять на слове «нет».
+
+    Жалоба владельца дословно: «почему-то только у самозанятости жирным
+    выделено Нет». Выделение в этот список введено, чтобы находка не тонула
+    среди девяти «нет», — а стояло на слове, которое говорит обратное.
+
+    Причина была в том, что «источник ответил» и «источник нашёл повод»
+    считались одним и тем же: запись о снятом с учёта — это состояние
+    ``FOUND``, значение «нет», и выделялось оно наравне с настоящей находкой.
+    """
+    from decimal import Decimal
+
+    from app.domain.models import SelfEmployedRecord, TaxDebtRecord
+
+    def line(record: Any, provider: ProviderName, field: str) -> str:
+        report = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
+        getattr(report, field).append(record)
+        report.provider_results.append(found(provider, [record]))
+        return view._facts(report)[0]
 
     former = SelfEmployedRecord(is_active=False, match_confidence=1.0)
-    stale = DebtorReport(subject=person(birth_date=date(1985, 3, 12), inn="770912345601"))
-    stale.self_employment.append(former)
-    stale.provider_results.append(found(ProviderName.SELF_EMPLOYED, [former]))
-    assert facts(stale) == ["Самозанятость: нет"]
+    active = SelfEmployedRecord(is_active=True, match_confidence=1.0)
+    no_debt = TaxDebtRecord(amount=Decimal("0"), match_confidence=1.0)
+    owes = TaxDebtRecord(amount=Decimal("12500"), match_confidence=1.0)
+
+    assert "<b>" not in line(former, ProviderName.SELF_EMPLOYED, "self_employment")
+    assert "<b>" not in line(no_debt, ProviderName.TAX_DEBT, "tax_debts")
+    # А настоящая находка выделена по-прежнему: правило не отменено, а сужено.
+    assert "<b>" in line(active, ProviderName.SELF_EMPLOYED, "self_employment")
+    assert "<b>" in line(owes, ProviderName.TAX_DEBT, "tax_debts")
 
 
 def test_account_blocks_are_counted_as_decisions(settings: Settings) -> None:

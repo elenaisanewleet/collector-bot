@@ -19,10 +19,21 @@ RUN pip install --upgrade pip && pip install .
 
 FROM python:3.12-slim AS runtime
 
+# Коммит, из которого собран ОБРАЗ. Стоит последним аргументом сборки
+# намеренно: он меняется при каждой выкладке, и объявленный выше обнулял бы
+# кэш всех слоёв под собой.
+#
+# Зачем он вообще. Код живёт внутри образа, и `git log` в рабочем каталоге
+# показывает, что СКАЧАНО, а не что ЗАПУЩЕНО: после `git pull` без пересборки
+# каталог уже новый, а контейнер поднимает старый код. Версия, которую несёт
+# сам образ, эту разницу видит — она печатается в `bot.starting`.
+ARG GIT_COMMIT=unknown
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
-    APP_MODE=demo
+    APP_MODE=demo \
+    APP_REVISION=$GIT_COMMIT
 
 # Runs unprivileged: the bot needs no root capability.
 RUN groupadd --system app && useradd --system --gid app --home /app app

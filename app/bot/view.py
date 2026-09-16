@@ -179,6 +179,17 @@ def identifiers_line(subject: SearchSubject) -> str | None:
     сказала прямо: «мы телефон ввели, чтобы в ответе были все поля».
 
     Имени здесь нет: оно стоит строкой выше, отдельно.
+
+    АДРЕС И ТЕЛЕФОН ЗДЕСЬ ОБЯЗАТЕЛЬНЫ, и это правка по жалобе владельца
+    «вообще не все поля». Строка повторяла «Принял» не полностью: паспорт,
+    СНИЛС и ИНН доносила, а адрес, телефон, госномер и VIN теряла — то есть
+    ровно те поля, которые в «Принял» стояли и после отчёта исчезали.
+
+    Дороже всех обошёлся адрес. Он единственный открывает ЕГРН, и по нему
+    уходит ПЛАТНЫЙ запрос. Владелец заметил, что бот подставил чужую квартиру,
+    только по сообщению о ходе проверки — в карточке, которая от него остаётся,
+    адреса не было вовсе. То есть единственный способ поймать неверный адрес
+    жил до конца ожидания и стирался вместе с ним.
     """
     if subject.search_type != SearchType.PERSON.value:
         return None
@@ -194,6 +205,14 @@ def identifiers_line(subject: SearchSubject) -> str | None:
         parts.append(f"паспорт {subject.passport}{issued}")
     if subject.snils:
         parts.append(f"СНИЛС {subject.snils}")
+    if subject.address:
+        parts.append(f"адрес {truncate(subject.address, 90)}")
+    if subject.phone:
+        parts.append(f"телефон {format_phone(subject.phone)}")
+    if subject.vehicle and subject.vehicle.plate:
+        parts.append(f"госномер {subject.vehicle.plate}")
+    if subject.vehicle and subject.vehicle.vin:
+        parts.append(f"VIN {subject.vehicle.vin}")
     return " · ".join(parts) if parts else None
 
 
@@ -367,8 +386,8 @@ def _facts(report: DebtorReport) -> list[str]:
             continue
         state = source_state(result)
         if state.code is SourceStateCode.FOUND:
-            value = _found_value(provider, report, len(result.records))
-            lines.append(f"{title}: {bold(esc(value))}")
+            value, notable = _found_value(provider, report, len(result.records))
+            lines.append(f"{title}: {bold(esc(value)) if notable else esc(value)}")
         elif state.code is SourceStateCode.EMPTY:
             lines.append(f"{title}: нет")
         # Неспрошенное строкой не печатается вовсе, и это правило владелицы:
@@ -402,12 +421,24 @@ def inn_only_sources(providers: Sequence[BaseProvider]) -> str:
     return ", ".join(subjects[:-1]) + f" и {subjects[-1]}"
 
 
-def _found_value(provider: ProviderName, report: DebtorReport, count: int) -> str:
-    """Что написать после двоеточия, когда источник что-то нашёл.
+def _found_value(provider: ProviderName, report: DebtorReport, count: int) -> tuple[str, bool]:
+    """Что написать после двоеточия — и надо ли это выделять.
 
-    По умолчанию — число записей: «Исполнительные производства: 3» отвечает на
-    вопрос сразу. Но у трёх источников число записей не значит ничего полезного
-    и в двух случаях из трёх врёт.
+    ВТОРОЕ ЗНАЧЕНИЕ ЗАВЕДЕНО ПО ЖАЛОБЕ ВЛАДЕЛЬЦА: «почему-то только у
+    самозанятости жирным выделено Нет». Выделение в этом списке значит
+    «находка» — ради этого оно и введено, чтобы находка не тонула среди
+    девяти «нет». А тут оно стояло на слове, которое говорит обратное.
+
+    Причина была в том, что «источник ответил» и «источник нашёл повод»
+    считались одним и тем же. Запись о СНЯТОМ с учёта самозанятом — найденная
+    запись, состояние источника ``FOUND``, значение «нет», и выделялось оно
+    наравне с настоящей находкой. Ноль налогового долга — то же самое.
+    Поэтому решает теперь не состояние источника, а смысл ответа: выделено
+    только то, что меняет перспективу взыскания.
+
+    По умолчанию значение — число записей: «Исполнительные производства: 3»
+    отвечает на вопрос сразу. Но у трёх источников число записей не значит
+    ничего полезного и в двух случаях из трёх врёт.
 
     **Розыск.** МВД ищет по строке имени, и полный тёзка попадает в выдачу
     наравне с должником. «Розыск МВД: 1» под карточкой человека, которого никто
@@ -421,22 +452,36 @@ def _found_value(provider: ProviderName, report: DebtorReport, count: int) -> st
     долгов нет»), и он тоже печатается словом.
 
     **Самозанятость.** Это статус, и запись о снятом с учёта — такая же
-    найденная запись, как о действующем. Числа здесь быть не может вовсе.
+    найденная запись, как о действующем. Числа здесь быть не может вовсе, а
+    трёх состояний — да, снят, не назван — меньше быть не может: ``is_active``
+    равен ``None``, пока источник не сказал, и это НЕ «не самозанятый» (см.
+    :class:`~app.domain.models.SelfEmployedRecord`). Все три печатались одним
+    словом «нет», и «источник статуса не назвал» было не отличить от
+    «источник ответил, что статуса нет».
     """
     if provider is ProviderName.WANTED:
         confirmed = [item for item in report.wanted if item.is_confirmed]
-        return str(len(confirmed)) if confirmed else "однофамилец, не должник"
+        if confirmed:
+            return str(len(confirmed)), True
+        return "однофамилец, не должник", False
     if provider is ProviderName.TAX_DEBT:
         total = total_tax_debt([item for item in report.tax_debts if item.is_usable])
         if total is None:
             # Источник ответил, но суммы не назвал. Это не ноль: ноль —
             # утверждение, а молчание о сумме утверждением не является.
-            return "сумма не названа"
-        return format_amount(total) if total else "нет"
+            return "сумма не названа", False
+        # Ноль — значащий ответ, но не находка: ещё одного взыскателя впереди
+        # нас он не добавляет. «Долгов нет», а не «нет»: пустое «нет» здесь
+        # читалось бы как «не проверяли».
+        return (format_amount(total), True) if total else ("долгов нет", False)
     if provider is ProviderName.SELF_EMPLOYED:
-        active = any(item.is_active is True for item in report.self_employment if item.is_usable)
-        return "да" if active else "нет"
-    return str(count)
+        usable = [item for item in report.self_employment if item.is_usable]
+        if any(item.is_active is True for item in usable):
+            return "да", True
+        if any(item.is_active is False for item in usable):
+            return "снят с учёта", False
+        return "статус не назван", False
+    return str(count), True
 
 
 def _gaps(report: DebtorReport) -> list[str]:

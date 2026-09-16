@@ -7,6 +7,7 @@ the pipeline end to end in the terminal, with no token and no network.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -62,6 +63,32 @@ BAD_NEWDB_FIELD_MAP = (
     "Пока он не исправлен, методы NewDB кроме fssp_person остались бы "
     "неподключёнными молча — поэтому запуск остановлен."
 )
+
+
+#: Коммит, из которого собран ОБРАЗ. Проставляется при сборке
+#: (``Dockerfile``: ``ARG GIT_COMMIT`` → ``ENV APP_REVISION``).
+_REVISION_ENV = "APP_REVISION"
+UNKNOWN_REVISION = "unknown"
+
+
+def revision() -> str:
+    """Версия работающего кода — и почему её недостаточно спросить у git.
+
+    Код живёт ВНУТРИ образа. ``git log`` в рабочем каталоге показывает, что
+    скачано, а не что запущено: после ``git pull`` без пересборки каталог уже
+    новый, а контейнер по-прежнему поднимает старый код. Проверка выкладки,
+    опиравшаяся на ``git log``, эту разницу не видела и говорила «обновились»,
+    когда обновления не было, — на этом потерян день.
+
+    Поэтому версию несёт сам образ, и печатается она в ``bot.starting``: лог
+    работающего процесса — единственное место, где утверждение «запущен такой-то
+    код» проверяемо.
+
+    ``unknown`` — честный ответ для сборки, собранной без аргумента (локально
+    через ``docker compose build`` без ``GIT_COMMIT``), и он лучше пустоты: он
+    прямо говорит, что версию установить нечем.
+    """
+    return os.getenv(_REVISION_ENV) or UNKNOWN_REVISION
 
 
 async def _upgrade_schema() -> None:
@@ -130,6 +157,7 @@ async def start_bot(settings: Settings | None = None) -> None:
         app_name=resolved.app_name,
         mode=resolved.app_mode.value,
         allowed_users=len(resolved.allowed_user_ids),
+        revision=revision(),
     )
     try:
         # Drop updates queued while the bot was down: acting on a stale search

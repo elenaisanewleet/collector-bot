@@ -88,14 +88,17 @@ docker-down:  ## Stop the containers
 # конфликт — его надо увидеть, а не проглотить внутри цели.
 
 deploy:  ## Пересобрать образ и поднять прод (git pull делается ДО этого, руками)
-	$(COMPOSE_PROD) build
+	GIT_COMMIT=$$(git rev-parse --short HEAD) $(COMPOSE_PROD) build
 	$(COMPOSE_PROD) up -d
-	$(COMPOSE_PROD) ps
+	@$(MAKE) --no-print-directory prod-ps
 
-prod-ps:  ## Что сейчас запущено на проде и с какого образа
-	$(COMPOSE_PROD) ps
+prod-ps:  ## Что запущено на проде: версия ОБРАЗА против версии каталога
+	@$(COMPOSE_PROD) ps
 	@echo
-	@git log --oneline -1
+	@echo "в каталоге: $$(git rev-parse --short HEAD) $$(git log -1 --format=%s)"
+	@echo "в контейнере: $$($(COMPOSE_PROD) exec -T bot printenv APP_REVISION 2>/dev/null || echo '(не отвечает)')"
+	@echo
+	@echo "Расходятся — значит git pull прошёл, а пересборка нет: нужен make deploy."
 
 prod-logs:  ## Последние строки лога бота: make prod-logs n=100
 	$(COMPOSE_PROD) logs --tail=$(or $(n),40) bot
