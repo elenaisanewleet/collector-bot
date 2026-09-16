@@ -9,7 +9,12 @@ BIN    := $(VENV)/bin
 PY     := $(BIN)/python
 
 .DEFAULT_GOAL := help
-.PHONY: help install venv run demo seed migrate migration test lint format typecheck check clean docker-build docker-up docker-down
+# Боевое развёртывание идёт по СВОЕМУ файлу compose: в нём есть Caddy с TLS, а
+# веб-порт наружу не публикуется. Забыть `-f` значит поднять локальную сборку
+# рядом с боевой — без прокси и с портом в мир.
+COMPOSE_PROD := docker compose -f docker-compose.prod.yml
+
+.PHONY: help install venv run demo seed migrate migration test lint format typecheck check clean docker-build docker-up docker-down deploy prod-ps prod-logs prod-down
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -70,3 +75,30 @@ docker-up:  ## Start the bot in Docker
 
 docker-down:  ## Stop the containers
 	docker compose down
+
+# ---------------------------------------------------------------- прод
+#
+# Зачем эти цели вообще. Код живёт В ОБРАЗЕ, а не в рабочем каталоге: `git pull`
+# без пересборки не меняет на проде ничего, и выкладка выглядит успешной, не
+# будучи ею. Проверено дорогой ценой — владелец обновил сервер, а бот продолжал
+# отвечать старым кодом.
+#
+# `git pull` здесь намеренно НЕ делается. На сервере правятся карты полей в
+# `config/field_maps/`, они под контролем версий, и pull может упереться в
+# конфликт — его надо увидеть, а не проглотить внутри цели.
+
+deploy:  ## Пересобрать образ и поднять прод (git pull делается ДО этого, руками)
+	$(COMPOSE_PROD) build
+	$(COMPOSE_PROD) up -d
+	$(COMPOSE_PROD) ps
+
+prod-ps:  ## Что сейчас запущено на проде и с какого образа
+	$(COMPOSE_PROD) ps
+	@echo
+	@git log --oneline -1
+
+prod-logs:  ## Последние строки лога бота: make prod-logs n=100
+	$(COMPOSE_PROD) logs --tail=$(or $(n),40) bot
+
+prod-down:  ## Остановить прод целиком
+	$(COMPOSE_PROD) down
