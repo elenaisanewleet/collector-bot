@@ -167,14 +167,15 @@ def dump_settings(settings: Settings, tmp_path: Path) -> Settings:
     """Настройки под поставщика, который отвечает свалкой находок по номеру.
 
     Карта названа его ключами — ``full_name``, ``birth_date``, ``inn``,
-    ``passport``, ``snils``: именно их владелец подтвердил как верные на своём
-    номере.
+    ``passport``, ``snils``, ``address``: именно их владелец подтвердил как
+    верные на своём номере.
     """
     path = tmp_path / "dump.json"
     path.write_text(
         '{"records_path": "results", "fields": {"fio": "full_name",'
         ' "birth_date": "birth_date", "inn": "inn", "passport": "passport",'
-        ' "passport_info": "passport_info", "snils": "snils"}}',
+        ' "passport_info": "passport_info", "snils": "snils",'
+        ' "address": "address"}}',
         encoding="utf-8",
     )
     return settings.model_copy(update={"phone_bridge_field_map": path})
@@ -424,6 +425,55 @@ async def test_the_identity_is_taken_from_its_own_block(dump_settings: Settings)
     # ИНН взят из блока без имени, но с ТЕМ ЖЕ паспортом: это проверяемое «тот
     # же человек», а не догадка по соседству.
     assert result.inn == "500100732259"
+
+
+#: Тот же ответ-свалка, но с адресами. Существенно, что чужой адрес стоит в
+#: НЕСКОЛЬКИХ блоках без единого идентификатора: такие блоки не противоречат
+#: опорному ничем и потому попадают в родню, ничего про себя не доказав.
+HER_ADDRESS = "г Москва, проезд Тестовый,8,139"
+OTHER_ADDRESS = "г Москва, проспект Иной, д 73/2, кв 1"
+WITH_ADDRESSES = {
+    "search_type": "phone",
+    "results": [
+        {"address": OTHER_ADDRESS},
+        {"full_name": "Ivanova Elena", "email": "e@example.test"},
+        {
+            "full_name": "Иванова Елена Петровна",
+            "birth_date": "1984-06-25",
+            "passport": "4510123456",
+            "snils": "11223344595",
+            "address": HER_ADDRESS,
+        },
+        {"address": OTHER_ADDRESS},
+        {"address": OTHER_ADDRESS},
+    ],
+}
+
+
+@respx.mock
+async def test_the_address_comes_from_the_anchor_block(dump_settings: Settings) -> None:
+    """Адрес берётся оттуда же, откуда паспорт, — а не голосованием по родне.
+
+    Регрессия, найденная владельцем на собственном номере: бот подставил ей
+    чужую квартиру по другому проспекту. Её адрес лежал в опорном блоке, рядом
+    с паспортом и СНИЛСом, а победил адрес, повторившийся в ответе чаще.
+
+    Цена ошибки — не только неверная строка в карточке: по этому адресу уходит
+    ПЛАТНЫЙ запрос в Росреестр, и ответ приходит про чужое имущество. Выглядит
+    он при этом как находка.
+    """
+    respx.get(url__startswith=BASE).mock(return_value=Response(200, json=WITH_ADDRESSES))
+    bridge = build_phone_bridge(dump_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    # Опорный блок опознан тот же, что и раньше: адрес не должен его менять.
+    assert result.passport == "4510123456"
+    assert result.address == HER_ADDRESS, "уехал адрес чужого человека"
 
 
 @respx.mock

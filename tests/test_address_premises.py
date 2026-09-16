@@ -76,7 +76,8 @@ def test_all_three_users_agree_on_the_same_address(address: str) -> None:
     """
     rows = [{"address": "г Тестов, ул Вторая, 3"}, {"address": address}]
 
-    assert pick_by_phone(rows) == address
+    # Опорного блока нет — значит решают квартира и частота, как и раньше.
+    assert pick_by_phone(rows, None) == address
     assert pick_by_name(rows) == address
     subject = SearchSubject(search_type=SearchType.PERSON.value, address=address)
     assert _query_for(subject) == {"country": "ru", "address": address}
@@ -132,15 +133,59 @@ def test_every_address_of_a_block_takes_part_not_just_the_first() -> None:
     """В блоке бывает и прописка, и фактический — участвуют оба.
 
     Раньше из строки брался первый непустой ключ из шести, и второй адрес того
-    же блока не участвовал ни в выборе, ни в подсчёте частоты.
+    же блока не участвовал ни в выборе, ни в подсчёте частоты. Проверяется на
+    блоке, у которого первый ключ адресом НЕ является: если бы участвовал
+    только он, не нашлось бы ничего.
     """
     rows = [
-        {"address": ODD, "address_reg": FEST},
+        {"address": "Москва", "address_reg": FEST},
         {"address": FEST},
     ]
 
-    assert pick_by_phone(rows) == FEST
+    assert pick_by_phone(rows, None) == FEST
     assert pick_by_name(rows) == FEST
+
+
+def test_the_anchor_block_decides_the_address_not_the_crowd() -> None:
+    """Адрес опорного блока побеждает адрес, повторившийся чаще.
+
+    Регрессия, найденная владельцем на собственном номере: бот подставил ей
+    чужую квартиру по другому проспекту, а её собственный адрес лежал в опорном
+    блоке. Частота сама по себе — довод настоящий, но применили её ко ВСЕЙ
+    родне, а родню разбор определяет правилом «не противоречит»: блок с одним
+    адресом и без единого идентификатора не противоречит никому и попадает в
+    родню, ничего про себя не доказав. Несколько таких перевешивают
+    единственный блок, про который известно, что он о нашем человеке.
+
+    Так адрес встаёт в один ряд с остальными полями: паспорт, СНИЛС, ИНН и дату
+    рождения разбор берёт первым годным начиная с якоря, и голосованием
+    решался ровно один адрес.
+    """
+    anchor = {"address": FEST}
+    strangers = [{"address": ODD}, {"address": ODD}, {"address": ODD}]
+
+    assert pick_by_phone([anchor, *strangers], anchor) == FEST
+    # И то же самое на уровне общего правила, без моста.
+    assert pick_address([ODD, ODD, ODD], preferred=[FEST]) == FEST
+
+
+def test_the_anchor_house_beats_a_strangers_flat() -> None:
+    """Дом нашего человека сильнее чужой квартиры — и это про деньги.
+
+    Внутри группы адрес с квартирой сильнее адреса до дома: только такой примет
+    Росреестр. Но между группами это предпочтение не действует. Дом якоря даёт
+    бесплатный и честный отказ «нужен адрес с квартирой», а чужая квартира —
+    оплаченный ответ про чужое имущество, и именно он выглядит как находка.
+    """
+    house = "г Москва, ул Первая, 8"
+
+    assert pick_address([FEST, FEST], preferred=[house]) == house
+
+
+def test_frequency_still_decides_when_the_anchor_is_silent() -> None:
+    """Опорный блок без адреса — и довод владельца работает в полную силу."""
+    assert pick_address([ODD, FEST, FEST], preferred=[]) == FEST
+    assert pick_address([ODD, FEST, FEST], preferred=["Москва", "—"]) == FEST
 
 
 def test_nothing_usable_gives_nothing() -> None:
