@@ -92,13 +92,25 @@ deploy:  ## Пересобрать образ и поднять прод (git pu
 	$(COMPOSE_PROD) up -d
 	@$(MAKE) --no-print-directory prod-ps
 
+# Вывод СРАВНИВАЕТ версии сам, а не просит сравнить глазами. Строка
+# «Расходятся — значит…» печаталась безусловно, и владелец прочитал её дважды
+# при совпадающих версиях: проверка выкладки, которая предупреждает об ошибке,
+# когда ошибки нет, обесценивает собственное предупреждение.
 prod-ps:  ## Что запущено на проде: версия ОБРАЗА против версии каталога
 	@$(COMPOSE_PROD) ps
 	@echo
-	@echo "в каталоге: $$(git rev-parse --short HEAD) $$(git log -1 --format=%s)"
-	@echo "в контейнере: $$($(COMPOSE_PROD) exec -T bot printenv APP_REVISION 2>/dev/null || echo '(не отвечает)')"
-	@echo
-	@echo "Расходятся — значит git pull прошёл, а пересборка нет: нужен make deploy."
+	@tree=$$(git rev-parse --short HEAD); \
+	image=$$($(COMPOSE_PROD) exec -T bot printenv APP_REVISION 2>/dev/null | tr -d '\r\n'); \
+	echo "в каталоге:   $$tree $$(git log -1 --format=%s)"; \
+	echo "в контейнере: $${image:-(не отвечает)}"; \
+	echo; \
+	if [ -z "$$image" ]; then \
+		echo "Контейнер не ответил: он не запущен или собран до появления метки версии."; \
+	elif [ "$$image" = "$$tree" ]; then \
+		echo "Совпадают: запущен тот код, что в каталоге."; \
+	else \
+		echo "РАСХОЖДЕНИЕ: git pull прошёл, а пересборка нет. Нужен make deploy."; \
+	fi
 
 prod-logs:  ## Последние строки лога бота: make prod-logs n=100
 	$(COMPOSE_PROD) logs --tail=$(or $(n),40) bot
