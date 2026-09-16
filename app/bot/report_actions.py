@@ -32,6 +32,16 @@ from app.domain.identity import PASSPORT_LENGTH, SearchSubject
 from app.providers.identity_bridge import InnBridgeProvider
 from app.utils.formatting import pluralize_ru
 
+#: Подписи и адреса двух кнопок, которые ведут на экраны карточки запроса.
+#: Строки, а не импорт из ``card_view``: тот импортирует ``sources_pick``, а
+#: ``sources_pick`` — ``keyboards``, и втягивать сюда всю эту ветку ради двух
+#: констант значило бы завести цикл ради экономии двух строк. Значения
+#: закреплены тестом, чтобы расхождение не стало молчаливым.
+SOURCES_LABEL = "Источники и цена"
+SOURCES_CALLBACK = "sp:open"
+RESET_LABEL = "Сбросить данные"
+RESET_CALLBACK = "qc:reset"
+
 #: ``padd:<поле>:<токен субъекта>``. Двадцать семь байт при лимите Telegram в 64.
 PERSON_ADD_PREFIX = "padd"
 
@@ -100,6 +110,23 @@ def report_keyboard(
         )
         if narrowable:
             rows.extend(_offers(subject, bridge, token=refresh_token))
+    # ВЫБОР ИСТОЧНИКОВ И СБРОС — ЗДЕСЬ, А НЕ ТОЛЬКО НА КАРТОЧКЕ ЗАПРОСА.
+    #
+    # Сначала они стояли только там, и это была ошибка размещения, стоившая
+    # владельцу ещё одного вечера: «нет возможности спросить ИНН и отдельно
+    # другие реестры». Возможность была — на экране, до которого он не доходил.
+    # Момент нужды наступает ПОД ОТЧЁТОМ: человек прочитал ответ, увидел
+    # неверный адрес или лишние траты и хочет переспросить иначе. Карточка
+    # запроса к этому моменту уже уехала вверх чата.
+    #
+    # Токена этим кнопкам не нужно: обе относятся к карточке текущего
+    # оператора, а она живёт в базе и не истекает через час.
+    rows.append(
+        [
+            InlineKeyboardButton(text=SOURCES_LABEL, callback_data=SOURCES_CALLBACK),
+            InlineKeyboardButton(text=RESET_LABEL, callback_data=RESET_CALLBACK),
+        ]
+    )
     rows.append(
         [
             InlineKeyboardButton(text="Новая проверка", callback_data=BACK_CALLBACK),

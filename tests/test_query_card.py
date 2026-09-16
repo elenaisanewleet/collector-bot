@@ -968,11 +968,51 @@ async def test_a_reset_sends_the_next_check_past_the_cache(container: Container)
     assert cards.take_force_next(card) is False
 
 
-async def test_a_card_filled_by_hand_offers_no_reset(container: Container) -> None:
+async def test_an_empty_card_offers_no_reset(container: Container) -> None:
     """Сбрасывать нечего — кнопки нет: она обещала бы действие без последствий."""
     cards = container.query_cards
     card = await cards.load(OPERATOR_ID, CHAT_ID)
-    card.last_name = "Тестов"
+    card.phone = "+79990000000"
     await cards.save(card)
 
+    # Телефон мост не добывает — он всегда введён оператором, и сбрасывать его
+    # незачем. Кроме него в карточке ничего нет.
     assert cards.has_derived(card) is False
+
+
+async def test_a_reset_survives_a_restart_and_never_touches_what_only_you_can_give(
+    container: Container,
+) -> None:
+    """Без пометок сбрасывается всё, что мост УМЕЕТ добыть. И это не мелочь.
+
+    Пометки живут в памяти процесса и стираются при каждой выкладке — то есть
+    ровно тогда, когда сброс и нужен: владелец обновил сервер ради
+    исправленного выбора адреса и обнаружил, что кнопки нет, а старый адрес на
+    месте. Поэтому пустая пометка значит «сбросить всё добываемое», а не
+    «сбрасывать нечего».
+
+    Размен назван вслух: дату рождения оператор мог набрать руками, и она
+    уйдёт. Не уйдёт то, чего мост не добывает вовсе.
+    """
+    cards = container.query_cards
+    card = await cards.load(OPERATOR_ID, CHAT_ID)
+    card.phone = "+79990000000"
+    card.contract_number = "ЭВ-2026/000082"
+    card.plate = "А123ВС777"
+    card.last_name = "Тестова"
+    card.address = "г Москва, проспект Иной, д 73/2, кв 1"
+    card.birth_date = date(1994, 11, 24)
+    await cards.save(card)
+
+    # Пометок нет — как после перезапуска бота.
+    assert cards.has_derived(card) is True
+
+    card = await cards.drop_derived(card)
+
+    assert card.address is None
+    assert card.last_name is None
+    assert card.birth_date is None
+    # Ввод, который мост добыть не может, остаётся при любом сбросе.
+    assert card.phone == "+79990000000"
+    assert card.contract_number == "ЭВ-2026/000082"
+    assert card.plate == "А123ВС777"

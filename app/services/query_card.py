@@ -615,13 +615,46 @@ class QueryCardService:
             self._derived[card.key] = self._derived.get(card.key, frozenset()) | fields
 
     def has_derived(self, card: Card) -> bool:
-        """Есть ли в карточке что-то, выведенное мостом. Решает показ кнопки.
+        """Есть ли в карточке что-то, что мог положить мост. Решает показ кнопки.
 
         Кнопка сброса на карточке, собранной руками, обещала бы действие без
-        последствий: сбрасывать там нечего, а введённое оператором сброс не
-        трогает.
+        последствий: сбрасывать там нечего.
         """
-        return bool(self._derived.get(card.key))
+        return bool(self._resettable(card))
+
+    def _resettable(self, card: Card) -> frozenset[str]:
+        """Какие поля сбросит :meth:`drop_derived`.
+
+        ТОЧНЫЙ СПИСОК, ПОКА ОН ЕСТЬ, И ШИРОКИЙ, КОГДА ЕГО НЕТ. Точный — это
+        пометки от :func:`fill_from_bridge`, они живут в памяти процесса и
+        сбрасывают ровно выведенное, не трогая введённое.
+
+        А вот пустая пометка НЕ значит «сбрасывать нечего», и это выяснилось
+        дорогой ценой. Список стирается при перезапуске бота — то есть при
+        каждой выкладке, — а выкладка ровно тот момент, когда сброс и нужен:
+        владелец обновил сервер ради исправленного выбора адреса и обнаружил,
+        что кнопки нет, а старый адрес на месте. «Безопасная порча» оказалась
+        безопасной для данных и губительной для смысла кнопки.
+
+        Поэтому без пометок сбрасывается всё, что мост УМЕЕТ добыть. Введённое
+        при этом тоже может попасть под нож — дату рождения оператор мог
+        набрать руками, — и это осознанный размен: номер, договор, госномер и
+        VIN мост не добывает вовсе, они остаются всегда, а остальное оператор
+        допишет одним сообщением. Полная очистка (``wipe``) сносит и их.
+        """
+        pinned = self._derived.get(card.key)
+        if pinned:
+            return pinned
+        present = {
+            "name": bool(card.last_name),
+            "birth_date": card.birth_date is not None,
+            "inn": bool(card.inn),
+            "passport": bool(card.passport_masked),
+            "snils": bool(card.snils_masked),
+            "passport_issued": card.passport_issued is not None,
+            "address": bool(card.address),
+        }
+        return frozenset(field for field, filled in present.items() if filled)
 
     async def drop_derived(self, card: Card) -> Card:
         """Выбросить из карточки всё, что вывел мост. Введённое остаётся.
@@ -642,7 +675,8 @@ class QueryCardService:
         выбрасывается ровно выведенное — по списку, собранному
         :func:`fill_from_bridge`.
         """
-        derived = self._derived.pop(card.key, frozenset())
+        derived = self._resettable(card)
+        self._derived.pop(card.key, None)
         if not derived:
             return card
         if "name" in derived:

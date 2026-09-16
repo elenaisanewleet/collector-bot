@@ -22,6 +22,7 @@ from decimal import Decimal
 import pytest
 from aiogram.types import InlineKeyboardMarkup
 
+from app.bot import report_actions
 from app.bot.report_actions import _report_label, passport_would_help, report_keyboard
 from app.config import Settings
 from app.domain.enums import SearchType
@@ -413,3 +414,38 @@ def test_the_button_counts_nothing_the_card_does_not_name(subject: SearchSubject
     for attribute in counted:
         provider = _one_record(attribute, subject).provider
         assert provider in named, f"{attribute} считается на кнопке, но в карточке безымянен"
+
+
+def test_the_report_offers_the_source_picker_and_the_reset() -> None:
+    """Момент нужды — ПОД ОТЧЁТОМ, и кнопки обязаны быть здесь.
+
+    Сначала выбор источников и сброс стояли только на карточке запроса, и это
+    была ошибка размещения: владелец написал «нет возможности спросить ИНН и
+    отдельно другие реестры», хотя возможность была — на экране, до которого он
+    не доходил. Карточка запроса к моменту чтения отчёта уже уехала вверх чата.
+    """
+    markup = report_keyboard(
+        url="https://reports.example.test/r/x",
+        refresh_token="tok",
+        subject=SearchSubject(search_type=SearchType.PERSON.value),
+        bridge=None,
+    )
+    data = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert report_actions.SOURCES_CALLBACK in data
+    assert report_actions.RESET_CALLBACK in data
+
+
+def test_the_two_callbacks_match_the_handlers_that_serve_them() -> None:
+    """Адреса кнопок совпадают с обработчиками, а не просто похожи.
+
+    Константы здесь заданы строками, чтобы не тащить в этот модуль ветку
+    импортов ``card_view`` → ``sources_pick`` ради двух значений. Цена такой
+    развязки — возможность молчаливого расхождения: кнопка осталась бы, а
+    нажатие перестало бы что-либо делать. Тест и есть та цена, уплаченная один
+    раз.
+    """
+    from app.bot import card_view, sources_pick
+
+    assert report_actions.SOURCES_CALLBACK == sources_pick.SP_OPEN
+    assert report_actions.RESET_CALLBACK == card_view.QC_RESET
