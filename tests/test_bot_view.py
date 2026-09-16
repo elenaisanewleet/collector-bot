@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date
 from typing import Any
 
 from app.bot import view
@@ -565,3 +565,41 @@ def test_no_promise_when_the_bridge_itself_waits_for_the_inn(settings: Settings)
     )
 
     assert "добуду сам" not in "\n".join(view._gaps(report))
+
+
+def test_a_cached_card_says_so_before_the_verdict(settings: Settings) -> None:
+    """«Это прошлая проверка» стоит ДО вердикта и называет кнопку.
+
+    Три раза подряд эта строка была не прочитана, и каждый раз стоила часа:
+    владелец правил код, обновлял сервер, вводил номер, видел прежний ответ и
+    писал «как будто это опять старая проверка» — а карточка ему об этом
+    честно говорила. Последней строкой, обычным текстом, ниже списка
+    источников. Там её читают как подпись под документом.
+
+    Дефект был не в правдивости, а в весе и в месте.
+    """
+    from datetime import datetime
+
+    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12)))
+    report.from_cache = True
+    report.cached_at = datetime(2026, 9, 16, 15, 23, tzinfo=UTC)
+
+    text = card(report, settings)
+    plain = strip_tags(text)
+
+    assert "Это прошлая проверка" in plain
+    # ДО вердикта: утверждение про свежесть относится ко всему, что ниже.
+    verdict = next(lead for lead in view.VERDICT_LEAD.values() if lead in plain)
+    assert plain.index("Это прошлая проверка") < plain.index(verdict)
+    # И называет действие: без него оператор идёт вводить номер заново — то
+    # есть делает единственное, чем кэш обойти нельзя.
+    assert "Спросить заново" in plain
+    # Выделена: обычным текстом она три раза не сработала.
+    assert "<b>Это прошлая проверка" in text
+
+
+def test_a_fresh_card_says_nothing_about_a_cache(settings: Settings) -> None:
+    """Свежая проверка о кэше молчит: говорить нечего."""
+    report = DebtorReport(subject=person(birth_date=date(1985, 3, 12)))
+
+    assert "прошлая проверка" not in strip_tags(card(report, settings))
