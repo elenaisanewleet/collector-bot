@@ -168,6 +168,10 @@ async def show(
         # Есть ли что сбрасывать: кнопка сброса показывается только когда мост
         # что-то вывел сам.
         derived=container.query_cards.has_derived(card),
+        # Личность собрана, а в реестры ещё не ходили. Карточка, полная
+        # паспортов и адресов, выглядит как результат платной проверки — и без
+        # этой строки оператор считает, что уже заплатил.
+        not_yet_charged=container.query_cards.has_derived(card) and card.checked_at is None,
     )
     if answering:
         # ОТВЕТ НА СООБЩЕНИЕ ВСЕГДА ПЕРЕЕЗЖАЕТ ВНИЗ, и это не расточительство.
@@ -397,7 +401,8 @@ async def settle(
         await recognised(message, container, card, found.only, user_id, notice=notice)
         return
 
-    if resolved_now and _runnable_now(container, card):
+    autorun = container.settings.auto_check_after_lookup
+    if resolved_now and autorun and _runnable_now(container, card):
         # Личность собрана по номеру, а в выгрузке такого нет — это НОВЫЙ
         # клиент, и проверка ему нужна ровно так же. Раньше здесь бот
         # останавливался и показывал форму: автопрогон жил только в ветке
@@ -726,7 +731,12 @@ async def recognised(
         found = f"{found} {card_view.FOUND_ONE_FILLED.format(fields=', '.join(filled))}"
 
     runnable = card.runnable_with(phone_resolves=_phone_resolves(container))
-    if autorun and runnable and card.last_run_hash != container.query_cards.run_hash(card):
+    if (
+        autorun
+        and container.settings.auto_check_after_lookup
+        and runnable
+        and card.last_run_hash != container.query_cards.run_hash(card)
+    ):
         # Оговорка к разбору («„Иванова“ записал в фамилию») не теряется:
         # она едет в отчёт, где по этому полю только что прошёл платный запрос.
         # А «нашёл того-то» не едет — это и есть отчёт.

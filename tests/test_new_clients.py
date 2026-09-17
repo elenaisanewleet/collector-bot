@@ -119,7 +119,16 @@ def bridged(container: Container) -> Container:
     флагом тест проверял бы другую конфигурацию, чем та, что работает.
     """
     settings = container.settings.model_copy(
-        update={"web_public_url": PUBLIC_URL, "store_sensitive_identifiers": True}
+        update={
+            "web_public_url": PUBLIC_URL,
+            "store_sensitive_identifiers": True,
+            # Автопрогон после моста включён ЯВНО. На проде он выключен: мост и
+            # реестры — два поставщика с двумя счетами, и отладка личности не
+            # должна оплачивать NewDB. Но сценарий «ввёл номер — сразу отчёт»
+            # остаётся требованием владелицы для показа заказчику, и тесты
+            # ниже проверяют именно его, поэтому флаг здесь поднят.
+            "auto_check_after_lookup": True,
+        }
     )
     container.settings = settings
     container.share_service = ShareLinkService(settings, container.database)
@@ -1083,3 +1092,42 @@ def test_the_operators_own_address_is_not_overwritten(container: Container) -> N
     fill_from_bridge(card, name=FOUND, address="г Москва, проезд Чужой,8,139")
 
     assert card.address == "г Москва, ул Своя, д 1, кв 2"
+
+
+async def test_a_phone_stops_at_the_card_and_spends_nothing_by_default(
+    container: Container, bot: Bot, sent: SentMessages
+) -> None:
+    """По умолчанию номер доводит до КАРТОЧКИ, а не до платных реестров.
+
+    Просьба владельца дословно: «сделаем отдельно по номеру у нас запросы в
+    дипсерч, мы получаем карточку человека — надо это протестировать отдельно,
+    а не идти сразу в NewDB и тратить деньги. NewDB отдельно уже».
+
+    Мост и реестры — два поставщика с двумя счетами. Одна проверка человека с
+    паспортом это пять обращений к NewDB, а проверок личности за вечер
+    делается двадцать: автопрогон превращал отладку одного поставщика в оплату
+    второго.
+    """
+    from app.db.repository import SearchRepository
+
+    assert container.settings.auto_check_after_lookup is False, "прод обязан молчать по умолчанию"
+    container.registry = ProviderRegistry(
+        internal=container.registry.internal,
+        external=container.registry.external,
+        inn_bridge=container.registry.inn_bridge,
+        phone_bridge=_BridgeStub(container.settings),
+    )
+    dispatcher = dispatcher_for(container)
+
+    await feed(dispatcher, bot, message=make_message("79990001122"))
+
+    chat = sent.joined
+    # Мост отработал: личность в карточке есть.
+    assert "Македонский" in chat or "Тестов" in chat or "Фамилия:" in chat
+    # А платной проверки не было — ни отчёта, ни строки в истории.
+    assert "RECOVERY SCORE" not in chat
+    assert "Перспектива взыскания" not in chat
+    assert card_view.NOT_CHARGED_YET in chat, "карточка обязана сказать, что денег не потратили"
+    async with container.database.session() as session:
+        history = await SearchRepository(session).recent_for_user(OPERATOR_ID)
+    assert history == [], "платная проверка ушла без нажатия"

@@ -1169,7 +1169,7 @@ async def test_the_operators_own_name_beats_the_bridge(container: Container) -> 
 
 
 async def test_an_exact_key_in_a_free_line_finds_the_debtor(
-    dispatcher: Dispatcher, bot: Bot, sent: SentMessages
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
     """Написал номер — увидел отчёт. Без единой кнопки.
 
@@ -1186,6 +1186,11 @@ async def test_an_exact_key_in_a_free_line_finds_the_debtor(
     Правило «платит одна кнопка» этим не нарушено, а уточнено: платящим
     действием стал сам ввод точного ключа. Догадка по-прежнему не платит.
     """
+    # Автопрогон после опознания включён ЯВНО: на проде он выключен, чтобы
+    # отладка личности не оплачивала NewDB (два поставщика — два счёта).
+    # Сценарий «ввёл номер — сразу отчёт» остаётся требованием владелицы для
+    # показа заказчику, и этот тест проверяет именно его.
+    container.settings.auto_check_after_lookup = True
     await feed(dispatcher, bot, message=make_message("А123ВС77"))
 
     chat = sent.joined
@@ -1229,6 +1234,11 @@ async def test_a_phone_alone_runs_the_check_from_the_bot(
     строк «нужно ФИО». С мостом номер перестаёт быть тупиком — и решает это не
     карточка, а подключённость моста в этом развёртывании.
     """
+    # Автопрогон после опознания включён ЯВНО: на проде он выключен, чтобы
+    # отладка личности не оплачивала NewDB (два поставщика — два счёта).
+    # Сценарий «ввёл номер — сразу отчёт» остаётся требованием владелицы для
+    # показа заказчику, и этот тест проверяет именно его.
+    container.settings.auto_check_after_lookup = True
     container.registry._phone_bridge = _PhoneBridgeStub(container.settings)
     await container.import_service.import_text(
         "ФИО,Дата рождения,Госномер\nТестов Андрей Сергеевич,15.03.1980,А123ВС777"
@@ -1466,6 +1476,11 @@ async def test_a_phone_alone_produces_the_whole_report(
     Проверяется ЧЕРЕЗ БОТА. Мост уже был однажды написан, покрыт тестами и
     недостижим из интерфейса, потому что тест дёргал сервис напрямую.
     """
+    # Автопрогон после опознания включён ЯВНО: на проде он выключен, чтобы
+    # отладка личности не оплачивала NewDB (два поставщика — два счёта).
+    # Сценарий «ввёл номер — сразу отчёт» остаётся требованием владелицы для
+    # показа заказчику, и этот тест проверяет именно его.
+    container.settings.auto_check_after_lookup = True
     container.settings.tow_fee = Decimal("5000")
     container.settings.storage_fee_per_day = Decimal("1394")
     await container.import_service.import_text(

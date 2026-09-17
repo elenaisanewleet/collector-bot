@@ -702,7 +702,7 @@ async def test_the_first_step_asks_for_a_number_or_a_name(
 
 @pytest.mark.parametrize("plate", ["А123ВС77", "A123BC77"])
 async def test_the_first_step_still_takes_a_plate_whatever_the_layout(
-    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, plate: str
+    dispatcher: Dispatcher, bot: Bot, sent: SentMessages, plate: str, container: Container
 ) -> None:
     """Экран просит телефон, но присланный на него госномер доходит до отчёта.
 
@@ -719,6 +719,11 @@ async def test_the_first_step_still_takes_a_plate_whatever_the_layout(
     принимает любой номер» в :meth:`QueryCardService.apply` оставляло весь
     суите зелёным — то есть правку первого шага не поймал бы ни один гейт.
     """
+    # Автопрогон после опознания включён ЯВНО: на проде он выключен, чтобы
+    # отладка личности не оплачивала NewDB (два поставщика — два счёта).
+    # Сценарий «точный ключ — сразу отчёт» остаётся требованием владелицы
+    # для показа заказчику, и этот тест проверяет именно его.
+    container.settings.auto_check_after_lookup = True
     await feed(dispatcher, bot, message=make_message("Проверить человека"))
     await feed(dispatcher, bot, message=make_message(plate))
 

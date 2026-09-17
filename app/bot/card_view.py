@@ -197,6 +197,21 @@ RESET_LABEL = "Сбросить данные по этому человеку"
 #: Всплывающий ответ на нажатие и строка в самой карточке. Вторая объясняет,
 #: ЧТО осталось и что будет дальше: сброс, о котором нечего прочитать, читается
 #: как «ничего не произошло».
+#: Строка на карточке, когда личность уже собрана, а в реестры ещё не ходили.
+#:
+#: Появилась по просьбе владельца развести двух поставщиков: «сделаем отдельно
+#: по номеру запросы в дипсерч, мы получаем карточку человека — надо это
+#: протестировать отдельно, а не идти сразу в NewDB и тратить деньги».
+#:
+#: Говорит ровно две вещи, и обе нужны. Первая — что ДЕНЕГ ЕЩЁ НЕ ПОТРАЧЕНО:
+#: карточка, полная паспортов и адресов, выглядит как результат платной
+#: проверки, и без этой строки оператор считает, что уже заплатил. Вторая —
+#: какое нажатие платит, названное по имени: кнопок под карточкой пять.
+NOT_CHARGED_YET = (
+    "Личность собрана по номеру. В реестры ещё не ходили и денег не потратили — "
+    "это сделает «Проверить»."
+)
+
 RESET_DONE = "Сброшено"
 RESET_NOTICE = (
     "Сбросил всё, что бот вывел сам. Ваш ввод остался. "
@@ -423,6 +438,7 @@ def screen(
     notice: str | None = None,
     conflict: PersonName | None = None,
     derived: bool = False,
+    not_yet_charged: bool = False,
 ) -> Screen:
     """Собрать карточку: текст и кнопки под ним.
 
@@ -433,7 +449,12 @@ def screen(
     """
     return Screen(
         text=_text(
-            card, registry, notice=notice, conflict=conflict, store_sensitive=store_sensitive
+            card,
+            registry,
+            notice=notice,
+            conflict=conflict,
+            store_sensitive=store_sensitive,
+            not_yet_charged=not_yet_charged,
         ),
         markup=keyboard(card, conflict=conflict, derived=derived),
     )
@@ -448,6 +469,7 @@ def _text(
     *,
     notice: str | None,
     conflict: PersonName | None,
+    not_yet_charged: bool = False,
     store_sensitive: bool,
 ) -> str:
     """Текст карточки. Пока чего-то ждём — только вопрос, и ничего больше.
@@ -510,6 +532,8 @@ def _text(
     hint = _empty_card_hint(card)
     if hint:
         lines.extend(("", hint))
+    if not_yet_charged:
+        lines.extend(("", NOT_CHARGED_YET))
     menu = _menu_lines(card, registry)
     if menu:
         lines.extend(("", *menu))
