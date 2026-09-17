@@ -1433,8 +1433,12 @@ Python на хосте не нужен и обычно его там нет: б�
 карту надо поправить программно, берите интерпретатор из уже скачанного
 образа сборки:
 
+`-i` обязателен: без него `docker run` не подключает stdin, скрипт до
+контейнера не доезжает, а `python -` получает пустой ввод и **молча выходит с
+нулевым кодом** — команда выглядит успешной, ничего не сделав.
+
 ```bash
-docker run --rm -v "$PWD:/w" -w /w python:3.12-slim python - <<'EOF'
+docker run --rm -i -v "$PWD:/w" -w /w python:3.12-slim python - <<'EOF'
 import json
 path = "config/field_maps/depsearch.json"
 data = json.load(open(path, encoding="utf-8"))
