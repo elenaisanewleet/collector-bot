@@ -229,12 +229,21 @@ def test_the_candidates_are_offered_with_the_default_first() -> None:
     assert len(options) == 2, "один и тот же адрес не предлагается дважды"
 
 
-def test_addresses_without_a_flat_are_not_offered() -> None:
-    """Предлагать то, что ЕГРН не примет, — обещание без последствий."""
+def test_every_candidate_is_offered_with_the_usable_ones_first() -> None:
+    """Предлагаются ВСЕ адреса, а годные для ЕГРН — выше.
+
+    Сначала список отбирал только доходящие до квартиры, с доводом «ЕГРН
+    остальные не примет». Довод оказался неверным дважды. Кнопка выбора при
+    одном годном кандидате не появлялась вовсе — владелец видел неверный адрес
+    и не мог его сменить: «по Олегу конкретный и выбрать не даёт». А оператор,
+    узнавший свой адрес в списке, дописывает квартиру сам — не увидев его, не
+    может и этого.
+    """
     house_only = "г Москва, ул Первая, 2"
 
-    assert address_options([house_only]) == []
-    assert address_options([house_only, FEST]) == [FEST]
+    assert address_options([house_only]) == [house_only]
+    # Годный для ЕГРН — первым, но дом из списка не выброшен.
+    assert address_options([house_only, FEST]) == [FEST, house_only]
 
 
 def test_more_than_eight_candidates_are_cut() -> None:

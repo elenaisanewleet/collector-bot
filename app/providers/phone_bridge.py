@@ -271,7 +271,7 @@ def _read_rows(
             note=f"По номеру {mask_phone(phone)} имя не определено",
         )
 
-    kin = _kin(rows, anchor)
+    kin, dropped = _kin(rows, anchor)
     passport = _pick(kin, _read_passport, "passport", "passport_number")
     # Кандидаты считаются ОДИН раз: и выбор по умолчанию, и список для
     # оператора обязаны говорить об одном и том же ответе.
@@ -348,6 +348,10 @@ def _read_rows(
         # которые в отчёте выглядят одинаково: адрес не в опорном блоке; опорный
         # блок опознан не тот; в блоке два адреса и выбран не тот ключ.
         **_address_choice(kin, anchor, result.address),
+        # СКОЛЬКО БЛОКОВ ОТВЕРГНУТО И ПО КАКОМУ ПРИЗНАКУ. Отбраковка —
+        # главная защита разбора и его же главная слепая зона: выброшенный
+        # блок неотличим от блока, которого поставщик не присылал.
+        dropped=dropped,
     )
     return result
 
@@ -754,7 +758,9 @@ def _read_fio_mark(raw: object) -> frozenset[str] | None:
     return frozenset(words) or None
 
 
-def _kin(rows: list[RecordDict], anchor: RecordDict | None) -> list[RecordDict]:
+def _kin(
+    rows: list[RecordDict], anchor: RecordDict | None
+) -> tuple[list[RecordDict], dict[str, int]]:
     """Якорь и блоки, которые ему НЕ ПРОТИВОРЕЧАТ. Порядок ответа.
 
     Противоречие — это когда у якоря и у блока есть годный идентификатор одного
@@ -780,19 +786,34 @@ def _kin(rows: list[RecordDict], anchor: RecordDict | None) -> list[RecordDict]:
     контрольной суммой — не СНИЛС, и отвергать по нему чужой блок не за что.
     """
     if anchor is None:
-        return list(rows)
+        return list(rows), {}
     mine = _marks(anchor)
     kin = [anchor]
+    dropped: dict[str, int] = {}
     for row in rows:
         if row is anchor:
             continue
         theirs = _marks(row)
-        if any(
-            kind in mine and _contradicts(kind, mine[kind], value) for kind, value in theirs.items()
-        ):
+        clash = next(
+            (
+                kind
+                for kind, value in theirs.items()
+                if kind in mine and _contradicts(kind, mine[kind], value)
+            ),
+            None,
+        )
+        if clash is not None:
+            # ПО КАКОМУ ПРИЗНАКУ блок отвергнут — счётчиком, для лога.
+            #
+            # Без этого числа отбраковка невидима, а стоит она дорого: блок с
+            # верным адресом, выброшенный по спорному признаку, выглядит как
+            # «поставщик такого адреса не присылал». Ровно это и случилось —
+            # адрес из самой доверенной утечки не дошёл даже до выбора, и
+            # отличить «отбросили» от «не было» было нечем.
+            dropped[clash] = dropped.get(clash, 0) + 1
             continue
         kin.append(row)
-    return kin
+    return kin, dropped
 
 
 def _contradicts(kind: str, mine: object, theirs: object) -> bool:

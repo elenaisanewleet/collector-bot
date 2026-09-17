@@ -134,9 +134,16 @@ def address_options(candidates: Iterable[str], *, preferred: Iterable[str] = ())
     подставлен по умолчанию (:func:`pick_address`), чтобы согласиться с ним
     было одним взглядом, а не поиском среди восьми.
 
-    Адреса без помещения в список НЕ попадают: ЕГРН их не примет, и предлагать
-    выбрать то, что не сработает, — обещание без последствий. Если таких нет
-    вовсе, список остаётся пустым и кнопка выбора не появляется.
+    ПРЕДЛАГАЮТСЯ ВСЕ, А НЕ ТОЛЬКО ДОХОДЯЩИЕ ДО КВАРТИРЫ. Сначала список
+    отбирал только их — с доводом «ЕГРН остальные не примет», — и довод
+    оказался неверным дважды. Во-первых, кнопка выбора при одном годном
+    кандидате не появлялась вовсе: владелец видел неверный адрес и не мог его
+    сменить («по Олегу конкретный и выбрать не даёт»). Во-вторых, оператор,
+    узнавший свой адрес в списке, дописывает квартиру сам — а не увидев его,
+    не может и этого.
+
+    Адрес с квартирой по-прежнему стоит выше: порядок здесь — не
+    ранжирование, а вежливость, и годный для ЕГРН предлагается первым.
     """
     # Материализуются СРАЗУ: сюда приходят генераторы, и первый же проход по
     # ним оставил бы :func:`pick_address` ниже пустые руки — молча, потому что
@@ -146,13 +153,15 @@ def address_options(candidates: Iterable[str], *, preferred: Iterable[str] = ())
     seen: dict[str, str] = {}
     for raw in (*front, *rest):
         text = " ".join(raw.split())
-        if len(text) < MIN_ADDRESS_LENGTH or not has_premises(text):
+        if len(text) < MIN_ADDRESS_LENGTH:
             continue
         seen.setdefault(_comparable(text), text)
     if not seen:
         return []
+    # Годные для ЕГРН — выше: выбор из восьми строк начинается с тех, по
+    # которым запрос вообще уйдёт.
+    ordered = sorted(seen.values(), key=lambda item: not has_premises(item))
     best = pick_address(rest, preferred=front)
-    ordered = list(seen.values())
     if best is not None and best in ordered:
         ordered.remove(best)
         ordered.insert(0, best)
