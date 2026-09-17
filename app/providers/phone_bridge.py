@@ -73,7 +73,7 @@ from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import RecordDict
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
-from app.utils.address import pick_address
+from app.utils.address import address_options, pick_address
 from app.utils.dates import parse_date
 from app.utils.masking import mask_phone
 
@@ -114,8 +114,24 @@ class PhoneNameResult(ProviderResult):
     passport_issued: Any = None
     #: Адрес. Единственное поле здесь, которое открывает ещё один источник:
     #: ЕГРН ищет объект по адресу, и без адреса он молчит. Требование к адресу
-    #: жёсткое — см. :func:`_pick_address`.
+    #: жёсткое: только адрес с квартирой примет Росреестр — см.
+    #: :func:`_address_candidates` и :func:`~app.utils.address.pick_address`.
     address: str | None = None
+    #: ВСЕ адреса-кандидаты, а не только выбранный.
+    #:
+    #: Заведено после четвёртой неудачной попытки выбрать правильный кодом.
+    #: Живой ответ по одному номеру: ``address_variants=8``, и опорный блок —
+    #: тот, из которого взяты паспорт, СНИЛС и дата рождения, — несёт ОДИН
+    #: адрес, и это не тот, где должник живёт. Признака, по которому машина
+    #: отличила бы верный адрес от семи прочих, в ответе нет: ни частота, ни
+    #: порядок выдачи, ни богатство блока таким признаком не оказались.
+    #:
+    #: Зато он есть у оператора — он знает своего должника. Поэтому кандидаты
+    #: доезжают до карточки целиком, и выбор предлагается человеку. Это не
+    #: отказ от автоматики: выбранный по умолчанию остаётся, и на массовом
+    #: прогоне работает он. Но там, где решение стоит платного запроса в
+    #: Росреестр и попадания в исковое заявление, последнее слово за человеком.
+    address_options: tuple[str, ...] = ()
 
 
 class PhoneNameProvider(BaseProvider):
@@ -256,6 +272,9 @@ def _read_rows(
 
     kin = _kin(rows, anchor)
     passport = _pick(kin, _read_passport, "passport", "passport_number")
+    # Кандидаты считаются ОДИН раз: и выбор по умолчанию, и список для
+    # оператора обязаны говорить об одном и том же ответе.
+    front, rest = _address_candidates(kin, anchor)
     result = PhoneNameResult(
         provider=provider.name,
         status=ProviderStatus.SUCCESS,
@@ -266,7 +285,8 @@ def _read_rows(
         passport=passport,
         snils=_pick(kin, _read_snils, "snils"),
         passport_issued=_issue_date(kin, passport),
-        address=_pick_address(kin, anchor),
+        address=pick_address(rest, preferred=front),
+        address_options=tuple(address_options(rest, preferred=front)),
         note=f"ФИО определено по номеру {mask_phone(phone)}",
     )
     # ЧТО РАЗОБРАЛОСЬ, А ЧТО НЕТ — списком имён полей, без значений.
@@ -518,35 +538,25 @@ _ADDRESS_KEYS = (
 )
 
 
-def _pick_address(kin: list[RecordDict], anchor: RecordDict | None) -> str | None:
-    """Адрес нашего человека: сначала опорный блок, потом остальная родня.
+def _address_candidates(
+    kin: list[RecordDict], anchor: RecordDict | None
+) -> tuple[list[str], list[str]]:
+    """Адреса опорного блока и адреса остальной родни, двумя списками.
 
-    ОПОРНЫЙ БЛОК ВПЕРЕДИ — потому что частота по всей родне выбрала владелице
-    чужую квартиру. Её собственный адрес лежал в опорном блоке, а победил адрес
-    по другому проспекту, повторившийся в ответе чаще. Родня — это блоки, не
-    ПРОТИВОРЕЧАЩИЕ опорному (см. :func:`_kin`), и блок с одним адресом без
-    единого идентификатора не противоречит никому: несколько таких перевешивают
-    единственный блок, про который известно, что он о нашем человеке.
-
-    Так адрес встаёт в один ряд с остальными полями. Паспорт, СНИЛС, ИНН и дату
-    рождения :func:`_pick` берёт первым годным, начиная с якоря; голосованием
-    решался ровно один адрес — и ровно он оказался чужим.
-
-    Собираются ВСЕ адреса КАЖДОГО блока, а не по одному на блок: прописка и
-    фактический адрес лежат в одном блоке под разными ключами, и второй из них
-    раньше не участвовал ни в выборе, ни в подсчёте частоты. Предпочтение
-    адресу с квартирой и подсчёт частоты остаются внутри группы — их считает
-    :func:`~app.utils.address.pick_address`, он же у моста по ФИО.
+    Одно место, где решается, ЧТО считается кандидатом: и выбор по умолчанию, и
+    список для оператора берут кандидатов отсюда. Второй проход по тем же
+    ключам разошёлся бы с первым на первой же правке — ровно так уже вышло с
+    правилом «доходит ли адрес до квартиры», жившим тремя копиями.
     """
-    rest = [row for row in kin if row is not anchor]
-    return pick_address(
-        (str(raw) for row in rest for key in _ADDRESS_KEYS if (raw := row.get(key))),
-        preferred=(
-            (str(raw) for key in _ADDRESS_KEYS if (raw := anchor.get(key)))
-            if anchor is not None
-            else ()
-        ),
-    )
+    front = [str(raw) for key in _ADDRESS_KEYS if anchor is not None and (raw := anchor.get(key))]
+    rest = [
+        str(raw)
+        for row in kin
+        if row is not anchor
+        for key in _ADDRESS_KEYS
+        if (raw := row.get(key))
+    ]
+    return front, rest
 
 
 def _address_choice(

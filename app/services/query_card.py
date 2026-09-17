@@ -574,6 +574,9 @@ class QueryCardService:
         self._derived: dict[tuple[int, int], frozenset[str]] = {}
         #: У кого следующая проверка обязана пройти мимо кэша.
         self._force_next: set[tuple[int, int]] = set()
+        #: Адреса-кандидаты из ответа моста — для выбора человеком. См.
+        #: :meth:`address_options`.
+        self._addresses: dict[tuple[int, int], tuple[str, ...]] = {}
 
     # -------------------------------------------------------------- выбор
 
@@ -613,6 +616,35 @@ class QueryCardService:
         """
         if fields:
             self._derived[card.key] = self._derived.get(card.key, frozenset()) | fields
+
+    def remember_addresses(self, card: Card, options: tuple[str, ...]) -> None:
+        """Запомнить адреса-кандидаты, которые прислал мост.
+
+        В памяти процесса, и порча безопасна в нужную сторону: забыли —
+        кнопка выбора не появится, а подставленный по умолчанию адрес останется
+        на месте. Потерять можно возможность выбрать, но не сам адрес.
+        """
+        if len(options) > 1:
+            self._addresses[card.key] = options
+        else:
+            # Один кандидат — выбирать не из чего, и кнопка обещала бы выбор,
+            # которого нет.
+            self._addresses.pop(card.key, None)
+
+    def forget_derived(self, card: Card, field: str) -> None:
+        """Поле больше не считается выведенным: его выбрал или ввёл оператор.
+
+        Нужно ровно для выбора адреса. Выбранный человеком адрес — это его
+        утверждение, а введённое в этом продукте всегда сильнее найденного:
+        сброс данных его не тронет, и мост его не перепишет.
+        """
+        pinned = self._derived.get(card.key)
+        if pinned and field in pinned:
+            self._derived[card.key] = pinned - {field}
+
+    def address_options(self, card: Card) -> tuple[str, ...]:
+        """Из чего оператор может выбрать адрес. Пусто — выбирать не из чего."""
+        return self._addresses.get(card.key, ())
 
     def has_derived(self, card: Card) -> bool:
         """Есть ли в карточке что-то, что мог положить мост. Решает показ кнопки.
@@ -814,6 +846,7 @@ class QueryCardService:
         self._plans.pop((telegram_user_id, chat_id), None)
         self._derived.pop((telegram_user_id, chat_id), None)
         self._force_next.discard((telegram_user_id, chat_id))
+        self._addresses.pop((telegram_user_id, chat_id), None)
         return Card(telegram_user_id=telegram_user_id, chat_id=chat_id)
 
     # ------------------------------------------------------------ экран

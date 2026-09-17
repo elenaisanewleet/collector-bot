@@ -172,6 +172,9 @@ async def show(
         # паспортов и адресов, выглядит как результат платной проверки — и без
         # этой строки оператор считает, что уже заплатил.
         not_yet_charged=container.query_cards.has_derived(card) and card.checked_at is None,
+        # Сколько адресов прислал мост. Кнопка выбора появляется только
+        # когда их больше одного.
+        addresses=len(container.query_cards.address_options(card)),
     )
     if answering:
         # ОТВЕТ НА СООБЩЕНИЕ ВСЕГДА ПЕРЕЕЗЖАЕТ ВНИЗ, и это не расточительство.
@@ -556,6 +559,10 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
         address=address,
     )
     container.query_cards.remember_derived(card, derived)
+    # Кандидаты на адрес — чтобы выбрать мог человек. Правильный адрес не
+    # выбирается кодом: четыре разных правила подряд дали неверный на живом
+    # ответе с восемью кандидатами.
+    container.query_cards.remember_addresses(card, getattr(result, "address_options", ()))
     # Журнал находок. Пишется здесь, а не при показе страницы, потому что
     # отметка «новый клиент» — замер СВОЕГО дня: следующий импорт выгрузки
     # изменит ответ, и посчитанный задним числом он соврал бы молча.
@@ -1260,6 +1267,74 @@ def build_router() -> Router:
         if message is None:
             return
         await _drop(message)
+        card = await container.query_cards.load(user_id, message.chat.id)
+        await show(message, container, card)
+
+    # ------------------------------------------------- выбор адреса
+
+    @router.callback_query(F.data == card_view.QC_ADDR)
+    async def open_addresses(callback: CallbackQuery, container: Container, user_id: int) -> None:
+        """Показать все адреса, которые прислал мост, и дать выбрать.
+
+        Заведено после четырёх неудачных попыток выбрать верный адрес кодом. На
+        живом ответе кандидатов восемь, и признака, по которому машина отличила
+        бы верный, в ответе нет: ни частота, ни порядок выдачи, ни богатство
+        блока им не оказались — опорный блок, из которого взяты паспорт и
+        СНИЛС, несёт адрес, по которому должник не живёт.
+
+        Оператор это знает. Дальше угадывать кодом значило бы пятый раз платить
+        за запрос в Росреестр по чужой квартире.
+        """
+        message = callback_message(callback)
+        await answer_callback(callback)
+        if message is None:
+            return
+        card = await container.query_cards.load(user_id, message.chat.id)
+        options = container.query_cards.address_options(card)
+        if not options:
+            await show(message, container, card)
+            return
+        await edit_or_send(
+            message,
+            message,
+            card_view.address_screen(options, chosen=card.address),
+            reply_markup=card_view.address_keyboard(options, chosen=card.address),
+        )
+
+    @router.callback_query(F.data.startswith(f"{card_view.QC_ADDR}:"))
+    async def choose_address(callback: CallbackQuery, container: Container, user_id: int) -> None:
+        """Выбранный адрес становится ВВЕДЁННЫМ оператором, а не выведенным.
+
+        Поэтому он уходит из списка выведенного: сброс данных его больше не
+        тронет, и мост его не перепишет. Оператор выбрал — значит это его
+        утверждение, а введённое в этом продукте всегда сильнее найденного.
+        """
+        raw = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+        message = callback_message(callback)
+        if message is None:
+            await answer_callback(callback)
+            return
+        card = await container.query_cards.load(user_id, message.chat.id)
+        options = container.query_cards.address_options(card)
+        if not raw.isdigit() or not 0 <= int(raw) < len(options):
+            # Кнопка из устаревшей клавиатуры: список мог смениться.
+            await answer_callback(callback)
+            await show(message, container, card)
+            return
+        await answer_callback(callback, card_view.ADDR_DONE)
+        card.address = options[int(raw)]
+        card.last_run_hash = None
+        await container.query_cards.save(card)
+        container.query_cards.forget_derived(card, "address")
+        await show(message, container, card)
+
+    @router.callback_query(F.data == card_view.QC_ADDR_BACK)
+    async def close_addresses(callback: CallbackQuery, container: Container, user_id: int) -> None:
+        """Назад к карточке, ничего не меняя: выбор — это отдельное нажатие."""
+        message = callback_message(callback)
+        await answer_callback(callback)
+        if message is None:
+            return
         card = await container.query_cards.load(user_id, message.chat.id)
         await show(message, container, card)
 

@@ -11,14 +11,29 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from app.domain.enums import SearchType
 from app.domain.identity import SearchSubject
 from app.providers.name_bridge import _pick_address as pick_by_name
-from app.providers.phone_bridge import _pick_address as pick_by_phone
+from app.providers.phone_bridge import _address_candidates
 from app.providers.property import _query_for
-from app.utils.address import has_premises, pick_address
+from app.utils.address import MAX_OPTIONS, address_options, has_premises, pick_address
+
+
+def pick_by_phone(rows: list[Any], anchor: Any = None) -> str | None:
+    """Выбор адреса мостом по телефону — через тот же путь, что и в проде.
+
+    Собственной функции у моста больше нет: она была бы второй копией правила,
+    а копии в этом проекте уже стоили трёх неверных выборов адреса. Тест
+    складывает кандидатов тем же ``_address_candidates`` и выбирает тем же
+    ``pick_address``, что и разбор.
+    """
+    front, rest = _address_candidates(rows, anchor)
+    return pick_address(rest, preferred=front)
+
 
 #: Оба адреса — живые, из ответов поставщика по двум разным регионам, и оба
 #: заканчиваются домом и квартирой без слова «кв». Улицы и числа изменены:
@@ -191,3 +206,42 @@ def test_frequency_still_decides_when_the_anchor_is_silent() -> None:
 def test_nothing_usable_gives_nothing() -> None:
     """«Москва» и прочерк адресом не являются."""
     assert pick_address(["Москва", "—", ""]) is None
+
+
+# ------------------------------- когда выбрать кодом нельзя
+
+
+def test_the_candidates_are_offered_with_the_default_first() -> None:
+    """Все адреса с квартирой, и подставленный по умолчанию — первым.
+
+    Заведено после четырёх неудачных правил подряд. Живой ответ по одному
+    номеру: восемь кандидатов, и опорный блок — тот, из которого взяты паспорт,
+    СНИЛС и дата рождения, — несёт адрес, по которому должник не живёт.
+    Признака, по которому машина отличила бы верный, в ответе нет.
+
+    Порядок здесь не ранжирование, а вежливость: согласиться с умолчанием
+    должно быть одним взглядом, а не поиском среди восьми.
+    """
+    options = address_options([ODD, ODD, FEST], preferred=[FEST])
+
+    assert options[0] == FEST, "умолчание обязано стоять первым"
+    assert set(options) == {FEST, ODD}
+    assert len(options) == 2, "один и тот же адрес не предлагается дважды"
+
+
+def test_addresses_without_a_flat_are_not_offered() -> None:
+    """Предлагать то, что ЕГРН не примет, — обещание без последствий."""
+    house_only = "г Москва, ул Первая, 2"
+
+    assert address_options([house_only]) == []
+    assert address_options([house_only, FEST]) == [FEST]
+
+
+def test_more_than_eight_candidates_are_cut() -> None:
+    """Восемь — предел экрана, и умолчание остаётся в списке при любом обрезе."""
+    many = [f"г Москва, ул Тестовая {index}, 5, 12" for index in range(20)]
+
+    options = address_options(many, preferred=[FEST])
+
+    assert len(options) == MAX_OPTIONS
+    assert options[0] == FEST

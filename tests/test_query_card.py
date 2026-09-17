@@ -1021,3 +1021,58 @@ async def test_a_reset_survives_a_restart_and_never_touches_what_only_you_can_gi
     assert card.phone == "+79990000000"
     assert card.contract_number == "ЭВ-2026/000082"
     assert card.plate == "А123ВС777"
+
+
+# ------------------------------------------- выбор адреса человеком
+
+
+async def test_the_operator_picks_the_address_and_it_becomes_his_own(
+    container: Container,
+) -> None:
+    """Выбранный адрес перестаёт быть выведенным — значит его не тронет сброс.
+
+    Правильный адрес не выбирается кодом: четыре разных правила подряд дали
+    неверный на живом ответе с восемью кандидатами. Оператор знает своего
+    должника, и его выбор — это утверждение, а введённое в этом продукте
+    всегда сильнее найденного.
+    """
+    from app.domain.identity import PersonName as Name
+    from app.services.query_card import fill_from_bridge
+
+    mine = "г Москва, проезд Тестовый,8,139"
+    theirs = "г Москва, проспект Иной, д 73/2, кв 1"
+
+    cards = container.query_cards
+    card = await cards.load(OPERATOR_ID, CHAT_ID)
+    card.phone = "+79990000000"
+    derived = fill_from_bridge(
+        card,
+        name=Name(last_name="Тестова", first_name="Елена", middle_name="Николаевна"),
+        address=theirs,
+    )
+    cards.remember_derived(card, derived)
+    cards.remember_addresses(card, (theirs, mine))
+    await cards.save(card)
+
+    assert cards.address_options(card) == (theirs, mine)
+
+    # Оператор выбрал свой адрес.
+    card.address = mine
+    await cards.save(card)
+    cards.forget_derived(card, "address")
+
+    card = await cards.drop_derived(card)
+
+    assert card.address == mine, "сброс снёс адрес, выбранный оператором"
+    # А имя от моста сброшено, как и должно быть.
+    assert card.last_name is None
+
+
+async def test_a_single_candidate_is_not_a_choice(container: Container) -> None:
+    """Один адрес — выбирать не из чего, и кнопка обещала бы выбор."""
+    cards = container.query_cards
+    card = await cards.load(OPERATOR_ID, CHAT_ID)
+
+    cards.remember_addresses(card, ("г Москва, ул Первая, 5, 12",))
+
+    assert cards.address_options(card) == ()

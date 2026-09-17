@@ -114,6 +114,51 @@ def pick_address(candidates: Iterable[str], *, preferred: Iterable[str] = ()) ->
     return chosen if chosen is not None else _best(candidates)
 
 
+#: Сколько адресов предлагать оператору на выбор. Восемь — столько их было в
+#: живом ответе по одному номеру; больше на экране Telegram не читается, а
+#: меньше отрезало бы верный.
+MAX_OPTIONS = 8
+
+
+def address_options(candidates: Iterable[str], *, preferred: Iterable[str] = ()) -> list[str]:
+    """Кандидаты для выбора человеком: сначала лучший, потом остальные.
+
+    ЗАЧЕМ ЭТО НУЖНО. Правильный адрес нельзя выбрать кодом — проверено
+    четырьмя разными правилами на живом ответе, где кандидатов восемь. Ни
+    частота, ни порядок выдачи, ни богатство блока признаком верного адреса не
+    оказались: опорный блок, из которого взяты паспорт и СНИЛС, несёт адрес, по
+    которому должник не живёт.
+
+    Оператор это знает. Поэтому список доезжает до него целиком, а порядок
+    здесь — не ранжирование, а вежливость: первым стоит тот, который
+    подставлен по умолчанию (:func:`pick_address`), чтобы согласиться с ним
+    было одним взглядом, а не поиском среди восьми.
+
+    Адреса без помещения в список НЕ попадают: ЕГРН их не примет, и предлагать
+    выбрать то, что не сработает, — обещание без последствий. Если таких нет
+    вовсе, список остаётся пустым и кнопка выбора не появляется.
+    """
+    # Материализуются СРАЗУ: сюда приходят генераторы, и первый же проход по
+    # ним оставил бы :func:`pick_address` ниже пустые руки — молча, потому что
+    # исчерпанный генератор выглядит как отсутствие кандидатов.
+    front = [str(raw) for raw in preferred]
+    rest = [str(raw) for raw in candidates]
+    seen: dict[str, str] = {}
+    for raw in (*front, *rest):
+        text = " ".join(raw.split())
+        if len(text) < MIN_ADDRESS_LENGTH or not has_premises(text):
+            continue
+        seen.setdefault(_comparable(text), text)
+    if not seen:
+        return []
+    best = pick_address(rest, preferred=front)
+    ordered = list(seen.values())
+    if best is not None and best in ordered:
+        ordered.remove(best)
+        ordered.insert(0, best)
+    return ordered[:MAX_OPTIONS]
+
+
 def _best(candidates: Iterable[str]) -> str | None:
     """Лучший адрес одной группы: с квартирой, затем по подтверждённости.
 
@@ -155,4 +200,4 @@ def _comparable(address: str) -> str:
     return re.sub(r"\s*,\s*", ",", address.strip().lower())
 
 
-__all__ = ["MIN_ADDRESS_LENGTH", "has_premises", "pick_address"]
+__all__ = ["MAX_OPTIONS", "MIN_ADDRESS_LENGTH", "address_options", "has_premises", "pick_address"]

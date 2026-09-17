@@ -20,6 +20,7 @@ markdown приехал бы в чат звёздочками. Строки ри
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -58,6 +59,10 @@ QC_NEW_PERSON = f"{QC}:new"
 QC_FIX_NAME = f"{QC}:keep"
 #: Выбросить из карточки то, что вывел мост, и спросить источники заново.
 QC_RESET = f"{QC}:reset"
+#: Выбрать адрес из тех, что прислал мост.
+QC_ADDR = f"{QC}:addr"
+#: «Назад» с экрана выбора адреса — к самой карточке.
+QC_ADDR_BACK = f"{QC}:addrback"
 #: «Дальше» на каждом из трёх основных шагов.
 QC_NEXT = f"{QC}:next"
 
@@ -211,6 +216,19 @@ NOT_CHARGED_YET = (
     "Личность собрана по номеру. В реестры ещё не ходили и денег не потратили — "
     "это сделает «Проверить»."
 )
+
+#: Экран выбора адреса. Заведён после того, как четыре разных правила выбора
+#: подряд дали неверный адрес на живом ответе с восемью кандидатами: признака,
+#: по которому машина отличила бы верный, в ответе нет. У оператора он есть —
+#: он знает своего должника.
+ADDR_TITLE = "Какой адрес верный"
+ADDR_LEAD = (
+    "Поставщик прислал несколько адресов, и какой из них настоящий, "
+    "по ответу не определить. Первый подставлен по умолчанию."
+)
+ADDR_WHY = "По выбранному пойдёт запрос в Росреестр, и он же попадёт в заявление."
+ADDR_LABEL = "Выбрать адрес ({count})"
+ADDR_DONE = "Адрес выбран"
 
 RESET_DONE = "Сброшено"
 RESET_NOTICE = (
@@ -439,6 +457,7 @@ def screen(
     conflict: PersonName | None = None,
     derived: bool = False,
     not_yet_charged: bool = False,
+    addresses: int = 0,
 ) -> Screen:
     """Собрать карточку: текст и кнопки под ним.
 
@@ -456,7 +475,7 @@ def screen(
             store_sensitive=store_sensitive,
             not_yet_charged=not_yet_charged,
         ),
-        markup=keyboard(card, conflict=conflict, derived=derived),
+        markup=keyboard(card, conflict=conflict, derived=derived, addresses=addresses),
     )
 
 
@@ -538,6 +557,45 @@ def _text(
     if menu:
         lines.extend(("", *menu))
     return "\n".join(lines)
+
+
+def address_screen(options: Sequence[str], *, chosen: str | None) -> str:
+    """Экран выбора адреса: все кандидаты с пометкой текущего.
+
+    Адреса печатаются ЦЕЛИКОМ и без маски. Выбрать из восьми строк, обрезанных
+    до «г. Москва, изм…», нельзя — а маскировать в этом боте нечего: он закрыт
+    списком допуска и принадлежит взыскателю, который с этим адресом пойдёт в
+    суд.
+    """
+    lines = [ADDR_TITLE, ADDR_LEAD, ""]
+    for index, option in enumerate(options, start=1):
+        mark = f"{FILLED_MARK} " if option == chosen else ""
+        lines.append(f"{index}. {mark}{option}")
+    lines.extend(("", ADDR_WHY))
+    return "\n".join(lines)
+
+
+def address_keyboard(options: Sequence[str], *, chosen: str | None) -> InlineKeyboardMarkup:
+    """По кнопке на адрес, по одной в ряд.
+
+    Один в ряд намеренно: адреса длинные и различаются в конце — «…,8,139» и
+    «…, д. 73/2, кв. 1». Две такие кнопки в ряд Telegram обрежет ровно там, где
+    и лежит различие, и выбор станет угадыванием.
+
+    В подписи — НОМЕР и адрес. Номер затем, чтобы кнопку можно было сопоставить
+    со строкой на экране выше даже когда подпись обрезана.
+    """
+    rows = [
+        [
+            _button(
+                f"{index}. {FILLED_MARK if option == chosen else ''} {option}".strip(),
+                f"{QC_ADDR}:{index - 1}",
+            )
+        ]
+        for index, option in enumerate(options, start=1)
+    ]
+    rows.append([_button(BACK_LABEL, QC_ADDR_BACK)])
+    return _rows_markup(rows)
 
 
 def _ask_lines(field_name: str, *, skip_label: str) -> list[str]:
@@ -758,7 +816,11 @@ def _lead(card: Card) -> str:
 
 
 def keyboard(
-    card: Card, *, conflict: PersonName | None = None, derived: bool = False
+    card: Card,
+    *,
+    conflict: PersonName | None = None,
+    derived: bool = False,
+    addresses: int = 0,
 ) -> InlineKeyboardMarkup:
     """Кнопки под карточкой.
 
@@ -779,7 +841,7 @@ def keyboard(
                     _button("Это исправление", QC_FIX_NAME),
                 ],
                 *_field_rows(card),
-                *_run_row(card, derived),
+                *_run_row(card, derived, addresses),
             ]
         )
     if card.awaiting_field == _AWAITING_TEN:
@@ -803,7 +865,7 @@ def keyboard(
         # означала бы «а нажми-ка вместо ответа что-нибудь ещё».
         return _rows_markup([[_button("Пропустить", QC_SKIP)], [_button("Назад", QC_CANCEL)]])
 
-    return _rows_markup([*_field_rows(card), *_run_row(card, derived)])
+    return _rows_markup([*_field_rows(card), *_run_row(card, derived, addresses)])
 
 
 def _field_rows(card: Card) -> list[list[InlineKeyboardButton]]:
@@ -837,7 +899,9 @@ def _field_rows(card: Card) -> list[list[InlineKeyboardButton]]:
     ]
 
 
-def _run_row(card: Card, derived: bool = False) -> list[list[InlineKeyboardButton]]:
+def _run_row(
+    card: Card, derived: bool = False, addresses: int = 0
+) -> list[list[InlineKeyboardButton]]:
     """Главное действие отдельной строкой, второстепенные — под ним.
 
     «Проверить» занимает всю ширину и стоит одно: это единственная кнопка,
@@ -854,6 +918,9 @@ def _run_row(card: Card, derived: bool = False) -> list[list[InlineKeyboardButto
         # ниже «Новой проверки» ей нельзя: там кнопки уводят с экрана, а
         # эта на него возвращает.
         [_button(SOURCES_LABEL, sources_pick.SP_OPEN)],
+        # Выбор адреса — только когда выбирать ЕСТЬ из чего: один кандидат
+        # означал бы кнопку, за которой ничего не решается.
+        *([[_button(ADDR_LABEL.format(count=addresses), QC_ADDR)]] if addresses > 1 else []),
         # «Сбросить данные» появляется только когда есть что сбрасывать — то
         # есть когда мост что-то вывел. На карточке, собранной руками, кнопка
         # обещала бы действие без последствий.
