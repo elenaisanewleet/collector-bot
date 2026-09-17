@@ -25,13 +25,37 @@
 причиной от источника, а не «объект не найден». Поэтому форма требует РОВНО двух
 чисел в конце: одинокое число — это дом без квартиры, и такой адрес по-прежнему
 не отправляется.
+
+ОДНО МЕСТО — ОДНА СТРОКА
+
+Поставщик отдаёт один и тот же адрес в нескольких написаниях: «обл. Тестовая,
+г. Тестов» и «обл Тестовая, г Тестов», «…Первый, 1» и «…Первый,1,». Владелец
+увидел это в списке выбора: «в выборе тут 5 адресов, но они повторяются, может
+мы будем приводить их к одному виду? который принимает егрн?» — из пяти адресов
+разных мест там было три.
+
+Отсюда две разные задачи, и путать их дорого.
+
+ЧТО СЧИТАТЬ ОДНИМ МЕСТОМ — :func:`same_place`. Ключ сравнения, который никому не
+показывается: регистр, точки после сокращений, «ё» и разница между пробелом и
+запятой различают не адреса, а тех, кто их записывал. Ключ решает и подсчёт
+частоты: без него один адрес, записанный двумя способами, считался за два
+разных и частота — главный здесь довод — считалась неверно.
+
+КАКОЕ ИЗ НАПИСАНИЙ ПОКАЗАТЬ И ОТПРАВИТЬ — :func:`_preferred_spelling`. Здесь
+действует правило проекта: кодом можно закреплять только проверенное живьём.
+Поэтому написание не СОЧИНЯЕТСЯ — выбирается одно из тех, что прислал
+поставщик, и предпочтение отдаётся форме без точек в сокращениях: ровно она
+дважды прошла в ЕГРН («…проезд Тестовый,8,139» и «…б-р Первый,17,151»), а
+форма с точками живьём не проверялась ни разу. Пробелы и пустые части
+(:func:`tidy`) — единственное, что убирается: они не часть адреса.
 """
 
 from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 #: Слово, называющее помещение, и число за ним.
 _PREMISES_WORD = re.compile(
@@ -52,10 +76,16 @@ def has_premises(address: str) -> bool:
 
     Обе формы равноправны: адрес со словом «кв» и адрес, заканчивающийся домом и
     квартирой через запятую.
+
+    Строка сперва чистится (:func:`tidy`), и это не косметика: у «…Первый,17,151»
+    и «…Первый,17,151,» разный ХВОСТ, и вторая без чистки читается как дом без
+    квартиры. Стоило бы это бесплатного, но неверного отказа «нужен адрес с
+    квартирой» под адресом, в котором квартира есть.
     """
-    if _PREMISES_WORD.search(address):
+    text = tidy(address)
+    if _PREMISES_WORD.search(text):
         return True
-    return _ends_with_house_and_flat(address)
+    return _ends_with_house_and_flat(text)
 
 
 def _ends_with_house_and_flat(address: str) -> bool:
@@ -78,6 +108,58 @@ def _ends_with_house_and_flat(address: str) -> bool:
 
 #: Короче этого адресом не бывает: «Москва» или обрывок поля.
 MIN_ADDRESS_LENGTH = 10
+
+#: Запятая, за которой идёт ещё одна: пустая часть, адресом не являющаяся.
+_REPEATED_COMMA = re.compile(r",(?:\s*,)+")
+
+#: Пробелы и запятые — в ключе сравнения они не различаются (см. :func:`same_place`).
+_SEPARATORS = re.compile(r"[\s,]+")
+
+
+def tidy(address: str) -> str:
+    """Адрес без того, что адресом не является: лишних пробелов и пустых частей.
+
+    Убирается ТОЛЬКО это. Порядок частей, сокращения и пробелы вокруг запятых
+    остаются как их написал поставщик: по правилу проекта в платный источник
+    уходит проверенная живьём строка, а не сочинённая нами.
+    """
+    text = _REPEATED_COMMA.sub(",", " ".join(address.split()))
+    return text.strip(" ,")
+
+
+def same_place(address: str) -> str:
+    """Ключ сравнения: одно и то же место, записанное по-разному, — один адрес.
+
+    Ключ НЕ показывается и НЕ отправляется — он только отвечает на вопрос «это
+    то же место?». Поэтому в нём стирается всё, что о месте ничего не говорит:
+    регистр, «ё», точки после сокращений («обл.» и «обл») и разница между
+    пробелом и запятой («Тестов, проспект Первый, 1» и «Тестов,проспект
+    Первый,1»). Все четыре различия владелец увидел живьём в одном списке.
+
+    ЧЕГО ЗДЕСЬ СОЗНАТЕЛЬНО НЕТ. Слова «д» и «кв» не стираются, хотя
+    «…Первый, д 17, кв 151» и «…Первый,17,151» — одно место. Стерев их, ключ
+    склеил бы «ул Первая, д 17» с «ул Первая, кв 17», а это разные вещи;
+    выигрыш же пока предположительный — такой пары в живых ответах не было.
+    """
+    text = tidy(address).lower().replace("ё", "е").replace(".", " ")
+    return _SEPARATORS.sub(",", text).strip(",")
+
+
+def is_same_place(one: str, other: str) -> bool:
+    """То же место, пусть и записанное иначе."""
+    return same_place(one) == same_place(other)
+
+
+def as_offered(address: str, options: Iterable[str]) -> str | None:
+    """Тот же адрес в написании списка — или ``None``, если места в списке нет.
+
+    Нужно там, где адрес и список считаются разными правилами: в карточке
+    должен стоять ровно тот вариант написания, который оператор видит в списке,
+    иначе галочка «выбрано» не встаёт ни на одной строке и текущий адрес
+    выглядит отсутствующим.
+    """
+    key = same_place(address)
+    return next((option for option in options if same_place(option) == key), None)
 
 
 def pick_address(candidates: Iterable[str], *, preferred: Iterable[str] = ()) -> str | None:
@@ -109,9 +191,16 @@ def pick_address(candidates: Iterable[str], *, preferred: Iterable[str] = ()) ->
     блока. Дом нашего человека даёт бесплатный и честный отказ «нужен адрес с
     квартирой», а чужая квартира — оплаченный ответ про чужое имущество, и
     именно он выглядит как находка.
+
+    Написание выбирается по ВСЕМ кандидатам сразу, а не только по победившей
+    группе: иначе адрес в карточке и тот же адрес в списке выбора могли бы
+    отличаться точками в сокращениях — одно место, две строки, и ни одной
+    галочки на экране.
     """
-    chosen = _best(preferred)
-    return chosen if chosen is not None else _best(candidates)
+    front = _grouped(preferred)
+    rest = _grouped(candidates)
+    key = _default_key(front, rest)
+    return None if key is None else _spelling_of(key, [*front, *rest])
 
 
 #: Сколько адресов предлагать оператору на выбор. Восемь — столько их было в
@@ -120,7 +209,12 @@ def pick_address(candidates: Iterable[str], *, preferred: Iterable[str] = ()) ->
 MAX_OPTIONS = 8
 
 
-def address_options(candidates: Iterable[str], *, preferred: Iterable[str] = ()) -> list[str]:
+def address_options(
+    candidates: Iterable[str],
+    *,
+    preferred: Iterable[str] = (),
+    chosen: str | None = None,
+) -> list[str]:
     """Кандидаты для выбора человеком: сначала лучший, потом остальные.
 
     ЗАЧЕМ ЭТО НУЖНО. Правильный адрес нельзя выбрать кодом — проверено
@@ -144,69 +238,126 @@ def address_options(candidates: Iterable[str], *, preferred: Iterable[str] = ())
 
     Адрес с квартирой по-прежнему стоит выше: порядок здесь — не
     ранжирование, а вежливость, и годный для ЕГРН предлагается первым.
+
+    ОДНО МЕСТО — ОДНА СТРОКА. Повторы владелец увидел живьём: из пяти
+    предложенных адресов мест было три, а различались строки точками в
+    сокращениях и хвостовой запятой. Место определяет :func:`same_place`,
+    написание — :func:`_preferred_spelling`.
+
+    ``chosen`` — адрес, который СТОИТ В КАРТОЧКЕ сейчас. Если он назван, его
+    место и открывает список: список должен начинаться с того, что уже
+    используется, а не с того, что выбрало бы правило по умолчанию. Мост
+    выбирает адрес по происхождению блока — правилом, которого здесь нет, — и
+    без ``chosen`` первой строкой встал бы чужой выбор, а при обрезке до
+    :data:`MAX_OPTIONS` действующий адрес мог бы и вовсе не попасть в список.
     """
     # Материализуются СРАЗУ: сюда приходят генераторы, и первый же проход по
-    # ним оставил бы :func:`pick_address` ниже пустые руки — молча, потому что
-    # исчерпанный генератор выглядит как отсутствие кандидатов.
-    front = [str(raw) for raw in preferred]
-    rest = [str(raw) for raw in candidates]
-    seen: dict[str, str] = {}
-    for raw in (*front, *rest):
-        text = " ".join(raw.split())
-        if len(text) < MIN_ADDRESS_LENGTH:
-            continue
-        seen.setdefault(_comparable(text), text)
-    if not seen:
+    # ним оставил бы выбор по умолчанию ниже с пустыми руками — молча, потому
+    # что исчерпанный генератор выглядит как отсутствие кандидатов.
+    front = _grouped(preferred)
+    rest = _grouped(candidates)
+    pairs = [*front, *rest]
+    if not pairs:
         return []
+    places: list[str] = []
+    for key, _ in pairs:
+        if key not in places:
+            places.append(key)
     # Годные для ЕГРН — выше: выбор из восьми строк начинается с тех, по
     # которым запрос вообще уйдёт.
-    ordered = sorted(seen.values(), key=lambda item: not has_premises(item))
-    best = pick_address(rest, preferred=front)
-    if best is not None and best in ordered:
-        ordered.remove(best)
-        ordered.insert(0, best)
+    ordered = sorted(
+        (_spelling_of(key, pairs) for key in places),
+        key=lambda item: not has_premises(item),
+    )
+    head = _chosen_key(chosen, places) or _default_key(front, rest)
+    if head is not None:
+        first = _spelling_of(head, pairs)
+        ordered.remove(first)
+        ordered.insert(0, first)
     return ordered[:MAX_OPTIONS]
 
 
-def _best(candidates: Iterable[str]) -> str | None:
-    """Лучший адрес одной группы: с квартирой, затем по подтверждённости.
+def _grouped(candidates: Iterable[str]) -> list[tuple[str, str]]:
+    """Годные кандидаты парами «место — написание», в порядке поступления."""
+    pairs: list[tuple[str, str]] = []
+    for raw in candidates:
+        text = tidy(str(raw))
+        if len(text) >= MIN_ADDRESS_LENGTH:
+            pairs.append((same_place(text), text))
+    return pairs
+
+
+def _default_key(front: list[tuple[str, str]], rest: list[tuple[str, str]]) -> str | None:
+    """Место, выбираемое по умолчанию: опорная группа, иначе остальные.
+
+    Одно место на весь модуль, потому что ответ нужен дважды — адресу карточки
+    (:func:`pick_address`) и первой строке списка (:func:`address_options`), — а
+    две копии этого правила уже расходились.
+    """
+    key = _best_key(front)
+    return key if key is not None else _best_key(rest)
+
+
+def _chosen_key(chosen: str | None, places: list[str]) -> str | None:
+    """Место уже выбранного адреса, если оно среди предложенных."""
+    if chosen is None:
+        return None
+    key = same_place(chosen)
+    return key if key in places else None
+
+
+def _best_key(pairs: list[tuple[str, str]]) -> str | None:
+    """Лучшее место одной группы: с квартирой, затем по подтверждённости.
 
     Частота внутри группы остаётся доводом владельца в полную силу: блоки
     собраны из независимых источников, и адрес, повторившийся в нескольких,
     подтверждён несколькими утечками, а одиночный не подтверждён ничем. Порядок
     выдачи остаётся, но только как способ разрешить равенство.
     """
-    seen: list[tuple[str, str]] = []
-    for raw in candidates:
-        text = " ".join(str(raw).split())
-        if len(text) >= MIN_ADDRESS_LENGTH:
-            seen.append((_comparable(text), text))
-    if not seen:
+    if not pairs:
         return None
-    with_premises = [pair for pair in seen if has_premises(pair[1])]
-    return _most_confirmed(with_premises or seen)
+    with_premises = [pair for pair in pairs if has_premises(pair[1])]
+    return _most_confirmed(with_premises or pairs)
 
 
 def _most_confirmed(pairs: list[tuple[str, str]]) -> str:
-    """Чаще всего встреченный, при равенстве — встреченный раньше."""
+    """Чаще всего встреченное место, при равенстве — встреченное раньше."""
     counts = Counter(key for key, _ in pairs)
-    best_key = max(counts, key=lambda key: (counts[key], -_first_index(pairs, key)))
-    return next(text for key, text in pairs if key == best_key)
+    return max(counts, key=lambda key: (counts[key], -_first_index(pairs, key)))
 
 
 def _first_index(pairs: list[tuple[str, str]], key: str) -> int:
     return next(index for index, (candidate, _) in enumerate(pairs) if candidate == key)
 
 
-def _comparable(address: str) -> str:
-    """Ключ сравнения: одно и то же место, записанное по-разному, — один адрес.
+def _spelling_of(key: str, pairs: list[tuple[str, str]]) -> str:
+    """Написание, которым будет назван этот адрес."""
+    return _preferred_spelling([text for place, text in pairs if place == key])
 
-    Регистр и пробелы вокруг запятых различают не адреса, а тех, кто их
-    записывал. Без приведения «г Ульяновск, б-р Фестивальный,17,151» и
-    «г Ульяновск, б-р Фестивальный, 17, 151» считались бы двумя разными
-    адресами, и частота — главный здесь довод — считалась бы неверно.
+
+def _preferred_spelling(variants: Sequence[str]) -> str:
+    """Одно написание из присланных поставщиком — показать и отправить в ЕГРН.
+
+    Новая строка не сочиняется: в платный источник уходит та, которую источник
+    и назвал. Порядок предпочтений:
+
+    1. доходящее до квартиры — это про деньги, а не про вид: только такой
+       адрес Росреестр примет (хвостовая запятая ломает именно это);
+    2. без точек в сокращениях — ровно эта форма дважды прошла в ЕГРН живьём,
+       а форма с точками не проверялась ни разу;
+    3. встреченное раньше — другого довода нет.
     """
-    return re.sub(r"\s*,\s*", ",", address.strip().lower())
+    return min(variants, key=lambda text: (not has_premises(text), text.count(".")))
 
 
-__all__ = ["MAX_OPTIONS", "MIN_ADDRESS_LENGTH", "address_options", "has_premises", "pick_address"]
+__all__ = [
+    "MAX_OPTIONS",
+    "MIN_ADDRESS_LENGTH",
+    "address_options",
+    "as_offered",
+    "has_premises",
+    "is_same_place",
+    "pick_address",
+    "same_place",
+    "tidy",
+]

@@ -39,6 +39,7 @@ from app.domain.identity import (
 from app.providers.registry import ProviderRegistry
 from app.services import coverage
 from app.services.query_card import FIELD_ORDER, FIELD_TITLES, OPTIONAL_ROWS, Card
+from app.utils.address import is_same_place
 from app.utils.dates import format_datetime
 from app.utils.formatting import pluralize_ru
 
@@ -568,9 +569,9 @@ def address_screen(options: Sequence[str], *, chosen: str | None) -> str:
     суд.
     """
     lines = [ADDR_TITLE, ADDR_LEAD, ""]
-    for index, option in enumerate(options, start=1):
-        mark = f"{FILLED_MARK} " if option == chosen else ""
-        lines.append(f"{index}. {mark}{option}")
+    lines.extend(
+        _address_label(index, option, chosen) for index, option in enumerate(options, start=1)
+    )
     lines.extend(("", ADDR_WHY))
     return "\n".join(lines)
 
@@ -586,16 +587,33 @@ def address_keyboard(options: Sequence[str], *, chosen: str | None) -> InlineKey
     со строкой на экране выше даже когда подпись обрезана.
     """
     rows = [
-        [
-            _button(
-                f"{index}. {FILLED_MARK if option == chosen else ''} {option}".strip(),
-                f"{QC_ADDR}:{index - 1}",
-            )
-        ]
+        [_button(_address_label(index, option, chosen), f"{QC_ADDR}:{index - 1}")]
         for index, option in enumerate(options, start=1)
     ]
     rows.append([_button(BACK_LABEL, QC_ADDR_BACK)])
     return _rows_markup(rows)
+
+
+def _address_label(index: int, option: str, chosen: str | None) -> str:
+    """Строка экрана и подпись кнопки — одна и та же, посимвольно.
+
+    Одна функция на двоих, потому что оператор сопоставляет кнопку со строкой
+    выше — а двумя копиями они уже разошлись: на кнопке без галочки стоял
+    лишний пробел, «2.  г Москва…».
+    """
+    mark = f"{FILLED_MARK} " if _is_chosen(option, chosen) else ""
+    return f"{index}. {mark}{option}"
+
+
+def _is_chosen(option: str, chosen: str | None) -> bool:
+    """Тот ли это адрес, что стоит в карточке, — ПО МЕСТУ, а не по строке.
+
+    Одно место поставщик присылает несколькими написаниями, и оператор мог
+    вписать адрес руками ещё третьим. Сравнение строк оставляло бы список без
+    единой галочки, и текущий адрес выглядел бы невыбранным — а именно галочка
+    здесь и отвечает на вопрос «по какому адресу пойдёт запрос».
+    """
+    return chosen is not None and is_same_place(option, chosen)
 
 
 def _ask_lines(field_name: str, *, skip_label: str) -> list[str]:

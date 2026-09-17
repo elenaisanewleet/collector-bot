@@ -38,7 +38,7 @@ from app.logging_setup import get_logger
 from app.providers.base import NO_CONTEXT, FetchContext, ProviderUnavailableError
 from app.providers.mapping import as_text, dig
 from app.providers.newdb import COUNTRY_RU, NewDBMethodProvider
-from app.utils.address import has_premises
+from app.utils.address import has_premises, tidy
 from app.utils.dates import parse_date, utcnow
 from app.utils.money import parse_amount
 
@@ -144,10 +144,19 @@ class NewDBPropertyProvider(NewDBMethodProvider):
 
 
 def _query_for(subject: SearchSubject) -> dict[str, Any] | None:
-    """Параметры запроса, если субъект вообще годится для ЕГРН."""
-    address = as_text(subject.address)
-    if address is None:
+    """Параметры запроса, если субъект вообще годится для ЕГРН.
+
+    Адрес чистится (:func:`~app.utils.address.tidy`) — убираются лишние пробелы
+    и пустые части, и только они. Порядок частей и сокращения остаются как их
+    написал источник или оператор: в платный источник уходит проверенная
+    живьём строка, а не сочинённая нами. Чистка при этом не косметическая —
+    хвостовая запятая превращает «…,17,151» в адрес, который читается как дом
+    без квартиры, и запрос не ушёл бы вовсе.
+    """
+    raw = as_text(subject.address)
+    if raw is None:
         return None
+    address = tidy(raw)
     if CADASTRAL_NUMBER.match(address):
         return {"country": COUNTRY_RU, "cadastral_number": address}
     if has_premises(address):

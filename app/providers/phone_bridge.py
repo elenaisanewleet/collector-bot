@@ -74,7 +74,14 @@ from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import RecordDict
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
-from app.utils.address import address_options, has_premises, pick_address
+from app.utils.address import (
+    address_options,
+    as_offered,
+    has_premises,
+    is_same_place,
+    pick_address,
+    same_place,
+)
 from app.utils.dates import parse_date
 from app.utils.masking import mask_phone
 
@@ -276,6 +283,19 @@ def _read_rows(
     # Кандидаты считаются ОДИН раз: и выбор по умолчанию, и список для
     # оператора обязаны говорить об одном и том же ответе.
     front, rest = _address_candidates(kin, anchor)
+    # ОДНО МЕСТО — ОДНА СТРОКА, и в карточке она та же, что в списке выбора.
+    #
+    # Правило владельца решает МЕСТО — из какой утечки брать адрес. Написание
+    # того же места — отдельный вопрос: поставщик присылает его несколькими
+    # («обл. Тестовая…» и «обл Тестовая…»), и выбирается одно из присланных, то,
+    # что проходит в ЕГРН (см. ``app.utils.address``). Выбор адреса и список
+    # считаются разными правилами, поэтому написание согласуется здесь — иначе
+    # оператор увидел бы список без единой галочки и решил бы, что адрес не
+    # выбран вовсе.
+    chosen = _address_by_origin(kin, name)
+    options = address_options(rest, preferred=front, chosen=chosen)
+    if chosen is not None:
+        chosen = as_offered(chosen, options) or chosen
     result = PhoneNameResult(
         provider=provider.name,
         status=ProviderStatus.SUCCESS,
@@ -290,8 +310,8 @@ def _read_rows(
         # ``_address_by_origin`` заменил четыре правила, ни одно из которых
         # не могло работать: признак верного адреса лежит в происхождении
         # блока, а карта полей ключи ``data`` и ``source`` отбрасывала.
-        address=_address_by_origin(kin, name),
-        address_options=tuple(address_options(rest, preferred=front)),
+        address=chosen,
+        address_options=tuple(options),
         note=f"ФИО определено по номеру {mask_phone(phone)}",
     )
     # ЧТО РАЗОБРАЛОСЬ, А ЧТО НЕТ — списком имён полей, без значений.
@@ -709,25 +729,28 @@ def _address_choice(
     """
     if chosen is None:
         return {}
-    target = " ".join(chosen.split())
+    # Сравнение ПО МЕСТУ, а не по строке: в карточку уходит одно написание из
+    # присланных, и оно не обязано совпадать посимвольно с тем блоком, из
+    # которого адрес взят («обл. Тестовая…» против «обл Тестовая…»). Сравнивай
+    # строки — и диагностика, ради которой всё это и завелось, писала бы
+    # «address_from=none:none» ровно там, где адрес найден.
     where = "none"
     key_name = "none"
     for label, rows in (("anchor", [anchor] if anchor else []), ("kin", kin)):
         for row in rows:
             for key in _ADDRESS_KEYS:
                 raw = row.get(key)
-                if raw is not None and " ".join(str(raw).split()) == target:
+                if raw is not None and is_same_place(str(raw), chosen):
                     where, key_name = label, key
                     break
             if key_name != "none":
                 break
         if key_name != "none":
             break
+    # МЕСТ, а не строк: их число сравнивают с длиной списка выбора, и одно
+    # место, записанное поставщиком трижды, там одна строка.
     distinct = {
-        " ".join(str(raw).split()).lower()
-        for row in kin
-        for key in _ADDRESS_KEYS
-        if (raw := row.get(key))
+        same_place(str(raw)) for row in kin for key in _ADDRESS_KEYS if (raw := row.get(key))
     }
     return {
         "address_from": f"{where}:{key_name}",

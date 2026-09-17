@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from app.bot import card_view
 from app.domain.enums import SearchType
 from app.domain.identity import SearchSubject
 from app.providers.name_bridge import _pick_address as pick_by_name
@@ -254,3 +255,121 @@ def test_more_than_eight_candidates_are_cut() -> None:
 
     assert len(options) == MAX_OPTIONS
     assert options[0] == FEST
+
+
+# ------------------------------- одно место — одна строка
+
+
+#: Список выбора, как его увидел владелец: «в выборе тут 5 адресов, но они
+#: повторяются, может мы будем приводить их к одному виду? который принимает
+#: егрн?» Мест здесь ТРИ, а различаются строки ровно тремя способами: точки в
+#: сокращениях, пробелы вокруг запятых и хвостовая запятая. Улицы и числа
+#: изменены — живые адреса персональные данные и в репозиторий не едут.
+AS_SEEN = (
+    FEST,
+    "ТЕСТОВСКАЯ, д. 40, кв. 95",
+    "обл. Тестовая, г. Тестов, б-р. Первый,17,151",
+    "Тестов, проспект Второй, 1",
+    "Тестов,проспект Второй,1,",
+)
+#: То же место, что :data:`FEST`, записанное с точками в сокращениях.
+DOTTED = AS_SEEN[2]
+
+
+def test_the_five_offered_addresses_turn_out_to_be_three_places() -> None:
+    """Пять строк живого списка — три места, и предлагаются три.
+
+    Повторы не безобидны: выбирая из пяти строк, где две пары совпадают,
+    оператор ищет различие, которого нет, и решает, что бот нашёл пять адресов.
+    """
+    assert address_options(AS_SEEN) == [
+        FEST,
+        "ТЕСТОВСКАЯ, д. 40, кв. 95",
+        "Тестов, проспект Второй, 1",
+    ]
+
+
+def test_the_spelling_that_egrn_accepted_is_the_one_offered() -> None:
+    """Из двух написаний одного места показывается прошедшее в ЕГРН.
+
+    Написание не СОЧИНЯЕТСЯ — выбирается одно из присланных поставщиком, и
+    предпочтение у формы без точек в сокращениях: ровно она дважды прошла
+    живьём, а форма с точками не проверялась ни разу. Присланное с точками так
+    и показывается: выдумывать за источник нечего, и в платный запрос уходит
+    его строка, а не наша.
+    """
+    assert address_options([DOTTED, FEST]) == [FEST]
+    assert address_options([FEST, DOTTED]) == [FEST]
+    assert address_options([DOTTED]) == [DOTTED]
+
+
+def test_the_same_place_written_twice_is_confirmed_twice() -> None:
+    """Частота считается по МЕСТАМ, а не по строкам.
+
+    Иначе адрес, записанный поставщиком двумя способами, проигрывал бы
+    одиночному чужому — это довод владельца про частоту, посчитанный неверно.
+    """
+    assert pick_address([ODD, FEST, DOTTED]) == FEST
+
+
+def test_a_trailing_comma_does_not_hide_the_flat() -> None:
+    """«…,17,151,» — тот же адрес с квартирой, и запрос по нему уходит.
+
+    Хвостовая запятая читается как пустая часть после квартиры, то есть адрес
+    выглядит домом без квартиры. Запрос не ушёл бы вовсе — бесплатно, но
+    неверно: раздел писал бы «нужен адрес с квартирой» под адресом, в котором
+    квартира есть.
+    """
+    assert has_premises(f"{FEST},")
+    subject = SearchSubject(search_type=SearchType.PERSON.value, address=f"{FEST}, ")
+
+    assert _query_for(subject) == {"country": "ru", "address": FEST}
+
+
+def test_the_card_address_and_the_list_say_the_same_string() -> None:
+    """Опорный блок пишет с точками, соседний — без, и строка одна на двоих.
+
+    Иначе в карточке стоит одно написание, а в списке другое, и галочка
+    «выбрано» не встаёт ни на одной строке: действующий адрес выглядит
+    невыбранным.
+    """
+    assert pick_address([FEST], preferred=[DOTTED]) == FEST
+    assert address_options([FEST], preferred=[DOTTED]) == [FEST]
+
+
+def test_the_list_starts_with_the_address_the_card_already_uses() -> None:
+    """Список открывается тем, что используется, а не выбором правила.
+
+    Адрес карточки мост выбирает по происхождению блока — правилом, которого в
+    списке нет. Без ``chosen`` первой строкой встал бы выбор другого правила, а
+    при обрезке до восьми действующий адрес мог бы не попасть в список вовсе.
+    """
+    options = address_options([FEST, FEST, ODD], chosen="г. Москва, ул. Одиночная, 5, 12")
+
+    assert options[0] == ODD, "первым обязан стоять адрес карточки"
+
+    many = [f"г Москва, ул Тестовая {index}, 5, 12" for index in range(20)]
+
+    assert address_options(many, chosen=many[-1])[0] == many[-1]
+
+
+def test_the_screen_ticks_the_address_of_the_card_however_it_is_written() -> None:
+    """Галочка ставится по МЕСТУ: оператор мог вписать адрес третьим способом.
+
+    Сравнение строк оставило бы экран без единой галочки — и вопрос «по какому
+    адресу пойдёт запрос в Росреестр» остался бы без ответа ровно там, где его
+    и задают.
+    """
+    options = [FEST, ODD]
+
+    screen = card_view.address_screen(options, chosen=DOTTED)
+    labels = [
+        button.text
+        for row in card_view.address_keyboard(options, chosen=DOTTED).inline_keyboard
+        for button in row
+    ]
+
+    assert f"1. {card_view.FILLED_MARK} {FEST}" in screen
+    assert f"2. {ODD}" in screen
+    assert labels[0] == f"1. {card_view.FILLED_MARK} {FEST}"
+    assert labels[1] == f"2. {ODD}"
