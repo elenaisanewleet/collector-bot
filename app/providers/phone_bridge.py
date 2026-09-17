@@ -66,6 +66,7 @@ from app.domain.identity import (
     normalize_passport,
     normalize_snils,
     parse_fio,
+    translit_ru,
 )
 from app.domain.models import ProviderResult
 from app.logging_setup import get_logger
@@ -73,7 +74,7 @@ from app.providers.base import BaseProvider
 from app.providers.http import RetryPolicy
 from app.providers.mapping import RecordDict
 from app.providers.vendor_http import VendorConfig, VendorJsonClient
-from app.utils.address import address_options, pick_address
+from app.utils.address import address_options, has_premises, pick_address
 from app.utils.dates import parse_date
 from app.utils.masking import mask_phone
 
@@ -285,7 +286,11 @@ def _read_rows(
         passport=passport,
         snils=_pick(kin, _read_snils, "snils"),
         passport_issued=_issue_date(kin, passport),
-        address=pick_address(rest, preferred=front),
+        # ПО ПРАВИЛУ ВЛАДЕЛЬЦА: сначала утечка, потом порядок, потом частота.
+        # ``_address_by_origin`` заменил четыре правила, ни одно из которых
+        # не могло работать: признак верного адреса лежит в происхождении
+        # блока, а карта полей ключи ``data`` и ``source`` отбрасывала.
+        address=_address_by_origin(kin, name),
         address_options=tuple(address_options(rest, preferred=front)),
         note=f"ФИО определено по номеру {mask_phone(phone)}",
     )
@@ -380,6 +385,12 @@ def _field_keys() -> dict[str, tuple[str, ...]]:
         "snils": ("snils",),
         "fio": ("fio", "full_name", "name"),
         "address": _ADDRESS_KEYS,
+        # ОТКУДА БЛОК. Не идентификатор и не факт — но именно он решает, какой
+        # из восьми адресов настоящий. Владелец назвал порядок по утечкам:
+        # госуслуги, затем медицинская база, затем остальное. Кода, способного
+        # выбрать верный адрес без этого признака, не существует — проверено
+        # четырьмя правилами подряд (см. :data:`_SOURCE_RANK`).
+        "origin": _ORIGIN_KEYS,
     }
 
 
@@ -538,6 +549,124 @@ _ADDRESS_KEYS = (
 )
 
 
+#: Под какими ключами блок называет свою утечку.
+_ORIGIN_KEYS = ("data", "source")
+
+#: ПОРЯДОК ДОВЕРИЯ К УТЕЧКАМ, заданный владельцем дословно: «где есть
+#: governmentservices — с этого блока берём в приоритете, если нет — ищем
+#: mosgorzdrav_2025 или mosgorzdrav, и в третью очередь grastin_2021_2022».
+#:
+#: ЭТО ТОТ ПРИЗНАК, КОТОРОГО НЕ ХВАТАЛО. Четыре правила подряд выбрали неверный
+#: адрес на живом ответе с восемью кандидатами — первый с квартирой, частота по
+#: родне, опорный блок, опорный блок с предпочтением квартире. Ни одно не могло
+#: сработать: в самом ответе нет ничего, что отличало бы верный адрес от семи
+#: прочих. Кроме происхождения блока — и его владелец знает, а код не знал,
+#: потому что карта полей ключи ``data`` и ``source`` отбрасывала.
+#:
+#: Порядок осмысленный, а не вкусовой: госуслуги ведут адрес регистрации по
+#: заявлению самого человека, медицинская база — по его последнему приёму, а
+#: маркетинговая выгрузка 2021–2022 годов устарела на годы.
+_SOURCE_RANK: dict[str, int] = {
+    "governmentservices": 0,
+    "mosgorzdrav_2025": 1,
+    "mosgorzdrav": 1,
+    "grastin_2021_2022": 2,
+}
+
+#: Хуже любой известной утечки, но не «нельзя брать»: неизвестный источник
+#: участвует в общем порядке выдачи, как и раньше.
+_UNRANKED = len(_SOURCE_RANK) + 1
+
+
+def _origin_rank(row: RecordDict) -> int:
+    """Насколько доверяем утечке этого блока. Меньше — больше доверия.
+
+    Берётся ЛУЧШИЙ из ключей: один и тот же блок несёт ``source`` и ``data``
+    («mosgorzdrav_2025» и «mosgorzdrav»), и требовать совпадения обоих значило
+    бы зависеть от того, какой ключ поставщик заполнил в этот раз.
+    """
+    ranks = [
+        _SOURCE_RANK.get(" ".join(str(raw).split()).lower(), _UNRANKED)
+        for key in _ORIGIN_KEYS
+        if (raw := row.get(key))
+    ]
+    return min(ranks, default=_UNRANKED)
+
+
+def _names_the_person(row: RecordDict, name: PersonName) -> bool:
+    """Назван ли в блоке НАШ человек — терпимо к записи имени.
+
+    Требование владельца: «везде должно быть указано ФИО либо латиницей, либо
+    вот как тут в разных вариантах». Живой ответ показывает три записи одного
+    имени в трёх блоках: «Клочкова klochkova Елена elena Николаевна» (кириллица
+    и транслит вперемешку в одном поле), «Klochkova Elena» (только транслит) и
+    «Клочкова Елена Николаевна».
+
+    Поэтому сравниваются не строки, а МНОЖЕСТВА слов, приведённых к латинице:
+    фамилия и имя должны найтись среди слов блока. Отчество не требуется — в
+    двух из трёх живых блоков его нет вовсе.
+
+    Зачем это нужно вообще: приоритет утечки применяется только к блокам про
+    нашего человека. Блок с адресом и без имени — а таких в ответе большинство
+    — не имеет права победить по одному лишь имени утечки: номером телефона
+    пользуются родственники и прежние владельцы номера.
+    """
+    words = {
+        translit_ru(part)
+        for key in _field_keys()["fio"]
+        if (raw := row.get(key))
+        for part in str(raw).split()
+    }
+    words.discard("")
+    needed = {translit_ru(name.last_name), translit_ru(name.first_name)}
+    return needed <= words
+
+
+def _address_by_origin(kin: list[RecordDict], name: PersonName | None) -> str | None:
+    """Адрес по правилу владельца: сначала утечка, потом порядок, потом частота.
+
+    Порядок ровно тот, который он задал, и каждый шаг делается только когда
+    предыдущий не дал ничего:
+
+    1. блоки самой доверенной утечки, где назван наш человек;
+    2. следующая утечка, и так по :data:`_SOURCE_RANK`;
+    3. первый блок с нашим ФИО, у которого адрес вообще есть;
+    4. частота адресов среди блоков с нашим ФИО;
+    5. то же по всей родне — если имени нет ни в одном блоке.
+
+    ДВА ПРОХОДА ПО УТЕЧКАМ, и это единственное, что я добавил к правилу.
+    Сначала в каждой группе ищется адрес С КВАРТИРОЙ, и лишь если ни в одной
+    группе такого нет — любой. Причина не вкусовая: адрес до дома не открывает
+    ЕГРН вовсе (Росреестр отвечает ошибкой за уже списанные деньги), то есть
+    «самый доверенный, но без квартиры» не работает ни для чего. Порядок утечек
+    при этом не нарушен — он решает внутри каждого прохода.
+    """
+    named = [row for row in kin if name is not None and _names_the_person(row, name)]
+    pool = named or kin
+    groups = sorted({_origin_rank(row) for row in pool} - {_UNRANKED})
+    for premises_only in (True, False):
+        for rank in groups:
+            rows = [row for row in pool if _origin_rank(row) == rank]
+            chosen = _first_address(rows, premises_only=premises_only)
+            if chosen is not None:
+                return chosen
+    # Ни одной известной утечки: первый блок с адресом, потом частота.
+    for row in pool:
+        chosen = _first_address([row], premises_only=True)
+        if chosen is not None:
+            return chosen
+    front, rest = _address_candidates(pool, None)
+    return pick_address(rest, preferred=front)
+
+
+def _first_address(rows: list[RecordDict], *, premises_only: bool) -> str | None:
+    """Лучший адрес этой группы блоков, в порядке выдачи."""
+    _, candidates = _address_candidates(rows, None)
+    if premises_only:
+        candidates = [item for item in candidates if has_premises(item)]
+    return pick_address(candidates)
+
+
 def _address_candidates(
     kin: list[RecordDict], anchor: RecordDict | None
 ) -> tuple[list[str], list[str]]:
@@ -605,10 +734,24 @@ def _address_choice(
     }
 
 
-def _read_fio_mark(raw: object) -> str | None:
-    """ФИО, приведённое к сравнимому виду: регистр и пробелы не различают людей."""
-    text = " ".join(str(raw).split()).lower()
-    return text or None
+def _read_fio_mark(raw: object) -> frozenset[str] | None:
+    """ФИО как МНОЖЕСТВО слов в латинице — чтобы сравнивать людей, а не записи.
+
+    Сравнение целых строк здесь выбрасывало блок с настоящими документами.
+    Живой ответ несёт имя одного человека тремя записями, и одна из них —
+    «Клочкова klochkova Елена elena Николаевна»: кириллица и транслит
+    вперемешку в одном поле. Как строка она не равна «Клочкова Елена
+    Николаевна», то есть считалась ДРУГИМ человеком, — и блок, в котором лежат
+    паспорт и СНИЛС, отбраковывался как чужой.
+
+    Множество слов в латинице снимает и разную запись, и порядок, и дубли:
+    {klochkova, elena, nikolaevna} у всех трёх записей. Сравнение множеств —
+    в :func:`_kin`, и оно НЕ на равенство: имя без отчества это тот же
+    человек, а не другой.
+    """
+    words = {translit_ru(part) for part in str(raw).split()}
+    words.discard("")
+    return frozenset(words) or None
 
 
 def _kin(rows: list[RecordDict], anchor: RecordDict | None) -> list[RecordDict]:
@@ -644,10 +787,29 @@ def _kin(rows: list[RecordDict], anchor: RecordDict | None) -> list[RecordDict]:
         if row is anchor:
             continue
         theirs = _marks(row)
-        if any(kind in mine and mine[kind] != value for kind, value in theirs.items()):
+        if any(
+            kind in mine and _contradicts(kind, mine[kind], value) for kind, value in theirs.items()
+        ):
             continue
         kin.append(row)
     return kin
+
+
+def _contradicts(kind: str, mine: object, theirs: object) -> bool:
+    """Спорят ли два признака одного вида. Не «различаются», а СПОРЯТ.
+
+    Для паспорта, СНИЛСа и даты рождения это одно и то же: другое значение —
+    другой человек. Для ИМЕНИ — нет, и разница стоила блока с документами.
+
+    Имя сравнивается множествами слов (:func:`_read_fio_mark`), и неполное имя
+    полному не противоречит: «Клочкова Елена» — тот же человек, что «Клочкова
+    Елена Николаевна», просто записанный короче, и в живом ответе такой блок
+    есть. Спор — это когда ни одно множество не вложено в другое: «Клочкова
+    Мария» рядом с «Клочкова Елена Николаевна» — две разные женщины.
+    """
+    if kind == "fio" and isinstance(mine, frozenset) and isinstance(theirs, frozenset):
+        return not (mine <= theirs or theirs <= mine)
+    return mine != theirs
 
 
 def _pick[T](

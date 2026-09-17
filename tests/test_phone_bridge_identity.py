@@ -774,3 +774,131 @@ def test_no_address_means_nothing_to_log() -> None:
     from app.providers.phone_bridge import _address_choice
 
     assert _address_choice([{"fio": "Тестова Елена"}], None, None) == {}
+
+
+# ------------------------------- адрес выбирается по происхождению блока
+
+
+#: Форма живого ответа, снятая с блоков, которые прислал владелец. ФИО, адреса
+#: и документы ВЫМЫШЛЕНЫ; сохранены ровно те свойства, из-за которых четыре
+#: прежних правила выбирали неверный адрес:
+#:
+#: * имя записано тремя способами — кириллица с транслитом вперемешку в одном
+#:   поле, чистый транслит, обычная кириллица;
+#: * у самого богатого блока (паспорт, СНИЛС, дата рождения) адрес НЕ тот;
+#: * верный адрес лежит в блоке ``governmentservices``, где кроме него почти
+#:   ничего нет;
+#: * есть блок без имени вовсе — он не имеет права решать.
+RIGHT = "г Москва, проезд Тестовый,8,139"
+WRONG = "г Москва, проспект Иной, д 73/2, кв 1"
+STALE = "Москва г Москва, Тестовый проезд, д 8, кв 139"
+
+
+@pytest.fixture
+def origin_settings(settings: Settings, tmp_path: Path) -> Settings:
+    """Карта, объявляющая ``data`` и ``source``.
+
+    Без них карта полей отбрасывает происхождение блока, и выбрать верный
+    адрес нечем: ровно это и происходило на проде.
+    """
+    path = tmp_path / "origin.json"
+    path.write_text(
+        '{"records_path": "results", "fields": {"fio": "fio",'
+        ' "full_name": "full_name", "birth_date": "birth_date",'
+        ' "passport": "passport", "snils": "snils", "address": "address",'
+        ' "address_fact": "address_fact", "data": "data", "source": "source"}}',
+        encoding="utf-8",
+    )
+    return settings.model_copy(update={"phone_bridge_field_map": path})
+
+
+BY_ORIGIN = {
+    "results": [
+        {"address": WRONG, "data": "somewhere_else"},
+        {
+            "fio": "Тестова testova Елена elena Николаевна",
+            "birth_date": "1994-11-24",
+            "passport": "4510123456",
+            "snils": "11223344595",
+            "address_fact": WRONG,
+            "source": "mosgorzdrav_2025",
+            "data": "mosgorzdrav",
+        },
+        {
+            "fio": "Testova Elena",
+            "birth_date": "1994-11-24",
+            "address_fact": STALE,
+            "data": "grastin_2021_2022",
+        },
+        {
+            "full_name": "Тестова Елена Николаевна",
+            "birth_date": "1994-11-24",
+            "address": RIGHT,
+            "data": "governmentservices",
+        },
+    ]
+}
+
+
+@respx.mock
+async def test_the_address_comes_from_the_most_trusted_leak(origin_settings: Settings) -> None:
+    """Порядок утечек решает адрес — так, как его задал владелец.
+
+    До этого правила адрес выбирался наугад из восьми, и четыре разных способа
+    подряд дали неверный: первый с квартирой, частота по родне, опорный блок,
+    опорный блок с предпочтением квартире. Ни один не мог сработать — в ответе
+    нет признака, который отличал бы верный адрес, кроме происхождения блока.
+
+    Существенно, что самый БОГАТЫЙ блок здесь несёт неверный адрес: паспорт,
+    СНИЛС и дата рождения берутся из него, а адрес — нет.
+    """
+    respx.get(url__startswith=BASE).mock(return_value=Response(200, json=BY_ORIGIN))
+    bridge = build_phone_bridge(origin_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.address == RIGHT, "адрес взят не из самой доверенной утечки"
+    # Документы по-прежнему из самого богатого блока: правило про адрес, и
+    # только про адрес.
+    assert result.passport == "4510123456"
+    assert result.snils == "11223344595"
+    # А выбрать можно любой из найденных — включая тот, что не выбран.
+    assert RIGHT in result.address_options
+    assert WRONG in result.address_options
+
+
+def test_a_block_without_our_name_never_decides_the_address() -> None:
+    """Блок без имени не говорит за должника, какой бы утечкой ни был.
+
+    Номером телефона пользуются родственники и прежние владельцы номера, и
+    блок с одним адресом и без имени не доказал про себя ничего.
+    """
+    from app.domain.identity import PersonName as Name
+    from app.providers.phone_bridge import _address_by_origin
+
+    name = Name(last_name="Тестова", first_name="Елена", middle_name="Николаевна")
+    kin = [
+        {"address": WRONG, "data": "governmentservices"},
+        {"fio": "Тестова Елена Николаевна", "address": RIGHT, "data": "mosgorzdrav"},
+    ]
+
+    assert _address_by_origin(kin, name) == RIGHT
+
+
+def test_the_name_is_recognised_in_every_form_the_vendor_uses() -> None:
+    """Три записи одного имени из живого ответа — все три обязаны совпасть."""
+    from app.domain.identity import PersonName as Name
+    from app.providers.phone_bridge import _names_the_person
+
+    name = Name(last_name="Клочкова", first_name="Елена", middle_name="Николаевна")
+
+    assert _names_the_person({"fio": "Клочкова klochkova Елена elena Николаевна"}, name)
+    assert _names_the_person({"fio": "Klochkova Elena"}, name)
+    assert _names_the_person({"full_name": "Клочкова Елена Николаевна"}, name)
+    # А однофамилец с другим именем — не он.
+    assert not _names_the_person({"fio": "Клочкова Мария"}, name)
+    assert not _names_the_person({"address": "г Москва, ул Первая, 5, 12"}, name)
