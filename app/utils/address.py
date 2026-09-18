@@ -293,10 +293,12 @@ def canonical(address: str) -> str | None:
     region, city, street, street_type, house, flat, tail = _parse_parts(address)
     if house is None and flat is None and len(tail) >= 2:
         house, flat = tail[-2], tail[-1]
-    if street is None or street_type is None or house is None or flat is None:
+    if street is None or house is None or flat is None:
         return None
     chunks = [chunk for chunk in (region, f"г {_titled(city)}" if city else None) if chunk]
-    chunks.append(f"{_titled(street)} {street_type}")
+    # Тип улицы дописывается, только если он НАЗВАН. «Ходынская улица» и
+    # «Ходынский бульвар» — разные места, и выбирать между ними нам не из чего.
+    chunks.append(f"{_titled(street)} {street_type}" if street_type else _titled(street))
     chunks.extend((f"д {house}", f"кв {flat}"))
     return ", ".join(chunks)
 
@@ -309,9 +311,21 @@ def _parse_parts(
     Последним — голые числа в порядке появления: форма «…проезд Тестовый,8,139»
     называет дом и квартиру без единого маркера, и разобрать её можно только
     хвостом.
+
+    УЛИЦА БЕЗ ТИПА ТОЖЕ УЛИЦА, если город уже назван. «москва, ходынская, 2,
+    кв. 297» — живая строка, и владелец прочитал её сразу: «город москва, улица
+    ходынская». Второе словесное имя подряд городом быть не может, а тип улицы
+    здесь просто не написан — и дописывать его нельзя: «Ходынская улица» и
+    «Ходынский бульвар» это разные места, а мы не знаем, какое из них.
+
+    Одного словесного имени для этого мало: «ОРЕНБУРГСКАЯ, д. 40, кв. 95» —
+    тоже живая строка, и что здесь улица, а что город, из неё не следует.
+    Такой адрес не собирается вовсе.
     """
     region = city = street = street_type = house = flat = None
     tail: list[str] = []
+    #: Словесные части, которые не забрали ни регион, ни город, ни улица.
+    spare: list[str] = []
     for part in tidy(address).split(","):
         tokens = [token.strip(" .") for token in part.split() if token.strip(" .")]
         if not tokens:
@@ -339,6 +353,13 @@ def _parse_parts(
             # Единственное слово до улицы — город, как его пишет половина
             # поставщиков: «Москва,Тестовое шоссе,21,7».
             city = tokens[0]
+        elif not numbered and rest:
+            spare.append(" ".join(rest))
+    if street is None and spare:
+        street = spare[-1]
+    if house is None and flat is not None and len(tail) == 1:
+        # Квартира названа словом, а дом — голым числом: «…, 2, кв. 297».
+        house = tail[0]
     return region, city, street, street_type, house, flat, tail
 
 
