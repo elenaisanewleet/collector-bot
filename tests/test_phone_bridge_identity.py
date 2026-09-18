@@ -889,6 +889,129 @@ def test_a_block_without_our_name_never_decides_the_address() -> None:
     assert _address_by_origin(kin, name) == RIGHT
 
 
+# ------------------------------- чей это блок: выбор якоря
+
+
+#: Ответ, в котором блок с БОЛЬШИМ ЧИСЛОМ КЛЮЧЕЙ не знает про человека ничего,
+#: а документы лежат в блоке победнее. Форма снята с живого ответа: он пришёл
+#: на три блока короче обычного, порядок сместился, и якорем стал блок без
+#: паспорта и без адреса — а блок с паспортом ушёл в отбраковку по дате
+#: рождения. Паспорт и улица выдуманы: живые в репозиторий не едут.
+IDENTITY_VS_KEYS = {
+    "results": [
+        {
+            "full_name": "Тестов Олег Владимирович",
+            "birth_date": "1970-01-02",
+            "data": "unknown_leak",
+            "source": "unknown_leak",
+        },
+        {
+            "full_name": "Тестов Олег Владимирович",
+            "birth_date": "1994-03-17",
+            "passport": "7300111222",
+            "address": "обл Тестовая, г Тестов, б-р Первый,17,151",
+            "data": "governmentservices",
+        },
+    ]
+}
+
+
+@respx.mock
+async def test_the_name_of_the_leak_is_not_a_mark_of_identity(
+    origin_settings: Settings,
+) -> None:
+    """Якорь выбирается по признакам ЧЕЛОВЕКА, а не по числу заполненных ключей.
+
+    Регрессия, которую я сам и завёл: ключи ``data`` и ``source`` добавились в
+    общую таблицу полей ради выбора адреса — и попали в подсчёт «богатства»
+    блока. Блок, у которого заполнены оба, обгонял блок с паспортом, не сообщив
+    о человеке ничего. Туда же считались синонимы одного факта: у даты рождения
+    их три (``birth_date``, ``bday``, ``dob``).
+
+    Цена ошибки не в самом якоре. На якоре держится отбраковка родни: блок с
+    ЧУЖОЙ датой рождения, ставший якорем, выбрасывает блоки с настоящей — и с
+    ними уезжают паспорт и адрес. В отчёте это выглядит как «поставщик паспорта
+    не присылал».
+    """
+    respx.get(url__startswith=BASE).mock(return_value=Response(200, json=IDENTITY_VS_KEYS))
+    bridge = build_phone_bridge(origin_settings)
+    assert bridge is not None
+
+    result = await bridge.fetch(
+        SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000")
+    )
+
+    assert isinstance(result, PhoneNameResult)
+    assert result.passport == "7300111222", "якорём стал блок без документов"
+    assert result.birth_date == date(1994, 3, 17)
+    assert result.address == "обл Тестовая, г Тестов, б-р Первый,17,151"
+
+
+def test_at_equal_marks_the_most_trusted_leak_is_the_anchor() -> None:
+    """Признаков одинаково — решает утечка, а не порядок в ответе.
+
+    Порядок задаёт поставщик, и он не постоянен: один и тот же номер дал ответ
+    на три блока короче, порядок сместился, и якорь сменился при неизменном
+    коде. Правило владельца («госуслуги, затем медицинская база, затем
+    остальное») проверено живьём на адресах, и здесь оно про то же самое —
+    какому блоку верить, когда блоки спорят.
+    """
+    from app.providers.phone_bridge import _pick_anchor
+
+    stranger = {"full_name": "Тестов Олег Владимирович", "birth_date": "1970-01-02"}
+    ours = {
+        "full_name": "Тестов Олег Владимирович",
+        "birth_date": "1994-03-17",
+        "data": "governmentservices",
+    }
+
+    _, anchor = _pick_anchor([stranger, ours])
+
+    assert anchor is ours
+
+
+def test_the_log_says_what_went_out_with_the_rejected_blocks() -> None:
+    """«Паспорт не вытащился» разошлось на два объяснения, и лог их не различал.
+
+    Поставщик прислал меньше блоков — или блок с паспортом выбросили мы. В
+    отчёте и там и там паспорта нет, а ``dropped`` говорил только «столько-то
+    блоков по такому-то признаку». Разбираться пришлось перепиской.
+
+    И числа — СТРОКАМИ: страж лога вычёркивает всё, что лежит под ключом с
+    именем чувствительного поля, и счётчик ``{'birth_date': 3}`` уехал в лог
+    как ``{'birth_date': '<redacted>'}`` — ровно в тот день, когда это число и
+    было ответом.
+    """
+    from app.providers.phone_bridge import _rejection_report
+
+    report = _rejection_report(
+        [
+            (
+                "birth_date",
+                {
+                    "full_name": "Тестов Олег Владимирович",
+                    "birth_date": "1994-03-17",
+                    "passport": "7300111222",
+                    "address": "обл Тестовая, г Тестов, б-р Первый,17,151",
+                    "data": "governmentservices",
+                },
+            ),
+            ("fio", {"full_name": "Тестова Мария Ивановна"}),
+        ]
+    )
+
+    assert report["dropped"] == ["birth_date:1", "fio:1"]
+    # Адрес в списке есть: теряется он вместе с блоком и дороже всех остальных —
+    # только адрес открывает ЕГРН.
+    assert report["dropped_carried"] == ["address", "birth_date", "fio", "passport"]
+    # Значений в логе нет ни одного — ни номера паспорта, ни адреса, ни имени.
+    printed = repr(report)
+    assert "7300111222" not in printed
+    assert "Тестов" not in printed
+    # Имя утечки — не признак личности, и в отчёте об отбраковке ему не место.
+    assert "origin" not in printed and "governmentservices" not in printed
+
+
 def test_the_name_is_recognised_in_every_form_the_vendor_uses() -> None:
     """Три записи одного имени из живого ответа — все три обязаны совпасть."""
     from app.domain.identity import PersonName as Name
