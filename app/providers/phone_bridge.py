@@ -65,6 +65,7 @@ from app.domain.identity import (
     SearchSubject,
     normalize_inn,
     normalize_passport,
+    normalize_phone,
     normalize_snils,
     parse_fio,
     translit_ru,
@@ -200,8 +201,44 @@ class PhoneNameProvider(BaseProvider):
         missing = self.missing_input_for(subject)
         if missing or not subject.phone:
             return self.insufficient_query("Нужен номер телефона", missing=missing)
-        records, _raw = await self._vendor_client().fetch_records({"phone": subject.phone})
+        records, _raw = await self._vendor_client().fetch_records(
+            {"phone": _vendor_phone(subject.phone)}
+        )
         return _read_rows(records, phone=subject.phone, provider=self)
+
+
+def _vendor_phone(phone: str) -> str:
+    """Номер в том виде, в каком его понимает поставщик: ОДНИ ЦИФРЫ, без плюса.
+
+    ЭТО ИЗМЕРЕНИЕ, А НЕ ВКУС. Один и тот же номер, спрошенный дважды подряд
+    одним и тем же кодом:
+
+    =====================  ======  ===========  ============================
+    номер в запросе        блоков  с паспортом  утечки
+    =====================  ======  ===========  ============================
+    ``+7XXXXXXXXXX``       12      0            без госуслуг
+    ``7XXXXXXXXXX``        15      2            + governmentservices, himera
+    =====================  ======  ===========  ============================
+
+    Ответ без плюса — НАДМНОЖЕСТВО ответа с плюсом: те же утечки в том же
+    числе, и ещё три блока сверху. Значит хотя бы одна база поставщика сверяет
+    номер как строку, а плюс уходит к нему экранированным (``%2B``) и не
+    совпадает ни с чем.
+
+    Стоило это двух дней разбирательства и выглядело как чужая беда: «вчера
+    паспорт был, сегодня нет», хотя менялся не ответ поставщика, а то, какие
+    его базы отвечали. Отчёт при этом не врал — он писал «поставщик паспорта не
+    присылал», и это было правдой про наш испорченный запрос.
+
+    Написание, которое ввёл оператор, значения не имеет: ``normalize_phone``
+    принимает и ``8``, и ``+7``, и пробелы со скобками и приводит всё к
+    ``+7XXXXXXXXXX``, а здесь снимается плюс. Ключ настройки под формат я не
+    заводил: это измеренный факт про конкретного поставщика, а не
+    предпочтение. Понадобится второй поставщик, требующий плюс, — тогда и
+    ключ; сломается это громко (имя не определится вовсе), а не тихо.
+    """
+    normalized = normalize_phone(phone)
+    return re.sub(r"\D", "", normalized if normalized is not None else phone)
 
 
 def _individual_inn(raw: object) -> str | None:

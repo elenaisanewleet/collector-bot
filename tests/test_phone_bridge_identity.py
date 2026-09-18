@@ -889,6 +889,60 @@ def test_a_block_without_our_name_never_decides_the_address() -> None:
     assert _address_by_origin(kin, name) == RIGHT
 
 
+# ------------------------------- каким номер уходит к поставщику
+
+
+@respx.mock
+async def test_the_number_goes_to_the_vendor_as_digits(settings: Settings) -> None:
+    """Плюс в номере поставщику отвечать мешает — это измерено, а не домысел.
+
+    Один и тот же номер, спрошенный дважды подряд одним и тем же кодом: с
+    плюсом — двенадцать блоков и ни одного паспорта, без плюса — пятнадцать и
+    два паспорта, причём набор утечек во втором ответе НАДМНОЖЕСТВО первого.
+    Значит хотя бы одна база поставщика сверяет номер как строку, а плюс уходит
+    к нему экранированным (``%2B``) и не совпадает ни с чем.
+
+    Выглядело это как чужая беда: «вчера паспорт был, сегодня нет». Менялся не
+    ответ поставщика, а то, какие его базы на наш испорченный запрос отвечали.
+    """
+    route = respx.get(url__startswith=BASE).mock(return_value=Response(200, json={"results": []}))
+    bridge = build_phone_bridge(settings)
+    assert bridge is not None
+
+    await bridge.fetch(SearchSubject(search_type=SearchType.PERSON.value, phone="+79990000000"))
+
+    asked = str(route.calls.last.request.url)
+    assert "79990000000" in asked
+    assert "%2B" not in asked, "плюс уехал к поставщику экранированным"
+    assert "+7" not in asked
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        "+79990000000",
+        "79990000000",
+        "89990000000",
+        "+7 (999) 000-00-00",
+        "8 999 000 00 00",
+        "8-999-000-00-00",
+        "9990000000",
+    ],
+)
+def test_any_spelling_of_the_number_reaches_the_vendor_the_same_way(written: str) -> None:
+    """«Обрабатывать любые написания» — требование владельца, и оно про весь путь.
+
+    Скобки, пробелы, дефисы, восьмёрка вместо семёрки, номер без кода страны:
+    оператор пишет как записано в договоре, а к поставщику обязан уйти один и
+    тот же номер. Приведение делает ``normalize_phone``, а формат для
+    поставщика — :func:`_vendor_phone`, и проверять их надо вместе: порознь
+    каждый был исправен, а к поставщику номер уходил с плюсом.
+    """
+    from app.providers.phone_bridge import _vendor_phone
+
+    assert _vendor_phone(written) == "79990000000"
+
+
 # ------------------------------- чей это блок: выбор якоря
 
 
