@@ -302,6 +302,42 @@ def test_the_table_stores_the_documents_and_the_number_beside_their_masks() -> N
     assert {"passport_masked", "snils_masked", "phone_masked"} <= columns
 
 
+@pytest.mark.parametrize("store", [True, False])
+async def test_the_number_outlives_a_restart_exactly_when_the_flag_says_so(
+    container: Container, store: bool
+) -> None:
+    """Сохранённый номер обязан пережить перезапуск, а несохранённый — нет.
+
+    Колонка под телефон и запись по флагу были заведены раньше, а чтение — нет:
+    при загрузке карточки номер БЕЗУСЛОВНО перекрывался памятью процесса, и
+    пустая память затирала то, что лежало в базе. Снаружи это выглядело так,
+    будто флаг ни на что не влияет: бот выкладывается по нескольку раз в день,
+    и после каждой выкладки карточка просила прислать номер заново — тот самый,
+    который она же и сохранила.
+
+    Дороже всего это стоило кнопке «Собрать данные по номеру»: без номера она
+    не работает, а нужна ровно после выкладки.
+    """
+    from app.utils.masking import mask_phone
+
+    container.settings.store_sensitive_identifiers = store
+    cards = container.query_cards
+    card = await cards.load(OPERATOR_ID, CHAT_ID)
+    card.phone = "+79990000000"
+    card.phone_masked = mask_phone(card.phone)
+    await cards.save(card)
+
+    # Перезапуск процесса: память пуста, база на месте.
+    cards._secrets.drop(card.key)
+    after = await cards.load(OPERATOR_ID, CHAT_ID)
+
+    assert after.phone == ("+79990000000" if store else None)
+    # Маска остаётся в обоих случаях: по ней карточка отличает «было, но не
+    # сохранилось» от «не спрашивали».
+    assert after.phone_masked
+    assert after.forgotten("phone") is not store
+
+
 async def test_a_passport_is_shown_kept_in_memory_and_left_out_of_history(
     dispatcher: Dispatcher, bot: Bot, sent: SentMessages, container: Container
 ) -> None:
