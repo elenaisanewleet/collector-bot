@@ -137,6 +137,22 @@ def _ends_with_house_and_flat(address: str) -> bool:
 #: Короче этого адресом не бывает: «Москва» или обрывок поля.
 MIN_ADDRESS_LENGTH = 10
 
+
+def _usable(address: str) -> bool:
+    """Годится ли строка в кандидаты вообще.
+
+    Длины мало. «Moscow, Russia» — живая строка из ответа поставщика, четырнадцать
+    знаков, и в списке выбора она стояла восьмой строкой рядом с настоящими
+    адресами. Дома в ней нет, значит ни в ЕГРН, ни в заявление она не годится, и
+    выбрать её — потерянное нажатие.
+
+    Признак — ЧИСЛО. Дом называется числом всегда; строка без единой цифры это
+    город, страна или обрывок поля. Оператор при этом ничего не теряет: адрес
+    без дома он всё равно вписал бы руками.
+    """
+    return len(address) >= MIN_ADDRESS_LENGTH and any(char.isdigit() for char in address)
+
+
 #: Запятая, за которой идёт ещё одна: пустая часть, адресом не являющаяся.
 _REPEATED_COMMA = re.compile(r",(?:\s*,)+")
 
@@ -606,7 +622,7 @@ def _grouped(
     for source, bucket in ((preferred, front), (candidates, rest)):
         for raw in source:
             text = tidy(str(raw))
-            if len(text) < MIN_ADDRESS_LENGTH:
+            if not _usable(text):
                 continue
             known = next(
                 (key for key, seen in (*front, *rest) if is_same_place(seen, text)),

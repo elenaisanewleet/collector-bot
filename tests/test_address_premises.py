@@ -234,6 +234,18 @@ def test_nothing_usable_gives_nothing() -> None:
     assert pick_address(["Москва", "—", ""]) is None
 
 
+def test_a_city_without_a_house_is_not_offered_at_all() -> None:
+    """«Moscow, Russia» — живая строка, и в списке она стояла восьмой.
+
+    Длины ей хватало: четырнадцать знаков. А дома в ней нет, значит ни в ЕГРН,
+    ни в заявление она не годится — выбрать её означало потратить нажатие на
+    строку, за которой ничего не стоит. Признак дома — число: строка без единой
+    цифры это город, страна или обрывок поля.
+    """
+    assert address_options(["Moscow, Russia", FEST]) == [FEST_SHOWN]
+    assert pick_address(["Moscow, Russia"]) is None
+
+
 # ------------------------------- когда выбрать кодом нельзя
 
 
