@@ -21,7 +21,13 @@ from app.domain.identity import SearchSubject
 from app.providers.name_bridge import _pick_address as pick_by_name
 from app.providers.phone_bridge import _address_candidates
 from app.providers.property import _query_for
-from app.utils.address import MAX_OPTIONS, address_options, has_premises, pick_address
+from app.utils.address import (
+    MAX_OPTIONS,
+    address_options,
+    has_premises,
+    is_same_place,
+    pick_address,
+)
 
 
 def pick_by_phone(rows: list[Any], anchor: Any = None) -> str | None:
@@ -351,6 +357,68 @@ def test_the_list_starts_with_the_address_the_card_already_uses() -> None:
     many = [f"г Москва, ул Тестовая {index}, 5, 12" for index in range(20)]
 
     assert address_options(many, chosen=many[-1])[0] == many[-1]
+
+
+#: Второй живой список выбора — восемь строк, пять мест. Здесь повторы другие,
+#: чем в :data:`AS_SEEN`: не точки и запятые, а порядок слов («проезд Тестовый»
+#: против «Тестовый проезд»), маркеры «д» и «кв» против голых чисел и приставки
+#: конторы — страна, индекс, внутригородской округ. Улицы и числа изменены.
+EIGHT_AS_SEEN = (
+    "г Москва, проезд Тестовый,8,139",
+    "г. москва, второй проспект, д. 73/2, кв. 1",
+    "Москва г Москва, Тестовый проезд, д 8, кв 139",
+    "Москва, Второй проспект, д. 73/2, кв. 1",
+    "Москва,Третье шоссе,21,7",
+    "ш. Четвёртое, 8 к3, кв/оф 184, пар 2, д-фон 184, этаж 10",
+    "москва, пятая , 2, кв. 297",
+    "РОССИЯ, 127220, Москва г, вн.тер.г. округ Тестовый, Тестовый проезд, д. 8, кв. 139",
+)
+
+
+def test_the_eight_offered_addresses_turn_out_to_be_five_places() -> None:
+    """Восемь строк — пять мест: «вот по мне тоже среди них повторяющиеся».
+
+    Три записи одной и той же квартиры (1, 3, 8) различаются всем, кроме места:
+    порядком слов, маркерами «д» и «кв», страной, индексом и округом. Ещё две
+    (2, 4) — только словом «г» и регистром.
+
+    Показывается при этом КРАТКАЯ запись, а не подробная: форма с числовым
+    хвостом — единственная, которая живьём прошла в ЕГРН.
+    """
+    assert address_options(EIGHT_AS_SEEN) == [
+        "г Москва, проезд Тестовый,8,139",
+        "Москва, Второй проспект, д. 73/2, кв. 1",
+        "Москва,Третье шоссе,21,7",
+        "ш. Четвёртое, 8 к3, кв/оф 184, пар 2, д-фон 184, этаж 10",
+        "москва, пятая , 2, кв. 297",
+    ]
+
+
+def test_the_order_of_words_is_the_writer_not_the_place() -> None:
+    """«проезд Тестовый» и «Тестовый проезд» — одна улица, две конторы."""
+    assert is_same_place("г Москва, проезд Тестовый,8,139", "Москва, Тестовый проезд, д 8, кв 139")
+
+
+def test_a_longer_record_of_the_same_flat_is_the_same_place() -> None:
+    """Страна, индекс и округ уточняют запись, а не меняют квартиру."""
+    short = "г Москва, проезд Тестовый,8,139"
+    long = "РОССИЯ, 127220, Москва г, вн.тер.г. округ Тестовый, Тестовый проезд, д. 8, кв. 139"
+
+    assert is_same_place(short, long)
+    # Но одного общего слова для этого мало: иначе «Москва» с теми же числами
+    # совпала бы с любым московским адресом и съела бы его из списка.
+    assert not is_same_place("Москва, 8, 139", short)
+
+
+def test_numbers_keep_their_order_and_streets_keep_their_names() -> None:
+    """Дом с квартирой местами не меняются, а разные улицы не склеиваются.
+
+    Съеденный адрес заметить нельзя — в отличие от лишней строки в списке.
+    Поэтому сравнение по словам без порядка кончается там, где начинаются
+    числа: «д 8, кв 139» и «д 139, кв 8» — разные квартиры.
+    """
+    assert not is_same_place("Москва, ул Первая, д 8, кв 139", "Москва, ул Первая, д 139, кв 8")
+    assert not is_same_place("Москва, ул Первая, 8, 139", "Москва, ул Вторая, 8, 139")
 
 
 def test_the_screen_ticks_the_address_of_the_card_however_it_is_written() -> None:
