@@ -53,6 +53,7 @@ from .bot_harness import (
     CHAT_ID,
     OPERATOR_ID,
     SentMessages,
+    buttons,
     dispatcher_for,
     feed,
     make_callback,
@@ -1065,9 +1066,18 @@ _DEFAULT_NAME = PersonName(last_name="Тестов", first_name="Андрей", 
 class _PhoneBridgeStub(PhoneNameProvider):
     """Ручка, отдающая ФИО по номеру. Без сети. ``name=None`` — молчит."""
 
-    def __init__(self, settings: Settings, name: PersonName | None = _DEFAULT_NAME) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        name: PersonName | None = _DEFAULT_NAME,
+        *,
+        passport: str | None = None,
+        address: str | None = None,
+    ) -> None:
         super().__init__(settings)
         self._name = name
+        self._passport = passport
+        self._address = address
 
     @property
     def is_configured(self) -> bool:
@@ -1079,6 +1089,8 @@ class _PhoneBridgeStub(PhoneNameProvider):
             status=ProviderStatus.SUCCESS if self._name else ProviderStatus.NO_RESULTS,
             records=(),
             name=self._name,
+            passport=self._passport,
+            address=self._address,
             note="ФИО определено по номеру" if self._name else "имя не определено",
         )
 
@@ -1504,6 +1516,115 @@ async def test_a_phone_alone_produces_the_whole_report(
     assert "11 970 ₽" in chat
     assert "RECOVERY SCORE" in chat, "отчёт не собрался с одного номера"
     assert "БАНКРОТСТВО" in chat and "ФССП" in chat
+
+
+async def test_the_card_can_ask_the_vendor_by_phone_on_purpose(
+    container: Container, bot: Bot, sent: SentMessages
+) -> None:
+    """«Надо добавить тут функционал — собрать данные по номеру.»
+
+    До этой кнопки мост звался САМ и ровно при одном стечении условий: имя в
+    карточке пустое, номер есть. Дальше переспросить было нечем — ни после
+    перезапуска (номер живёт в памяти процесса), ни после «Сбросить данные», ни
+    просто так. Владелец видел карточку с неверным адресом и не мог сказать
+    «сходи по номеру ещё раз».
+
+    Здесь имя в карточке УЖЕ есть, то есть неявный путь промолчал бы, — и
+    именно поэтому кнопка нужна: она спрашивает поставщика по нажатию, а не по
+    совпадению условий.
+
+    Реестры при этом не трогаются: поставщик личности и NewDB — разные счета, и
+    разведены они по просьбе владельца («надо протестировать отдельно, а не
+    идти сразу в NewDB и тратить деньги»).
+    """
+    from app.bot import card_view
+    from app.utils.masking import mask_phone
+
+    address = "обл Тестовая, г Тестов, б-р Первый,17,151"
+    container.registry._phone_bridge = _PhoneBridgeStub(
+        container.settings, address=address, passport="4510123456"
+    )
+    cards = container.query_cards
+    card = await cards.load(OPERATOR_ID, CHAT_ID)
+    card.phone = "+79990001122"
+    card.phone_masked = mask_phone(card.phone)
+    card.last_name = "Тестов"
+    card.first_name = "Андрей"
+    await cards.save(card)
+    dispatcher = dispatcher_for(container)
+    sent.texts.clear()
+
+    await feed(dispatcher, bot, callback_query=make_callback(card_view.QC_LOOKUP))
+
+    after = await cards.load(OPERATOR_ID, CHAT_ID)
+    assert after.address == address, "адрес по номеру не доехал до карточки"
+    assert after.passport_masked, "паспорт по номеру не доехал до карточки"
+    # Сказано ИМЕНАМИ ПОЛЕЙ: «сходил и ничего нового» иначе неотличимо от
+    # «сходил и заполнил паспорт» — экран в обоих случаях один и тот же.
+    assert sent.contains("Собрал по номеру")
+    assert sent.contains("Паспорт") and sent.contains("Адрес")
+    assert not sent.contains("RECOVERY SCORE"), "кнопка сходила в платные реестры"
+
+
+async def test_asking_by_phone_again_says_when_nothing_is_new(
+    container: Container, bot: Bot, sent: SentMessages
+) -> None:
+    """Второе нажатие подряд обязано сказать, что нового ничего.
+
+    Заполняются только ПУСТЫЕ поля: введённое оператором и уже найденное
+    кнопка не трогает — иначе она молча переписывала бы адрес, выбранный
+    руками. Значит второе нажатие ничего не меняет, экран остаётся прежним, и
+    без строки ответа это читается как «бот не сработал».
+    """
+    from app.bot import card_view
+    from app.utils.masking import mask_phone
+
+    container.registry._phone_bridge = _PhoneBridgeStub(container.settings)
+    cards = container.query_cards
+    card = await cards.load(OPERATOR_ID, CHAT_ID)
+    card.phone = "+79990001122"
+    card.phone_masked = mask_phone(card.phone)
+    await cards.save(card)
+    dispatcher = dispatcher_for(container)
+
+    await feed(dispatcher, bot, callback_query=make_callback(card_view.QC_LOOKUP))
+    sent.texts.clear()
+    await feed(dispatcher, bot, callback_query=make_callback(card_view.QC_LOOKUP))
+
+    assert sent.contains("ничего нового")
+    assert sent.contains("Сбросить данные по этому человеку"), "не сказано, как перезабрать"
+
+
+async def test_a_forgotten_number_gets_a_button_that_explains_itself(
+    container: Container, bot: Bot, sent: SentMessages
+) -> None:
+    """Номер пережил перезапуск наполовину — кнопка не прячется, а объясняет.
+
+    В базу номер не едет ни под каким флагом, в памяти процесса он живёт до
+    перезапуска. Владелец после выкладки видит карточку с маской, и это ровно
+    тот момент, когда «собрать по номеру» и нужно. Спрятанная кнопка выглядела
+    бы как пропавшая возможность, а не как недостающий номер.
+    """
+    from app.bot import card_view
+    from app.utils.masking import mask_phone
+
+    container.registry._phone_bridge = _PhoneBridgeStub(container.settings)
+    cards = container.query_cards
+    card = await cards.load(OPERATOR_ID, CHAT_ID)
+    card.phone = "+79990001122"
+    card.phone_masked = mask_phone(card.phone)
+    await cards.save(card)
+    # Перезапуск: память процесса пуста, в карточке осталась одна маска.
+    cards._secrets.drop(card.key)
+    forgotten = await cards.load(OPERATOR_ID, CHAT_ID)
+    assert forgotten.forgotten("phone"), "стенд не воспроизвёл забытый номер"
+    dispatcher = dispatcher_for(container)
+    sent.texts.clear()
+
+    await feed(dispatcher, bot, callback_query=make_callback(card_view.QC_LOOKUP))
+
+    assert sent.contains(card_view.LOOKUP_NEEDS_PHONE)
+    assert card_view.LOOKUP_LABEL in buttons(sent), "кнопка исчезла вместе с номером"
 
 
 async def test_a_silent_bridge_asks_for_a_surname_in_one_line(

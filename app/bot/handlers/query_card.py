@@ -66,6 +66,7 @@ from app.domain.enums import (
 from app.domain.identity import SearchSubject
 from app.domain.models import DebtorReport, InternalDebtorRecord
 from app.logging_setup import get_logger
+from app.providers.phone_bridge import PhoneNameProvider
 from app.services import card_identify, coverage
 from app.services.query_card import Card, fill_from_bridge
 from app.services.search import build_query_hash
@@ -507,6 +508,11 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
     Возвращает строку для показа, только когда сказать есть что. Успех
     молчалив: подставленное ФИО видно в самой карточке, и подписывать его
     отдельной фразой — лишний текст на экране, который читают каждый день.
+
+    ЗДЕСЬ ТОЛЬКО УСЛОВИЕ, а сам сбор — в :func:`_collect_by_phone`, потому что
+    зовут его двое. Этот путь неявный: имени нет, номер есть, значит спросить
+    поставщика надо, не дожидаясь нажатия. Второй — кнопка «Собрать данные по
+    номеру», и у неё условий нет вовсе: оператор нажал, значит спросить.
     """
     bridge = container.registry.phone_bridge
     if bridge is None or card.name is not None or not card.phone:
@@ -514,7 +520,25 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
     subject = SearchSubject(search_type=SearchType.PERSON.value, phone=card.phone)
     if not bridge.is_needed(subject):
         return None
+    _filled, note = await _collect_by_phone(container, card, bridge)
+    return note
 
+
+async def _collect_by_phone(
+    container: Container, card: Card, bridge: PhoneNameProvider
+) -> tuple[frozenset[str], str | None]:
+    """Спросить поставщика по номеру и разложить ответ по карточке.
+
+    Возвращает ИМЕНА ЗАПОЛНЕННЫХ ПОЛЕЙ и причину, если имя не определилось.
+    Первое нужно кнопке: «сходил и ничего нового» и «сходил и заполнил паспорт»
+    без этого списка на экране неразличимы.
+
+    Общее тело для двух путей — неявного (номер введён, имени нет) и явного
+    (нажата кнопка). Двумя копиями они разошлись бы на первой же правке, а
+    правок здесь было много: сюда добавлялись паспорт, СНИЛС, адрес, список
+    выведенного и кандидаты на адрес — и каждая добавка нужна обоим.
+    """
+    subject = SearchSubject(search_type=SearchType.PERSON.value, phone=card.phone)
     result = await bridge.fetch(subject)
     name = getattr(result, "name", None)
     if name is None:
@@ -529,7 +553,7 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
             status=result.status.value,
             error_code=result.error_code,
         )
-        return _why_no_name(result.status)
+        return frozenset(), _why_no_name(result.status)
 
     passport = getattr(result, "passport", None)
     snils = getattr(result, "snils", None)
@@ -582,7 +606,7 @@ async def _resolve_name(container: Container, card: Card) -> str | None:
         )
     except SQLAlchemyError:
         logger.exception("phone_lookup.record_failed", user_id=card.telegram_user_id)
-    return None
+    return derived, None
 
 
 def _why_no_name(status: ProviderStatus) -> str:
@@ -1202,6 +1226,47 @@ def build_router() -> Router:
         container.query_cards.force_next_run(card)
         logger.info("card.reset", user_id=user_id, forgotten=forgotten)
         await show(message, container, card, notice=card_view.RESET_NOTICE)
+
+    @router.callback_query(F.data == card_view.QC_LOOKUP)
+    async def collect_by_phone(callback: CallbackQuery, container: Container, user_id: int) -> None:
+        """Спросить поставщика по номеру — по нажатию, а не по стечению условий.
+
+        Дословная просьба владельца: «надо добавить тут функционал — собрать
+        данные по номеру». До этого мост звался сам и ровно один раз — когда в
+        карточке нет имени, — и переспросить было НЕЧЕМ: ни после перезапуска
+        (номер живёт в памяти процесса), ни после «Сбросить данные», ни просто
+        так. Оператор видел карточку и не мог сказать «сходи по номеру ещё раз».
+
+        Деньги эта кнопка тратит, но не те: поставщик личности и реестры —
+        разные счета, и разведены они по той же просьбе владельца («надо
+        протестировать отдельно, а не идти сразу в NewDB и тратить деньги»).
+        Поэтому нажатие сюда не запускает проверку: карточка пополняется и
+        ждёт.
+
+        Заполняются ПУСТЫЕ поля. Введённое оператором и уже найденное не
+        трогается — иначе кнопка молча переписывала бы выбранный руками адрес.
+        Чтобы перезабрать, есть «Сбросить данные по этому человеку», и строка
+        ответа про это говорит.
+        """
+        message = callback_message(callback)
+        await answer_callback(callback)
+        if message is None:
+            return
+        card = await container.query_cards.load(user_id, message.chat.id)
+        bridge = container.registry.phone_bridge
+        if bridge is None:
+            await show(message, container, card, notice=card_view.NAME_LOOKUP_OFF)
+            return
+        if not card.phone:
+            # Маска в карточке есть, а номера нет: пережил перезапуск наполовину.
+            await show(message, container, card, notice=card_view.LOOKUP_NEEDS_PHONE)
+            return
+        progress = await _looking_up_phone(message, card)
+        filled, note = await _collect_by_phone(container, card, bridge)
+        await container.query_cards.save(card)
+        if progress is not None:
+            await _drop(progress)
+        await show(message, container, card, notice=note or card_view.collected_notice(filled))
 
     @router.callback_query(F.data == sources_pick.SP_OPEN)
     async def open_sources(callback: CallbackQuery, container: Container, user_id: int) -> None:
