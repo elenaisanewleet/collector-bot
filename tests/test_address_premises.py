@@ -60,6 +60,15 @@ HOUSE_ONLY = (
     "123456, г Москва, ул Первая, 8",
 )
 
+#: Как эти же адреса выглядят собранными — в виде, который назвал владелец:
+#: «г Москва, Петровско-Разумовский проезд, д 8, кв 139».
+SHOWN = {
+    "г Москва, проезд Тестовый,8,139": "г Москва, Тестовый проезд, д 8, кв 139",
+    "обл Тестовая, г Тестов, б-р Первый,17,151": (
+        "обл Тестовая, г Тестов, Первый бульвар, д 17, кв 151"
+    ),
+}
+
 
 @pytest.mark.parametrize("address", NUMERIC_TAIL + WITH_WORD)
 def test_an_address_that_reaches_the_flat_is_accepted(address: str) -> None:
@@ -97,12 +106,16 @@ def test_all_three_users_agree_on_the_same_address(address: str) -> None:
     писал бы «нужен адрес с квартирой» под адресом с квартирой.
     """
     rows = [{"address": "г Тестов, ул Вторая, 3"}, {"address": address}]
+    shown = SHOWN[address]
 
     # Опорного блока нет — значит решают квартира и частота, как и раньше.
-    assert pick_by_phone(rows, None) == address
-    assert pick_by_name(rows) == address
-    subject = SearchSubject(search_type=SearchType.PERSON.value, address=address)
-    assert _query_for(subject) == {"country": "ru", "address": address}
+    assert pick_by_phone(rows, None) == shown
+    assert pick_by_name(rows) == shown
+    # А провайдер спрашивает ровно то, что лежит в карточке, — и собранный вид
+    # для него годен так же, как присланный: обе формы проверены живьём.
+    subject = SearchSubject(search_type=SearchType.PERSON.value, address=shown)
+    assert _query_for(subject) == {"country": "ru", "address": shown}
+    assert has_premises(shown)
 
 
 # ------------------------------- какой адрес брать, когда их несколько
@@ -110,6 +123,12 @@ def test_all_three_users_agree_on_the_same_address(address: str) -> None:
 
 FEST = "обл Тестовая, г Тестов, б-р Первый,17,151"
 ODD = "г Москва, ул Одиночная, 5, 12"
+
+#: Те же два места в СОБРАННОМ виде — том, который назвал владелец: «г Москва,
+#: Петровско-Разумовский проезд, д 8, кв 139». Выбор места и показ места — два
+#: разных вопроса, и ниже проверяется первый, а пишется ответ на него вторым.
+FEST_SHOWN = "обл Тестовая, г Тестов, Первый бульвар, д 17, кв 151"
+ODD_SHOWN = "г Москва, Одиночная улица, д 5, кв 12"
 
 
 def test_the_address_confirmed_by_several_blocks_wins_over_the_first() -> None:
@@ -121,7 +140,7 @@ def test_the_address_confirmed_by_several_blocks_wins_over_the_first() -> None:
     адрес, повторившийся в нескольких, подтверждён несколькими сразу; одиночный
     не подтверждён ничем.
     """
-    assert pick_address([ODD, FEST, FEST]) == FEST
+    assert pick_address([ODD, FEST, FEST]) == FEST_SHOWN
 
 
 def test_the_same_place_written_differently_counts_once() -> None:
@@ -132,12 +151,12 @@ def test_the_same_place_written_differently_counts_once() -> None:
     """
     spaced = FEST.replace(",17,151", ", 17, 151")
 
-    assert pick_address([ODD, FEST, spaced]) == FEST
+    assert pick_address([ODD, FEST, spaced]) == FEST_SHOWN
 
 
 def test_order_still_decides_a_tie() -> None:
     """Равная частота — берём встреченный раньше: другого довода нет."""
-    assert pick_address([ODD, FEST]) == ODD
+    assert pick_address([ODD, FEST]) == ODD_SHOWN
 
 
 def test_a_flat_beats_frequency() -> None:
@@ -148,7 +167,7 @@ def test_a_flat_beats_frequency() -> None:
     """
     house_only = "г Москва, ул Первая, 2"
 
-    assert pick_address([house_only, house_only, FEST]) == FEST
+    assert pick_address([house_only, house_only, FEST]) == FEST_SHOWN
 
 
 def test_every_address_of_a_block_takes_part_not_just_the_first() -> None:
@@ -164,8 +183,8 @@ def test_every_address_of_a_block_takes_part_not_just_the_first() -> None:
         {"address": FEST},
     ]
 
-    assert pick_by_phone(rows, None) == FEST
-    assert pick_by_name(rows) == FEST
+    assert pick_by_phone(rows, None) == FEST_SHOWN
+    assert pick_by_name(rows) == FEST_SHOWN
 
 
 def test_the_anchor_block_decides_the_address_not_the_crowd() -> None:
@@ -186,9 +205,9 @@ def test_the_anchor_block_decides_the_address_not_the_crowd() -> None:
     anchor = {"address": FEST}
     strangers = [{"address": ODD}, {"address": ODD}, {"address": ODD}]
 
-    assert pick_by_phone([anchor, *strangers], anchor) == FEST
+    assert pick_by_phone([anchor, *strangers], anchor) == FEST_SHOWN
     # И то же самое на уровне общего правила, без моста.
-    assert pick_address([ODD, ODD, ODD], preferred=[FEST]) == FEST
+    assert pick_address([ODD, ODD, ODD], preferred=[FEST]) == FEST_SHOWN
 
 
 def test_the_anchor_house_beats_a_strangers_flat() -> None:
@@ -206,8 +225,8 @@ def test_the_anchor_house_beats_a_strangers_flat() -> None:
 
 def test_frequency_still_decides_when_the_anchor_is_silent() -> None:
     """Опорный блок без адреса — и довод владельца работает в полную силу."""
-    assert pick_address([ODD, FEST, FEST], preferred=[]) == FEST
-    assert pick_address([ODD, FEST, FEST], preferred=["Москва", "—"]) == FEST
+    assert pick_address([ODD, FEST, FEST], preferred=[]) == FEST_SHOWN
+    assert pick_address([ODD, FEST, FEST], preferred=["Москва", "—"]) == FEST_SHOWN
 
 
 def test_nothing_usable_gives_nothing() -> None:
@@ -231,8 +250,8 @@ def test_the_candidates_are_offered_with_the_default_first() -> None:
     """
     options = address_options([ODD, ODD, FEST], preferred=[FEST])
 
-    assert options[0] == FEST, "умолчание обязано стоять первым"
-    assert set(options) == {FEST, ODD}
+    assert options[0] == FEST_SHOWN, "умолчание обязано стоять первым"
+    assert set(options) == {FEST_SHOWN, ODD_SHOWN}
     assert len(options) == 2, "один и тот же адрес не предлагается дважды"
 
 
@@ -250,7 +269,7 @@ def test_every_candidate_is_offered_with_the_usable_ones_first() -> None:
 
     assert address_options([house_only]) == [house_only]
     # Годный для ЕГРН — первым, но дом из списка не выброшен.
-    assert address_options([house_only, FEST]) == [FEST, house_only]
+    assert address_options([house_only, FEST]) == [FEST_SHOWN, house_only]
 
 
 def test_more_than_eight_candidates_are_cut() -> None:
@@ -260,7 +279,7 @@ def test_more_than_eight_candidates_are_cut() -> None:
     options = address_options(many, preferred=[FEST])
 
     assert len(options) == MAX_OPTIONS
-    assert options[0] == FEST
+    assert options[0] == FEST_SHOWN
 
 
 # ------------------------------- одно место — одна строка
@@ -289,7 +308,10 @@ def test_the_five_offered_addresses_turn_out_to_be_three_places() -> None:
     оператор ищет различие, которого нет, и решает, что бот нашёл пять адресов.
     """
     assert address_options(AS_SEEN) == [
-        FEST,
+        FEST_SHOWN,
+        # Собрать эти две нечем: в первой не названа улица (что здесь улица, а
+        # что город, знает только человек), во второй нет квартиры. Наверх едет
+        # присланное — и это лучше полусобранного.
         "ТЕСТОВСКАЯ, д. 40, кв. 95",
         "Тестов, проспект Второй, 1",
     ]
@@ -304,9 +326,10 @@ def test_the_spelling_that_egrn_accepted_is_the_one_offered() -> None:
     и показывается: выдумывать за источник нечего, и в платный запрос уходит
     его строка, а не наша.
     """
-    assert address_options([DOTTED, FEST]) == [FEST]
-    assert address_options([FEST, DOTTED]) == [FEST]
-    assert address_options([DOTTED]) == [DOTTED]
+    assert address_options([DOTTED, FEST]) == [FEST_SHOWN]
+    assert address_options([FEST, DOTTED]) == [FEST_SHOWN]
+    # Даже когда прислано только написание с точками: разбирается и оно.
+    assert address_options([DOTTED]) == [FEST_SHOWN]
 
 
 def test_the_same_place_written_twice_is_confirmed_twice() -> None:
@@ -315,7 +338,7 @@ def test_the_same_place_written_twice_is_confirmed_twice() -> None:
     Иначе адрес, записанный поставщиком двумя способами, проигрывал бы
     одиночному чужому — это довод владельца про частоту, посчитанный неверно.
     """
-    assert pick_address([ODD, FEST, DOTTED]) == FEST
+    assert pick_address([ODD, FEST, DOTTED]) == FEST_SHOWN
 
 
 def test_a_trailing_comma_does_not_hide_the_flat() -> None:
@@ -339,8 +362,8 @@ def test_the_card_address_and_the_list_say_the_same_string() -> None:
     «выбрано» не встаёт ни на одной строке: действующий адрес выглядит
     невыбранным.
     """
-    assert pick_address([FEST], preferred=[DOTTED]) == FEST
-    assert address_options([FEST], preferred=[DOTTED]) == [FEST]
+    assert pick_address([FEST], preferred=[DOTTED]) == FEST_SHOWN
+    assert address_options([FEST], preferred=[DOTTED]) == [FEST_SHOWN]
 
 
 def test_the_list_starts_with_the_address_the_card_already_uses() -> None:
@@ -352,11 +375,11 @@ def test_the_list_starts_with_the_address_the_card_already_uses() -> None:
     """
     options = address_options([FEST, FEST, ODD], chosen="г. Москва, ул. Одиночная, 5, 12")
 
-    assert options[0] == ODD, "первым обязан стоять адрес карточки"
+    assert options[0] == ODD_SHOWN, "первым обязан стоять адрес карточки"
 
     many = [f"г Москва, ул Тестовая {index}, 5, 12" for index in range(20)]
 
-    assert address_options(many, chosen=many[-1])[0] == many[-1]
+    assert address_options(many, chosen=many[-1])[0] == "г Москва, Тестовая 19 улица, д 5, кв 12"
 
 
 #: Второй живой список выбора — восемь строк, пять мест. Здесь повторы другие,
@@ -386,9 +409,11 @@ def test_the_eight_offered_addresses_turn_out_to_be_five_places() -> None:
     хвостом — единственная, которая живьём прошла в ЕГРН.
     """
     assert address_options(EIGHT_AS_SEEN) == [
-        "г Москва, проезд Тестовый,8,139",
-        "Москва, Второй проспект, д. 73/2, кв. 1",
-        "Москва,Третье шоссе,21,7",
+        "г Москва, Тестовый проезд, д 8, кв 139",
+        "г Москва, Второй проспект, д 73/2, кв 1",
+        "г Москва, Третье шоссе, д 21, кв 7",
+        # Эти две не собираются: в первой квартира названа «кв/оф» вперемешку с
+        # этажом и домофоном, во второй улица без типа. Наверх едет присланное.
         "ш. Четвёртое, 8 к3, кв/оф 184, пар 2, д-фон 184, этаж 10",
         "москва, пятая , 2, кв. 297",
     ]

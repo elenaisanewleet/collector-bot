@@ -52,13 +52,26 @@
 несёт всё то же и сверх того, считается тем же местом — при совпадении чисел и
 не меньше двух общих слов.
 
-КАКОЕ ИЗ НАПИСАНИЙ ПОКАЗАТЬ И ОТПРАВИТЬ — :func:`_preferred_spelling`. Здесь
-действует правило проекта: кодом можно закреплять только проверенное живьём.
-Поэтому написание не СОЧИНЯЕТСЯ — выбирается одно из тех, что прислал
-поставщик, и предпочтение отдаётся форме без точек в сокращениях: ровно она
-дважды прошла в ЕГРН («…проезд Тестовый,8,139» и «…б-р Первый,17,151»), а
-форма с точками живьём не проверялась ни разу. Пробелы и пустые части
-(:func:`tidy`) — единственное, что убирается: они не часть адреса.
+В КАКОМ ВИДЕ ПОКАЗАТЬ И ОТПРАВИТЬ — :func:`canonical`. Вид назвал владелец
+дословно: ``г Москва, Петровско-Разумовский проезд, д 8, кв 139``. Город с «г»,
+улица «Название тип», дом с «д», квартира с «кв»; регион, если он назван, идёт
+первым.
+
+Собирать строку САМИМ можно только потому, что форма проверена живьём, — иначе
+правило проекта запрещает: ошибка стоит два рубля за попытку и выглядит как
+«объекта нет». Замер: одна и та же квартира, спрошенная в ЕГРН двумя
+написаниями, нашлась обоими — «г Москва, проезд Тестовый,8,139» и «Москва г
+Москва, Тестовый проезд, д 8, кв 139» дали по одному объекту. Второе — ровно
+эта форма, то есть источник её принимает, и ему безразличны порядок слов,
+маркеры «д»/«кв» против голых чисел и даже дважды названный город.
+
+РАЗБИРАЕМ ИЛИ ОТКАЗЫВАЕМСЯ, третьего нет. Не нашлись улица с типом, дом и
+квартира разом — наверх едет лучшее из ПРИСЛАННЫХ написаний
+(:func:`_preferred_spelling`), и это не запасной путь на всякий случай: живой
+список даёт и «ТЕСТОВСКАЯ, д. 40, кв. 95» (что здесь улица, а что город, знает
+только человек), и «ш. Головинское, 8 к3, кв/оф 184, пар 2, д-фон 184, этаж
+10». Полусобранный адрес хуже чужого: за него платят и получают пустоту,
+неотличимую от «объекта нет».
 """
 
 from __future__ import annotations
@@ -136,6 +149,17 @@ def tidy(address: str) -> str:
     text = _REPEATED_COMMA.sub(",", " ".join(address.split()))
     return text.strip(" ,")
 
+
+#: Маркеры региона, города, дома и квартиры — то, по чему часть адреса узнаётся
+#: при сборке (:func:`canonical`). Маркер дома и квартиры считается маркером
+#: только перед числом: «д 8» — дом, «д Тестово» — деревня.
+_REGION_MARKERS = frozenset({"обл", "область", "край", "респ", "республика"})
+_CITY_MARKERS = frozenset({"г", "гор", "город"})
+_HOUSE_MARKERS = frozenset({"д", "дом", "влд", "владение"})
+_FLAT_MARKERS = frozenset({"кв", "квартира", "помещ", "пом", "оф", "офис"})
+#: Части, которые целиком выбрасываются при сборке: страна, индекс и
+#: административные обёртки вроде «вн.тер.г. муниципальный округ Тестовый».
+_DROPPED_PARTS = frozenset({"россия", "рф", "вн", "тер", "округ", "р-н", "район", "муниципальный"})
 
 #: Слова, которые о МЕСТЕ не говорят ничего: страна, уровни деления и маркеры
 #: дома с квартирой. В одной записи они есть, в другой нет — а место одно.
@@ -241,6 +265,124 @@ def _significant(address: str) -> tuple[frozenset[str], tuple[str, ...]]:
         if word not in _NOISE_WORDS:
             words.add(word)
     return frozenset(words), tuple(numbers)
+
+
+def canonical(address: str) -> str | None:
+    """Адрес в виде, который назвал владелец, — или ``None``, если не разобрали.
+
+    Вид дословно из просьбы: ``г Москва, Петровско-Разумовский проезд, д 8,
+    кв 139``. Город с «г», улица «Название тип», дом с «д», квартира с «кв»,
+    в таком порядке; регион, если он назван, идёт первым.
+
+    ПОЧЕМУ ЭТО МОЖНО СОБИРАТЬ, а раньше было нельзя. Правило проекта —
+    закреплять только проверенное живьём, — и оно выполнено: одна и та же
+    квартира, спрошенная в ЕГРН двумя написаниями, нашлась обоими. Второе
+    написание было ровно этой формы («…, Тестовый проезд, д 8, кв 139»), то
+    есть источник её принимает. До замера сочинять строку было нельзя: ошибка
+    стоит два рубля за попытку и выглядит как «объекта нет».
+
+    РАЗБИРАЕМ ИЛИ ОТКАЗЫВАЕМСЯ, третьего нет. Возвращается ``None``, если в
+    строке не нашлись улица с типом, дом и квартира разом, — и тогда наверх
+    едет то, что прислал поставщик. Полусобранный адрес хуже чужого: за него
+    платят и получают пустоту, неотличимую от «объекта нет».
+
+    Что выбрасывается: страна, почтовый индекс и административные обёртки
+    («вн.тер.г. муниципальный округ Тестовый»). Что сохраняется дословно:
+    номера дома и квартиры, включая «73/2» и «8 к3».
+    """
+    region, city, street, street_type, house, flat, tail = _parse_parts(address)
+    if house is None and flat is None and len(tail) >= 2:
+        house, flat = tail[-2], tail[-1]
+    if street is None or street_type is None or house is None or flat is None:
+        return None
+    chunks = [chunk for chunk in (region, f"г {_titled(city)}" if city else None) if chunk]
+    chunks.append(f"{_titled(street)} {street_type}")
+    chunks.extend((f"д {house}", f"кв {flat}"))
+    return ", ".join(chunks)
+
+
+def _parse_parts(
+    address: str,
+) -> tuple[str | None, str | None, str | None, str | None, str | None, str | None, list[str]]:
+    """Части адреса по запятым: регион, город, улица, тип, дом, квартира, числа.
+
+    Последним — голые числа в порядке появления: форма «…проезд Тестовый,8,139»
+    называет дом и квартиру без единого маркера, и разобрать её можно только
+    хвостом.
+    """
+    region = city = street = street_type = house = flat = None
+    tail: list[str] = []
+    for part in tidy(address).split(","):
+        tokens = [token.strip(" .") for token in part.split() if token.strip(" .")]
+        if not tokens:
+            continue
+        lowered = [token.lower() for token in tokens]
+        if any(word in _DROPPED_PARTS for word in lowered) or _POSTAL_INDEX.match(lowered[0]):
+            continue
+        rest = _unique(
+            [token for token, low in zip(tokens, lowered, strict=True) if low not in _NOISE_WORDS]
+        )
+        numbered = any(char.isdigit() for char in part)
+        if not numbered and region is None and any(low in _REGION_MARKERS for low in lowered):
+            region = f"обл {_titled(' '.join(rest))}" if rest else None
+        elif not numbered and city is None and any(low in _CITY_MARKERS for low in lowered):
+            city = " ".join(rest)
+        elif street is None and (found := _street_of(tokens, lowered)) is not None:
+            street, street_type = found
+        elif house is None and lowered[0] in _HOUSE_MARKERS and numbered:
+            house = " ".join(rest)
+        elif flat is None and lowered[0] in _FLAT_MARKERS and numbered:
+            flat = " ".join(rest)
+        elif numbered and all(any(char.isdigit() for char in token) for token in tokens):
+            tail.append(" ".join(tokens))
+        elif not numbered and city is None and street is None and len(tokens) == 1:
+            # Единственное слово до улицы — город, как его пишет половина
+            # поставщиков: «Москва,Тестовое шоссе,21,7».
+            city = tokens[0]
+    return region, city, street, street_type, house, flat, tail
+
+
+def _unique(tokens: list[str]) -> list[str]:
+    """Повторённое слово — один раз: «Москва г Москва» это один город.
+
+    Живая строка поставщика начинается с города, а потом называет его ещё раз
+    уже с маркером. Без этой чистки собранный адрес получался бы с «Москва
+    Москва» — заметно человеку и, скорее всего, незаметно источнику, но платим
+    мы за каждую попытку.
+    """
+    seen: set[str] = set()
+    kept: list[str] = []
+    for token in tokens:
+        if token.lower() not in seen:
+            seen.add(token.lower())
+            kept.append(token)
+    return kept
+
+
+def _street_of(tokens: list[str], lowered: list[str]) -> tuple[str, str] | None:
+    """Улица и её тип, если тип в части назван. Без типа улицы здесь нет.
+
+    Без типа отличить улицу от города нечем: «ОРЕНБУРГСКАЯ, д. 40, кв. 95» —
+    живая строка поставщика, и что здесь улица, знает только человек. Такие
+    адреса не собираются вовсе: наверх едет присланное.
+    """
+    types = [_STREET_TYPES[low] for low in lowered if low in _STREET_TYPES]
+    if not types:
+        return None
+    name = " ".join(
+        token for token, low in zip(tokens, lowered, strict=True) if low not in _STREET_TYPES
+    )
+    return (name, types[0]) if name else None
+
+
+def _titled(text: str) -> str:
+    """«петровско-разумовский проезд» → «Петровско-Разумовский проезд».
+
+    Заглавная буква ставится и после дефиса: в московских названиях он частый,
+    и «Петровско-разумовский» выглядит опечаткой. Всё остальное не трогается —
+    если поставщик прислал «МОСКВА», так и останется.
+    """
+    return re.sub(r"(?<![^\s\-])([а-яёa-z])", lambda match: match.group(1).upper(), text)
 
 
 def same_place(address: str) -> str:
@@ -492,8 +634,19 @@ def _first_index(pairs: list[tuple[str, str]], key: str) -> int:
 
 
 def _spelling_of(key: str, pairs: list[tuple[str, str]]) -> str:
-    """Написание, которым будет назван этот адрес."""
-    return _preferred_spelling([text for place, text in pairs if place == key])
+    """Написание, которым будет назван этот адрес.
+
+    Сперва СОБРАННЫЙ вид (:func:`canonical`) — тот, который назвал владелец:
+    «г Москва, Петровско-Разумовский проезд, д 8, кв 139». Не разобрали строку
+    — берётся лучшее из присланных написаний, и это не запасной путь на всякий
+    случай: живой список даёт и «ТЕСТОВСКАЯ, д. 40, кв. 95» (что здесь улица, а
+    что город, знает только человек), и «ш. Четвёртое, 8 к3, кв/оф 184, пар 2,
+    д-фон 184, этаж 10». Полусобранный адрес хуже чужого: за него платят и
+    получают пустоту, неотличимую от «объекта нет».
+    """
+    variants = [text for place, text in pairs if place == key]
+    chosen = _preferred_spelling(variants)
+    return canonical(chosen) or chosen
 
 
 def _preferred_spelling(variants: Sequence[str]) -> str:

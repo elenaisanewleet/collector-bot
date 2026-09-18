@@ -431,6 +431,8 @@ async def test_the_identity_is_taken_from_its_own_block(dump_settings: Settings)
 #: НЕСКОЛЬКИХ блоках без единого идентификатора: такие блоки не противоречат
 #: опорному ничем и потому попадают в родню, ничего про себя не доказав.
 HER_ADDRESS = "г Москва, проезд Тестовый,8,139"
+#: Тот же адрес собранным — его мост и кладёт в карточку.
+HER_ADDRESS_SHOWN = "г Москва, Тестовый проезд, д 8, кв 139"
 OTHER_ADDRESS = "г Москва, проспект Иной, д 73/2, кв 1"
 WITH_ADDRESSES = {
     "search_type": "phone",
@@ -473,7 +475,7 @@ async def test_the_address_comes_from_the_anchor_block(dump_settings: Settings) 
     assert isinstance(result, PhoneNameResult)
     # Опорный блок опознан тот же, что и раньше: адрес не должен его менять.
     assert result.passport == "4510123456"
-    assert result.address == HER_ADDRESS, "уехал адрес чужого человека"
+    assert result.address == HER_ADDRESS_SHOWN, "уехал адрес чужого человека"
 
 
 @respx.mock
@@ -789,6 +791,11 @@ def test_no_address_means_nothing_to_log() -> None:
 #: * верный адрес лежит в блоке ``governmentservices``, где кроме него почти
 #:   ничего нет;
 #: * есть блок без имени вовсе — он не имеет права решать.
+#: Как эти адреса выглядят СОБРАННЫМИ — в виде, который назвал владелец:
+#: город с «г», улица «Название тип», дом с «д», квартира с «кв». Мост отдаёт в
+#: карточку именно его, и он же уходит в ЕГРН.
+RIGHT_SHOWN = "г Москва, Тестовый проезд, д 8, кв 139"
+WRONG_SHOWN = "г Москва, Иной проспект, д 73/2, кв 1"
 RIGHT = "г Москва, проезд Тестовый,8,139"
 WRONG = "г Москва, проспект Иной, д 73/2, кв 1"
 STALE = "Москва г Москва, Тестовый проезд, д 8, кв 139"
@@ -861,14 +868,14 @@ async def test_the_address_comes_from_the_most_trusted_leak(origin_settings: Set
     )
 
     assert isinstance(result, PhoneNameResult)
-    assert result.address == RIGHT, "адрес взят не из самой доверенной утечки"
+    assert result.address == RIGHT_SHOWN, "адрес взят не из самой доверенной утечки"
     # Документы по-прежнему из самого богатого блока: правило про адрес, и
     # только про адрес.
     assert result.passport == "4510123456"
     assert result.snils == "11223344595"
     # А выбрать можно любой из найденных — включая тот, что не выбран.
-    assert RIGHT in result.address_options
-    assert WRONG in result.address_options
+    assert RIGHT_SHOWN in result.address_options
+    assert WRONG_SHOWN in result.address_options
 
 
 def test_a_block_without_our_name_never_decides_the_address() -> None:
@@ -886,7 +893,7 @@ def test_a_block_without_our_name_never_decides_the_address() -> None:
         {"fio": "Тестова Елена Николаевна", "address": RIGHT, "data": "mosgorzdrav"},
     ]
 
-    assert _address_by_origin(kin, name) == RIGHT
+    assert _address_by_origin(kin, name) == RIGHT_SHOWN
 
 
 # ------------------------------- каким номер уходит к поставщику
@@ -998,7 +1005,7 @@ async def test_the_name_of_the_leak_is_not_a_mark_of_identity(
     assert isinstance(result, PhoneNameResult)
     assert result.passport == "7300111222", "якорём стал блок без документов"
     assert result.birth_date == date(1994, 3, 17)
-    assert result.address == "обл Тестовая, г Тестов, б-р Первый,17,151"
+    assert result.address == "обл Тестовая, г Тестов, Первый бульвар, д 17, кв 151"
 
 
 def test_at_equal_marks_the_most_trusted_leak_is_the_anchor() -> None:

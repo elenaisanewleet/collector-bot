@@ -299,8 +299,9 @@ async def test_the_address_with_a_flat_wins_over_the_first_one(settings: Setting
 
     result = await fetch(settings, subject())
 
-    assert result.address is not None
-    assert "кв. 42" in result.address, "взят адрес до дома, а ЕГРН его не примет"
+    assert result.address == "г Москва, Тестовая улица, д 8, кв 42", (
+        "взят адрес до дома, а ЕГРН его не примет"
+    )
 
 
 @respx.mock
