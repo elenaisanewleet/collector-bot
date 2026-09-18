@@ -1012,6 +1012,26 @@ def test_the_log_says_what_went_out_with_the_rejected_blocks() -> None:
     assert "origin" not in printed and "governmentservices" not in printed
 
 
+def test_the_log_names_the_leaks_the_answer_is_made_of() -> None:
+    """Состав ответа по утечкам — то, что сверяется с проверкой вручную.
+
+    Боту поставщик дважды прислал тринадцать блоков без паспорта, а владельцу
+    на тот же номер — блоки с паспортом. Отбраковка ни при чём, значит
+    расходятся сами ответы; по числу блоков этого не видно, по составу утечек —
+    видно сразу. Имя утечки персональными данными не является.
+    """
+    from app.providers.phone_bridge import _origins
+
+    rows = [
+        {"full_name": "Тестов Олег Владимирович", "data": "governmentservices"},
+        {"full_name": "Тестов Олег Владимирович", "source": "mosgorzdrav_2025"},
+        {"address": "обл Тестовая, г Тестов, б-р Первый,17,151", "data": "governmentservices"},
+        {"full_name": "Тестова Мария Ивановна"},
+    ]
+
+    assert _origins(rows) == ["governmentservices:2", "mosgorzdrav_2025:1", "—:1"]
+
+
 def test_the_name_is_recognised_in_every_form_the_vendor_uses() -> None:
     """Три записи одного имени из живого ответа — все три обязаны совпасть."""
     from app.domain.identity import PersonName as Name
